@@ -1,0 +1,19 @@
+[package]
+name = "walrus-sui-archival"
+publish = false
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "walrus-sui-archival"
+path = "bin/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
