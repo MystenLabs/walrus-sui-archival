@@ -1,11 +1,12 @@
-use std::{num::NonZeroU16, path::PathBuf};
+use std::{num::NonZeroU16, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use blob_bundle::BlobBundleBuilder;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{fs, sync::mpsc};
+use walrus_core::BlobId;
 
-use crate::config::CheckpointBlobBuilderConfig;
+use crate::{archival_state::ArchivalState, config::CheckpointBlobBuilderConfig};
 
 /// Message sent from CheckpointMonitor to CheckpointBlobBuilder.
 #[derive(Debug, Clone)]
@@ -14,10 +15,13 @@ pub struct BlobBuildRequest {
     pub start_checkpoint: CheckpointSequenceNumber,
     /// Last checkpoint number in the range (inclusive).
     pub end_checkpoint: CheckpointSequenceNumber,
+    /// Weather this checkpoint contains the end-of-epoch transaction.
+    pub end_of_epoch: bool,
 }
 
 /// A long-running service that builds blob files from checkpoint ranges.
 pub struct CheckpointBlobBuilder {
+    archival_state: Arc<ArchivalState>,
     checkpoint_blobs_dir: PathBuf,
     downloaded_checkpoint_dir: PathBuf,
     n_shards: NonZeroU16,
@@ -25,6 +29,7 @@ pub struct CheckpointBlobBuilder {
 
 impl CheckpointBlobBuilder {
     pub fn new(
+        archival_state: Arc<ArchivalState>,
         config: CheckpointBlobBuilderConfig,
         downloaded_checkpoint_dir: PathBuf,
     ) -> Result<Self> {
@@ -32,6 +37,7 @@ impl CheckpointBlobBuilder {
             .ok_or_else(|| anyhow::anyhow!("n_shards must be non-zero"))?;
 
         Ok(Self {
+            archival_state,
             checkpoint_blobs_dir: PathBuf::from(&config.checkpoint_blobs_dir),
             downloaded_checkpoint_dir,
             n_shards,
@@ -136,7 +142,17 @@ impl CheckpointBlobBuilder {
         }
 
         // TODO: Upload the blob to Walrus.
-        // TODO: Store blob metadata for tracking.
+
+        let blob_id = BlobId::ZERO;
+
+        self.archival_state.create_new_checkpoint_blob(
+            request.start_checkpoint,
+            request.end_checkpoint,
+            &result.index_map,
+            blob_id,
+            100,
+            request.end_of_epoch,
+        )?;
 
         Ok(())
     }

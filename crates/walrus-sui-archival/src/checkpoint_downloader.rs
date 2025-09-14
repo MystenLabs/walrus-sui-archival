@@ -296,10 +296,6 @@ impl CheckpointDownloader {
                 );
                 break;
             }
-            if current_checkpoint > 240001000 {
-                tracing::info!("ZZZZZ stop downloader");
-                break;
-            }
             current_checkpoint += 1;
             time::sleep(time::Duration::from_millis(100)).await;
         }

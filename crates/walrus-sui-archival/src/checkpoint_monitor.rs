@@ -114,7 +114,10 @@ pub struct CheckpointMonitor {
 }
 
 impl CheckpointMonitor {
-    pub fn new(config: CheckpointMonitorConfig, blob_builder_tx: mpsc::Sender<BlobBuildRequest>) -> Self {
+    pub fn new(
+        config: CheckpointMonitorConfig,
+        blob_builder_tx: mpsc::Sender<BlobBuildRequest>,
+    ) -> Self {
         Self {
             config,
             accumulator: CheckpointAccumulator::new(),
@@ -276,12 +279,25 @@ impl CheckpointMonitor {
             return Ok(());
         }
 
-        let start_checkpoint = self.accumulator.checkpoints.first()
+        let start_checkpoint = self
+            .accumulator
+            .checkpoints
+            .first()
             .map(|c| c.checkpoint_number)
             .unwrap_or(0);
-        let end_checkpoint = self.accumulator.checkpoints.last()
+        let end_checkpoint = self
+            .accumulator
+            .checkpoints
+            .last()
             .map(|c| c.checkpoint_number)
             .unwrap_or(0);
+
+        let end_of_epoch = self
+            .accumulator
+            .checkpoints
+            .last()
+            .map(|c| c.is_end_of_epoch)
+            .unwrap_or(false);
 
         tracing::info!(
             "sending blob build request for checkpoints {} to {}",
@@ -293,6 +309,7 @@ impl CheckpointMonitor {
         let request = BlobBuildRequest {
             start_checkpoint,
             end_checkpoint,
+            end_of_epoch,
         };
 
         if let Err(e) = self.blob_builder_tx.send(request).await {

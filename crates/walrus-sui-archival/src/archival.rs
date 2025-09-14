@@ -3,6 +3,7 @@ use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{select, sync::mpsc};
 
 use crate::{
+    archival_state::ArchivalState,
     checkpoint_blob_builder::{self, BlobBuildRequest},
     checkpoint_downloader,
     checkpoint_monitor,
@@ -23,13 +24,26 @@ pub fn run_sui_archival(config: Config) -> Result<()> {
 async fn run_application_logic(config: Config) -> Result<()> {
     tracing::info!("starting application logic in multi-thread runtime");
 
-    let initial_checkpoint = CheckpointSequenceNumber::from(240000000u64);
+    // Initialize the archival state with RocksDB.
+    let archival_state = std::sync::Arc::new(ArchivalState::open(&config.db_path)?);
+    tracing::info!(
+        "initialized archival state with database at {}",
+        config.db_path
+    );
+
+    let initial_checkpoint = archival_state
+        .get_latest_stored_checkpoint()?
+        .unwrap_or(CheckpointSequenceNumber::from(239999999u64))
+        + 1;
+
+    tracing::info!("initial checkpoint: {}", initial_checkpoint);
 
     // Create channel for blob build requests.
     let (blob_builder_tx, blob_builder_rx) = mpsc::channel::<BlobBuildRequest>(100);
 
     // Start the checkpoint blob builder.
     let blob_builder = checkpoint_blob_builder::CheckpointBlobBuilder::new(
+        archival_state.clone(),
         config.checkpoint_blob_builder.clone(),
         config
             .checkpoint_downloader

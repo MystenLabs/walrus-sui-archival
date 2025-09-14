@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package archival;
+
+// CheckpointBlobInfo stores metadata about a blob containing checkpoints.
+// Fields are optional to ensure backward compatibility - new fields can be added
+// without breaking existing data.
+message CheckpointBlobInfo {
+  // Version of this message format for future compatibility.
+  uint32 version = 1;
+
+  // Blob identifier (32 bytes).
+  bytes blob_id = 2;
+
+  // First checkpoint number in this blob.
+  uint64 start_checkpoint = 3;
+
+  // Last checkpoint number in this blob (inclusive).
+  uint64 end_checkpoint = 4;
+
+  // Whether this blob contains the last transaction of the Sui epoch.
+  bool end_of_epoch = 5;
+
+  // Epoch when this blob will be expired.
+  uint32 blob_expiration_epoch = 6;
+
+  // Index entries mapping checkpoint numbers to their offset/length in the blob.
+  repeated IndexEntry index_entries = 7;
+
+  // Reserved fields for future use (100-199).
+  // This allows adding new fields without breaking compatibility.
+}
+
+// IndexEntry represents a single checkpoint's location within a blob.
+message IndexEntry {
+  // Checkpoint sequence number.
+  uint64 checkpoint_number = 1;
+
+  // Offset in bytes from the start of the blob.
+  uint64 offset = 2;
+
+  // Length in bytes of this checkpoint data.
+  uint64 length = 3;
+}

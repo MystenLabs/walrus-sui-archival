@@ -14,11 +14,15 @@ path = "bin/main.rs"
 anyhow.workspace = true
 async-channel.workspace = true
 async-trait.workspace = true
+bincode.workspace = true
 blob-bundle.workspace = true
 bytes.workspace = true
 clap.workspace = true
 humantime-serde.workspace = true
+prost.workspace = true
+prost-types.workspace = true
 reqwest.workspace = true
+rocksdb.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 sui-storage.workspace = true
@@ -26,6 +30,11 @@ sui-types.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+walrus-core.workspace = true
+
+[build-dependencies]
+prost-build = "0.13"
+protoc-bin-vendored = "3.0"
 
 [dev-dependencies]
 mockito = "1.2"

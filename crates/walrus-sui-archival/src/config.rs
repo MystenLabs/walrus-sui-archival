@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Path to the RocksDB database directory.
+    #[serde(default = "default_db_path")]
+    pub db_path: String,
+
     /// Total number of threads for the tokio runtime thread pool.
     #[serde(default = "default_thread_pool_size")]
     pub thread_pool_size: usize,
@@ -51,6 +55,10 @@ impl Config {
         let config: Config = serde_yaml::from_str(&contents)?;
         Ok(config)
     }
+}
+
+fn default_db_path() -> String {
+    "archival_db".to_string()
 }
 
 fn default_thread_pool_size() -> usize {
