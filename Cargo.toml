@@ -11,8 +11,15 @@ version = "0.1.0"
 
 [workspace.dependencies]
 anyhow = "1.0"
+async-channel = "2.3"
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive"] }
+humantime-serde = "1.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+sui-storage = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.55.0" }
+sui-types = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.55.0" }
 tokio = { version = "1.40", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

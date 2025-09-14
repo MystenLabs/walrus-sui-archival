@@ -1,7 +1,8 @@
 use anyhow::Result;
-use clap::Parser;
-use tracing::info;
+use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
+use walrus_sui_archival::archival::run_sui_archival;
+use walrus_sui_archival::config::Config;
 
 #[derive(Parser, Debug)]
 #[command(name = "walrus-sui-archival")]
@@ -9,10 +10,24 @@ use tracing_subscriber::EnvFilter;
 struct Args {
     #[arg(short, long, default_value = "info")]
     log_level: String,
+
+    #[command(subcommand)]
+    command: Commands,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Run the main archival process.
+    Run {
+        /// Path to configuration file.
+        #[arg(short, long, default_value = "config/testnet_config.yaml")]
+        config: String,
+    },
+    /// Inspect the database.
+    DbInspection,
+}
+
+fn main() -> Result<()> {
     let args = Args::parse();
 
     tracing_subscriber::fmt()
@@ -21,8 +36,17 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    info!("Starting walrus-sui-archival...");
-    println!("Hello from walrus-sui-archival!");
+    match args.command {
+        Commands::Run { config } => {
+            tracing::info!("starting walrus-sui-archival run command...");
+            let config = Config::from_file(&config)?;
+            run_sui_archival(config)?;
+        }
+        Commands::DbInspection => {
+            tracing::info!("starting database inspection...");
+            println!("db inspection command not yet implemented");
+        }
+    }
 
     Ok(())
 }

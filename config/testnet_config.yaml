@@ -1,0 +1,13 @@
+# Configuration for walrus-sui-archival.
+
+# Total number of threads for the tokio runtime thread pool.
+thread_pool_size: 8
+
+# Configuration for the checkpoint downloader.
+checkpoint_downloader:
+  # Base URL for the S3 bucket containing checkpoints.
+  bucket_base_url: "https://checkpoints.testnet.sui.io"
+
+  # Directory to store downloaded checkpoint data.
+  # If not specified, defaults to "downloaded_checkpoint_dir"
+  downloaded_checkpoint_dir: "downloaded_checkpoint_dir"

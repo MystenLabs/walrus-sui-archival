@@ -21,3 +21,9 @@ Thumbs.db
 /tmp/
 /logs/
 *.log
+
+# CLAUDE
+CLAUDE.md
+
+#App folders
+downloaded_checkpoint_dir/
