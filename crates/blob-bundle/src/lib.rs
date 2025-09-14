@@ -1446,7 +1446,10 @@ mod tests {
             "001.txt".to_string(),
         ];
         let index_order: Vec<String> = result.index_map.iter().map(|(id, _)| id.clone()).collect();
-        assert_eq!(index_order, expected_order, "Index map should preserve input order");
+        assert_eq!(
+            index_order, expected_order,
+            "Index map should preserve input order"
+        );
 
         // Read the bundle.
         let bundle_data = fs::read(&output_path).expect("Failed to read bundle");
@@ -1461,17 +1464,35 @@ mod tests {
         let mut alphabetical = expected_order.clone();
         alphabetical.sort();
         assert_ne!(ids, alphabetical, "Order should not be alphabetical");
-        assert_eq!(alphabetical, vec!["001.txt", "apple.txt", "middle.txt", "zebra.txt"]);
+        assert_eq!(
+            alphabetical,
+            vec!["001.txt", "apple.txt", "middle.txt", "zebra.txt"]
+        );
 
         // Verify entries() also preserves order.
         let entries = reader.entries().expect("Failed to get entries");
         let entry_ids: Vec<String> = entries.iter().map(|(id, _)| id.clone()).collect();
-        assert_eq!(entry_ids, expected_order, "entries() should preserve index order");
+        assert_eq!(
+            entry_ids, expected_order,
+            "entries() should preserve index order"
+        );
 
         // Verify data integrity for each entry.
-        assert_eq!(reader.get("zebra.txt").expect("Failed to get zebra.txt"), Bytes::from("zebra content"));
-        assert_eq!(reader.get("apple.txt").expect("Failed to get apple.txt"), Bytes::from("apple content"));
-        assert_eq!(reader.get("middle.txt").expect("Failed to get middle.txt"), Bytes::from("middle content"));
-        assert_eq!(reader.get("001.txt").expect("Failed to get 001.txt"), Bytes::from("001 content"));
+        assert_eq!(
+            reader.get("zebra.txt").expect("Failed to get zebra.txt"),
+            Bytes::from("zebra content")
+        );
+        assert_eq!(
+            reader.get("apple.txt").expect("Failed to get apple.txt"),
+            Bytes::from("apple content")
+        );
+        assert_eq!(
+            reader.get("middle.txt").expect("Failed to get middle.txt"),
+            Bytes::from("middle content")
+        );
+        assert_eq!(
+            reader.get("001.txt").expect("Failed to get 001.txt"),
+            Bytes::from("001 content")
+        );
     }
 }

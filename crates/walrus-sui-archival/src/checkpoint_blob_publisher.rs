@@ -4,7 +4,7 @@ use anyhow::Result;
 use blob_bundle::{BlobBundleBuildResult, BlobBundleBuilder};
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{fs, sync::mpsc};
-use walrus_core::{BlobId, EpochCount};
+use walrus_core::BlobId;
 
 use crate::{archival_state::ArchivalState, config::CheckpointBlobPublisherConfig};
 
@@ -22,10 +22,8 @@ pub struct BlobBuildRequest {
 /// A long-running service that builds blob files from checkpoint ranges.
 pub struct CheckpointBlobPublisher {
     archival_state: Arc<ArchivalState>,
-    checkpoint_blobs_dir: PathBuf,
+    config: CheckpointBlobPublisherConfig,
     downloaded_checkpoint_dir: PathBuf,
-    n_shards: NonZeroU16,
-    store_epoch_length: EpochCount,
 }
 
 impl CheckpointBlobPublisher {
@@ -34,16 +32,10 @@ impl CheckpointBlobPublisher {
         config: CheckpointBlobPublisherConfig,
         downloaded_checkpoint_dir: PathBuf,
     ) -> Result<Self> {
-        let n_shards = NonZeroU16::new(config.n_shards)
-            .ok_or_else(|| anyhow::anyhow!("n_shards must be non-zero"))?;
-
-        // TODO(zhe): directly store config.
         Ok(Self {
             archival_state,
-            checkpoint_blobs_dir: config.checkpoint_blobs_dir.clone(),
+            config,
             downloaded_checkpoint_dir,
-            n_shards,
-            store_epoch_length: config.store_epoch_length,
         })
     }
 
@@ -51,14 +43,14 @@ impl CheckpointBlobPublisher {
     pub async fn start(self, mut request_rx: mpsc::Receiver<BlobBuildRequest>) -> Result<()> {
         tracing::info!(
             "starting checkpoint blob publisher, storing blobs in {}",
-            self.checkpoint_blobs_dir.display()
+            self.config.checkpoint_blobs_dir.display()
         );
 
         // Clear the blob directory.
-        fs::create_dir_all(&self.checkpoint_blobs_dir).await?;
+        fs::create_dir_all(&self.config.checkpoint_blobs_dir).await?;
 
         // Remove all files in the blob directory if there are any.
-        for entry in std::fs::read_dir(&self.checkpoint_blobs_dir)? {
+        for entry in std::fs::read_dir(&self.config.checkpoint_blobs_dir)? {
             let entry = entry?;
             if entry.file_type()?.is_file() {
                 std::fs::remove_file(entry.path())?;
@@ -118,15 +110,19 @@ impl CheckpointBlobPublisher {
             return Ok(());
         }
 
+        // TODO(zhe): get this info from Walrus.
+        let n_shards = NonZeroU16::new(self.config.n_shards)
+            .ok_or_else(|| anyhow::anyhow!("n_shards must be non-zero"))?;
+
         // Create the blob bundle.
-        let builder = BlobBundleBuilder::new(self.n_shards);
+        let builder = BlobBundleBuilder::new(n_shards);
 
         // Generate output filename.
         let blob_filename = format!(
             "checkpoint_blob_{}_{}.blob",
             start_checkpoint, end_checkpoint
         );
-        let output_path = self.checkpoint_blobs_dir.join(&blob_filename);
+        let output_path = self.config.checkpoint_blobs_dir.join(&blob_filename);
 
         // Build the blob bundle.
         let result = builder.build(&file_paths, &output_path)?;
@@ -168,8 +164,8 @@ impl CheckpointBlobPublisher {
         }
 
         // TODO(zhe): Calculate the blob expiration epoch. This is currently incorrect. Need to
-        // first ge the current epoch from Walrus.
-        let blob_expiration_epoch = self.store_epoch_length;
+        // first get the current epoch from Walrus.
+        let blob_expiration_epoch = self.config.store_epoch_length;
 
         self.archival_state.create_new_checkpoint_blob(
             request.start_checkpoint,

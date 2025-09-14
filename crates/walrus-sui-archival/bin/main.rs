@@ -7,7 +7,7 @@ use walrus_sui_archival::{
     archival::run_sui_archival,
     config::Config,
     inspect_blob::inspect_blob,
-    inspect_db::{execute_inspect_db, InspectDbCommand},
+    inspect_db::{InspectDbCommand, execute_inspect_db},
 };
 
 #[derive(Parser, Debug)]

@@ -40,7 +40,7 @@ async fn run_application_logic(config: Config) -> Result<()> {
         + 1;
 
     // Cleanup all the old downloaded checkpoints before initial_checkpoint.
-    cleanup_orphaned_downloaded_checkpoints(
+    cleanup_orphaned_downloaded_checkpoints_and_uploaded_blobs(
         initial_checkpoint,
         config
             .checkpoint_downloader
@@ -106,7 +106,7 @@ async fn run_application_logic(config: Config) -> Result<()> {
     Ok(())
 }
 
-async fn cleanup_orphaned_downloaded_checkpoints(
+async fn cleanup_orphaned_downloaded_checkpoints_and_uploaded_blobs(
     initial_checkpoint: CheckpointSequenceNumber,
     downloaded_checkpoint_dir: PathBuf,
 ) -> Result<()> {
