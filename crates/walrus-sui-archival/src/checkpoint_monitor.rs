@@ -5,7 +5,7 @@ use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::sync::mpsc;
 
 use crate::{
-    checkpoint_blob_builder::BlobBuildRequest,
+    checkpoint_blob_publisher::BlobBuildRequest,
     checkpoint_downloader::CheckpointInfo,
     config::CheckpointMonitorConfig,
 };
@@ -109,14 +109,14 @@ pub struct CheckpointMonitor {
     last_updated_checkpoint_number: tokio::time::Instant,
     /// Last time we emitted a stall warning.
     last_stall_warning: tokio::time::Instant,
-    /// Channel to send blob build requests to CheckpointBlobBuilder.
-    blob_builder_tx: mpsc::Sender<BlobBuildRequest>,
+    /// Channel to send blob build requests to CheckpointBlobPublisher.
+    blob_publisher_tx: mpsc::Sender<BlobBuildRequest>,
 }
 
 impl CheckpointMonitor {
     pub fn new(
         config: CheckpointMonitorConfig,
-        blob_builder_tx: mpsc::Sender<BlobBuildRequest>,
+        blob_publisher_tx: mpsc::Sender<BlobBuildRequest>,
     ) -> Self {
         Self {
             config,
@@ -125,7 +125,7 @@ impl CheckpointMonitor {
             next_checkpoint_number: CheckpointSequenceNumber::from(0u64),
             last_updated_checkpoint_number: tokio::time::Instant::now(),
             last_stall_warning: tokio::time::Instant::now(),
-            blob_builder_tx,
+            blob_publisher_tx,
         }
     }
 
@@ -305,14 +305,14 @@ impl CheckpointMonitor {
             end_checkpoint
         );
 
-        // Send request to CheckpointBlobBuilder.
+        // Send request to CheckpointBlobPublisher.
         let request = BlobBuildRequest {
             start_checkpoint,
             end_checkpoint,
             end_of_epoch,
         };
 
-        if let Err(e) = self.blob_builder_tx.send(request).await {
+        if let Err(e) = self.blob_publisher_tx.send(request).await {
             tracing::error!("failed to send blob build request: {}", e);
             return Err(anyhow!("failed to send blob build request: {}", e));
         }

@@ -527,7 +527,7 @@ mod tests {
         let config = CheckpointDownloaderConfig {
             num_workers: 4,
             bucket_base_url: "https://example.com/bucket/".to_string(),
-            downloaded_checkpoint_dir: "/tmp/checkpoints".to_string(),
+            downloaded_checkpoint_dir: PathBuf::from("/tmp/checkpoints"),
             min_download_retry_wait: Duration::from_millis(100),
             max_download_retry_wait: Duration::from_secs(10),
         };
@@ -571,7 +571,7 @@ mod tests {
         let config = CheckpointDownloaderConfig {
             num_workers: 2,
             bucket_base_url: server.url(),
-            downloaded_checkpoint_dir: checkpoint_dir.to_str().unwrap().to_string(),
+            downloaded_checkpoint_dir: checkpoint_dir.clone(),
             min_download_retry_wait: Duration::from_millis(10),
             max_download_retry_wait: Duration::from_millis(100),
         };
@@ -705,7 +705,7 @@ mod tests {
         let config = CheckpointDownloaderConfig {
             num_workers: 1,
             bucket_base_url: server.url(),
-            downloaded_checkpoint_dir: checkpoint_dir.to_str().unwrap().to_string(),
+            downloaded_checkpoint_dir: checkpoint_dir.clone(),
             min_download_retry_wait: Duration::from_millis(10),
             max_download_retry_wait: Duration::from_millis(100),
         };

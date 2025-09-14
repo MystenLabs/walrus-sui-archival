@@ -1,14 +1,14 @@
 use std::{num::NonZeroU16, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use blob_bundle::BlobBundleBuilder;
+use blob_bundle::{BlobBundleBuildResult, BlobBundleBuilder};
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{fs, sync::mpsc};
-use walrus_core::BlobId;
+use walrus_core::{BlobId, EpochCount};
 
-use crate::{archival_state::ArchivalState, config::CheckpointBlobBuilderConfig};
+use crate::{archival_state::ArchivalState, config::CheckpointBlobPublisherConfig};
 
-/// Message sent from CheckpointMonitor to CheckpointBlobBuilder.
+/// Message sent from CheckpointMonitor to CheckpointBlobPublisher.
 #[derive(Debug, Clone)]
 pub struct BlobBuildRequest {
     /// First checkpoint number in the range.
@@ -20,41 +20,44 @@ pub struct BlobBuildRequest {
 }
 
 /// A long-running service that builds blob files from checkpoint ranges.
-pub struct CheckpointBlobBuilder {
+pub struct CheckpointBlobPublisher {
     archival_state: Arc<ArchivalState>,
     checkpoint_blobs_dir: PathBuf,
     downloaded_checkpoint_dir: PathBuf,
     n_shards: NonZeroU16,
+    store_epoch_length: EpochCount,
 }
 
-impl CheckpointBlobBuilder {
+impl CheckpointBlobPublisher {
     pub fn new(
         archival_state: Arc<ArchivalState>,
-        config: CheckpointBlobBuilderConfig,
+        config: CheckpointBlobPublisherConfig,
         downloaded_checkpoint_dir: PathBuf,
     ) -> Result<Self> {
         let n_shards = NonZeroU16::new(config.n_shards)
             .ok_or_else(|| anyhow::anyhow!("n_shards must be non-zero"))?;
 
+        // TODO(zhe): directly store config.
         Ok(Self {
             archival_state,
-            checkpoint_blobs_dir: PathBuf::from(&config.checkpoint_blobs_dir),
+            checkpoint_blobs_dir: config.checkpoint_blobs_dir.clone(),
             downloaded_checkpoint_dir,
             n_shards,
+            store_epoch_length: config.store_epoch_length,
         })
     }
 
-    /// Start the blob builder service that listens for build requests.
+    /// Start the blob publisher service that listens for build requests.
     pub async fn start(self, mut request_rx: mpsc::Receiver<BlobBuildRequest>) -> Result<()> {
         tracing::info!(
-            "starting checkpoint blob builder, storing blobs in {}",
+            "starting checkpoint blob publisher, storing blobs in {}",
             self.checkpoint_blobs_dir.display()
         );
 
         // Clear the blob directory.
         fs::create_dir_all(&self.checkpoint_blobs_dir).await?;
 
-        // Remove all files in the blob directory.
+        // Remove all files in the blob directory if there are any.
         for entry in std::fs::read_dir(&self.checkpoint_blobs_dir)? {
             let entry = entry?;
             if entry.file_type()?.is_file() {
@@ -69,20 +72,20 @@ impl CheckpointBlobBuilder {
                 request.end_checkpoint
             );
 
-            if let Err(e) = self.build_blob(request).await {
+            if let Err(e) = self.build_and_upload_blob(request).await {
                 tracing::error!(
-                    "failed to build blob: {}, stopping checkpoint blob builder",
+                    "failed to build blob: {}, stopping checkpoint blob publisher",
                     e
                 );
                 return Err(e);
             }
         }
 
-        tracing::info!("checkpoint blob builder stopped");
+        tracing::info!("checkpoint blob publisher stopped");
         Ok(())
     }
 
-    async fn build_blob(&self, request: BlobBuildRequest) -> Result<()> {
+    async fn build_and_upload_blob(&self, request: BlobBuildRequest) -> Result<()> {
         let start_checkpoint = request.start_checkpoint;
         let end_checkpoint = request.end_checkpoint;
 
@@ -135,24 +138,85 @@ impl CheckpointBlobBuilder {
             result.total_size
         );
 
+        self.upload_blob_to_walrus(&request, &result).await?;
+
+        // Clean up the downloaded checkpoints and uploaded blobs.
+        self.clean_up_downloaded_checkpoints_and_uploaded_blobs(&request, &result)
+            .await?;
+
+        tracing::info!(
+            "successfully cleaned up downloaded checkpoints and uploaded blobs for checkpoints {} to {}",
+            request.start_checkpoint,
+            request.end_checkpoint
+        );
+
+        Ok(())
+    }
+
+    async fn upload_blob_to_walrus(
+        &self,
+        request: &BlobBuildRequest,
+        result: &BlobBundleBuildResult,
+    ) -> Result<()> {
+        // TODO(zhe): Upload the blob to Walrus.
+        let blob_id = BlobId::ZERO;
+
         // Log the index map for debugging.
         tracing::debug!("blob index map:");
         for (id, (offset, length)) in &result.index_map {
             tracing::debug!("  {} -> offset: {}, length: {} bytes", id, offset, length);
         }
 
-        // TODO: Upload the blob to Walrus.
-
-        let blob_id = BlobId::ZERO;
+        // TODO(zhe): Calculate the blob expiration epoch. This is currently incorrect. Need to
+        // first ge the current epoch from Walrus.
+        let blob_expiration_epoch = self.store_epoch_length;
 
         self.archival_state.create_new_checkpoint_blob(
             request.start_checkpoint,
             request.end_checkpoint,
             &result.index_map,
             blob_id,
-            100,
+            blob_expiration_epoch,
             request.end_of_epoch,
         )?;
+        Ok(())
+    }
+
+    async fn clean_up_downloaded_checkpoints_and_uploaded_blobs(
+        &self,
+        request: &BlobBuildRequest,
+        result: &BlobBundleBuildResult,
+    ) -> Result<()> {
+        tracing::info!(
+            "cleaning up downloaded checkpoints and uploaded blobs for checkpoints {} to {}",
+            request.start_checkpoint,
+            request.end_checkpoint
+        );
+
+        for checkpoint_num in request.start_checkpoint..=request.end_checkpoint {
+            let checkpoint_file = self
+                .downloaded_checkpoint_dir
+                .join(format!("{checkpoint_num}"));
+
+            if let Err(e) = std::fs::remove_file(&checkpoint_file) {
+                // Do not stop if file removal fails.
+                tracing::warn!(
+                    "failed to remove checkpoint file {}: {}",
+                    checkpoint_file.display(),
+                    e
+                );
+            }
+        }
+
+        // Remove the uploaded blob.
+        if let Err(e) = std::fs::remove_file(&result.file_path) {
+            // Do not stop if file removal fails.
+            tracing::warn!(
+                "failed to remove uploaded blob {}: {}",
+                result.file_path.display(),
+                e
+            );
+        }
 
         Ok(())
     }

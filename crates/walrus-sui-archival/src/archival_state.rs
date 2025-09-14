@@ -191,15 +191,8 @@ impl ArchivalState {
             // Deserialize the blob info.
             let blob_info = CheckpointBlobInfo::decode(value_bytes.as_ref())?;
 
-            // The last checkpoint in this blob is either:
-            // 1. The last entry in index_entries if they exist
-            // 2. The end_checkpoint field as a fallback
-            if let Some(last_entry) = blob_info.index_entries.last() {
-                Ok(Some(last_entry.checkpoint_number.into()))
-            } else {
-                // Use end_checkpoint as fallback when no index entries exist.
-                Ok(Some(blob_info.end_checkpoint.into()))
-            }
+            // Return the last checkpoint number in the blob.
+            Ok(Some(blob_info.end_checkpoint.into()))
         } else {
             // No blobs stored yet.
             Ok(None)

@@ -1,10 +1,12 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{select, sync::mpsc};
 
 use crate::{
     archival_state::ArchivalState,
-    checkpoint_blob_builder::{self, BlobBuildRequest},
+    checkpoint_blob_publisher::{self, BlobBuildRequest},
     checkpoint_downloader,
     checkpoint_monitor,
     config::Config,
@@ -27,32 +29,42 @@ async fn run_application_logic(config: Config) -> Result<()> {
     // Initialize the archival state with RocksDB.
     let archival_state = std::sync::Arc::new(ArchivalState::open(&config.db_path, false)?);
     tracing::info!(
-        "initialized archival state with database at {}",
+        "initialized archival state with database at {:?}",
         config.db_path
     );
 
+    // TODO(zhe): remove testing initial checkpoint.
     let initial_checkpoint = archival_state
         .get_latest_stored_checkpoint()?
         .unwrap_or(CheckpointSequenceNumber::from(239999999u64))
         + 1;
 
-    tracing::info!("initial checkpoint: {}", initial_checkpoint);
-
-    // Create channel for blob build requests.
-    let (blob_builder_tx, blob_builder_rx) = mpsc::channel::<BlobBuildRequest>(100);
-
-    // Start the checkpoint blob builder.
-    let blob_builder = checkpoint_blob_builder::CheckpointBlobBuilder::new(
-        archival_state.clone(),
-        config.checkpoint_blob_builder.clone(),
+    // Cleanup all the old downloaded checkpoints before initial_checkpoint.
+    cleanup_orphaned_downloaded_checkpoints(
+        initial_checkpoint,
         config
             .checkpoint_downloader
             .downloaded_checkpoint_dir
-            .clone()
-            .into(),
+            .clone(),
+    )
+    .await?;
+
+    tracing::info!("initial checkpoint: {}", initial_checkpoint);
+
+    // Create channel for blob build requests.
+    let (blob_publisher_tx, blob_publisher_rx) = mpsc::channel::<BlobBuildRequest>(100);
+
+    // Start the checkpoint blob publisher.
+    let blob_publisher = checkpoint_blob_publisher::CheckpointBlobPublisher::new(
+        archival_state.clone(),
+        config.checkpoint_blob_publisher.clone(),
+        config
+            .checkpoint_downloader
+            .downloaded_checkpoint_dir
+            .clone(),
     )?;
-    let blob_builder_handle =
-        tokio::spawn(async move { blob_builder.start(blob_builder_rx).await });
+    let blob_publisher_handle =
+        tokio::spawn(async move { blob_publisher.start(blob_publisher_rx).await });
 
     // Start the checkpoint downloader and get the receiver.
     let downloader =
@@ -63,7 +75,7 @@ async fn run_application_logic(config: Config) -> Result<()> {
     // Start the checkpoint monitor with the receiver.
     let monitor = checkpoint_monitor::CheckpointMonitor::new(
         config.checkpoint_monitor.clone(),
-        blob_builder_tx,
+        blob_publisher_tx,
     );
     let monitor_handle = monitor.start(initial_checkpoint, checkpoint_receiver);
 
@@ -82,13 +94,90 @@ async fn run_application_logic(config: Config) -> Result<()> {
                 return Err(anyhow::anyhow!("checkpoint monitor failed: {}", e));
             }
         }
-        blob_builder_result = blob_builder_handle => {
-            tracing::info!("checkpoint blob builder stopped: {:?}", blob_builder_result);
-            if let Err(e) = blob_builder_result {
-                tracing::error!("checkpoint blob builder failed: {}", e);
-                return Err(anyhow::anyhow!("checkpoint blob builder failed: {}", e));
+        blob_publisher_result = blob_publisher_handle => {
+            tracing::info!("checkpoint blob publisher stopped: {:?}", blob_publisher_result);
+            if let Err(e) = blob_publisher_result {
+                tracing::error!("checkpoint blob publisher failed: {}", e);
+                return Err(anyhow::anyhow!("checkpoint blob publisher failed: {}", e));
             }
         }
+    }
+
+    Ok(())
+}
+
+async fn cleanup_orphaned_downloaded_checkpoints(
+    initial_checkpoint: CheckpointSequenceNumber,
+    downloaded_checkpoint_dir: PathBuf,
+) -> Result<()> {
+    tracing::info!(
+        "cleaning up orphaned downloaded checkpoints before checkpoint {}",
+        initial_checkpoint
+    );
+
+    // Read all files in the downloaded checkpoint directory.
+    let entries = match tokio::fs::read_dir(&downloaded_checkpoint_dir).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(
+                "failed to read downloaded checkpoint directory {}: {}",
+                downloaded_checkpoint_dir.display(),
+                e
+            );
+            return Ok(());
+        }
+    };
+
+    let mut entries = entries;
+    let mut removed_count = 0;
+
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+
+        // Skip if not a file.
+        if !path.is_file() {
+            continue;
+        }
+
+        // Get the file name.
+        let file_name = match path.file_name() {
+            Some(name) => name.to_string_lossy(),
+            None => continue,
+        };
+
+        // Try to parse the file name as a checkpoint number.
+        let checkpoint_num = match file_name.parse::<u64>() {
+            Ok(num) => num,
+            Err(_) => {
+                tracing::warn!("failed to parse checkpoint file name as u64: {}", file_name);
+                continue;
+            }
+        };
+
+        // Remove the file if it's before the initial checkpoint.
+        if checkpoint_num < initial_checkpoint.into() {
+            match tokio::fs::remove_file(&path).await {
+                Ok(_) => {
+                    removed_count += 1;
+                    tracing::debug!("removed orphaned checkpoint file: {}", path.display());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "failed to remove orphaned checkpoint file {}: {}",
+                        path.display(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    if removed_count > 0 {
+        tracing::info!(
+            "removed {} orphaned checkpoint files before checkpoint {}",
+            removed_count,
+            initial_checkpoint
+        );
     }
 
     Ok(())

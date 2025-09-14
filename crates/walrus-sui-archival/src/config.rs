@@ -1,13 +1,18 @@
-use std::{fs, path::Path, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use walrus_core::EpochCount;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Path to the RocksDB database directory.
     #[serde(default = "default_db_path")]
-    pub db_path: String,
+    pub db_path: PathBuf,
 
     /// Total number of threads for the tokio runtime thread pool.
     #[serde(default = "default_thread_pool_size")]
@@ -20,9 +25,9 @@ pub struct Config {
     #[serde(default)]
     pub checkpoint_monitor: CheckpointMonitorConfig,
 
-    /// Configuration for the checkpoint blob builder.
+    /// Configuration for the checkpoint blob publisher.
     #[serde(default)]
-    pub checkpoint_blob_builder: CheckpointBlobBuilderConfig,
+    pub checkpoint_blob_publisher: CheckpointBlobPublisherConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,7 +41,7 @@ pub struct CheckpointDownloaderConfig {
 
     /// Directory to store downloaded checkpoint data.
     #[serde(default = "default_downloaded_checkpoint_dir")]
-    pub downloaded_checkpoint_dir: String,
+    pub downloaded_checkpoint_dir: PathBuf,
 
     /// Minimum wait time for download retry.
     #[serde(default = "default_min_download_retry_wait", with = "humantime_serde")]
@@ -57,8 +62,8 @@ impl Config {
     }
 }
 
-fn default_db_path() -> String {
-    "archival_db".to_string()
+fn default_db_path() -> PathBuf {
+    ["./", "archival_db"].iter().collect()
 }
 
 fn default_thread_pool_size() -> usize {
@@ -69,8 +74,8 @@ fn default_num_workers() -> usize {
     20
 }
 
-fn default_downloaded_checkpoint_dir() -> String {
-    "downloaded_checkpoint_dir".to_string()
+fn default_downloaded_checkpoint_dir() -> PathBuf {
+    ["./", "downloaded_checkpoint_dir"].iter().collect()
 }
 
 fn default_min_download_retry_wait() -> Duration {
@@ -116,31 +121,40 @@ fn default_max_accumulation_size_bytes() -> u64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CheckpointBlobBuilderConfig {
+pub struct CheckpointBlobPublisherConfig {
     /// Directory to store checkpoint blob files.
     /// Default: "checkpoint_blobs".
     #[serde(default = "default_checkpoint_blobs_dir")]
-    pub checkpoint_blobs_dir: String,
+    pub checkpoint_blobs_dir: PathBuf,
 
     /// Number of shards for Walrus blob encoding.
     /// Default: 1000.
     #[serde(default = "default_n_shards")]
     pub n_shards: u16,
+
+    /// Number of epochs to store in the database.
+    #[serde(default = "default_store_epoch_length")]
+    pub store_epoch_length: EpochCount,
 }
 
-impl Default for CheckpointBlobBuilderConfig {
+impl Default for CheckpointBlobPublisherConfig {
     fn default() -> Self {
         Self {
             checkpoint_blobs_dir: default_checkpoint_blobs_dir(),
             n_shards: default_n_shards(),
+            store_epoch_length: default_store_epoch_length(),
         }
     }
 }
 
-fn default_checkpoint_blobs_dir() -> String {
-    "checkpoint_blobs".to_string()
+fn default_checkpoint_blobs_dir() -> PathBuf {
+    ["./", "checkpoint_blobs"].iter().collect()
 }
 
 fn default_n_shards() -> u16 {
     1000
+}
+
+fn default_store_epoch_length() -> EpochCount {
+    5
 }
