@@ -25,7 +25,7 @@ async fn run_application_logic(config: Config) -> Result<()> {
     tracing::info!("starting application logic in multi-thread runtime");
 
     // Initialize the archival state with RocksDB.
-    let archival_state = std::sync::Arc::new(ArchivalState::open(&config.db_path)?);
+    let archival_state = std::sync::Arc::new(ArchivalState::open(&config.db_path, false)?);
     tracing::info!(
         "initialized archival state with database at {}",
         config.db_path

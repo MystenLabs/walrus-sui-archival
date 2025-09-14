@@ -23,18 +23,18 @@ const CHECKPOINT_BLOB_INFO_VERSION: u32 = 1;
 /// Archival state that manages the RocksDB database.
 pub struct ArchivalState {
     db: Arc<DB>,
+    read_only: bool,
 }
 
 impl ArchivalState {
     /// Create a new ArchivalState with RocksDB database.
-    pub fn open<P: AsRef<Path>>(db_path: P) -> Result<Self> {
+    pub fn open<P: AsRef<Path>>(db_path: P, read_only: bool) -> Result<Self> {
         let db_path = db_path.as_ref();
-        tracing::info!("opening archival database at {}", db_path.display());
-
-        // Create database options.
-        let mut db_opts = RocksOptions::default();
-        db_opts.create_if_missing(true);
-        db_opts.create_missing_column_families(true);
+        tracing::info!(
+            "opening archival database at {} (read_only: {})",
+            db_path.display(),
+            read_only
+        );
 
         // Define column families.
         let cf_descriptors = vec![ColumnFamilyDescriptor::new(
@@ -42,10 +42,28 @@ impl ArchivalState {
             RocksOptions::default(),
         )];
 
-        // Open database with column families.
-        let db = DB::open_cf_descriptors(&db_opts, db_path, cf_descriptors)?;
+        let db = if read_only {
+            // Open database in read-only mode.
+            DB::open_cf_descriptors_read_only(
+                &RocksOptions::default(),
+                db_path,
+                cf_descriptors,
+                false, // error_if_log_file_exist
+            )?
+        } else {
+            // Create database options for read-write mode.
+            let mut db_opts = RocksOptions::default();
+            db_opts.create_if_missing(true);
+            db_opts.create_missing_column_families(true);
 
-        Ok(Self { db: Arc::new(db) })
+            // Open database with column families.
+            DB::open_cf_descriptors(&db_opts, db_path, cf_descriptors)?
+        };
+
+        Ok(Self {
+            db: Arc::new(db),
+            read_only,
+        })
     }
 
     pub fn create_new_checkpoint_blob(
@@ -57,6 +75,11 @@ impl ArchivalState {
         blob_expiration_epoch: Epoch,
         end_of_epoch: bool,
     ) -> Result<()> {
+        if self.read_only {
+            return Err(anyhow::anyhow!(
+                "cannot create checkpoint blob in read-only mode"
+            ));
+        }
         // Convert index_map to protobuf IndexEntry messages.
         let index_entries: Vec<IndexEntry> = index_map
             .iter()
@@ -174,7 +197,8 @@ impl ArchivalState {
             if let Some(last_entry) = blob_info.index_entries.last() {
                 Ok(Some(last_entry.checkpoint_number.into()))
             } else {
-                panic!("no index entries in blob info");
+                // Use end_checkpoint as fallback when no index entries exist.
+                Ok(Some(blob_info.end_checkpoint.into()))
             }
         } else {
             // No blobs stored yet.
@@ -243,14 +267,14 @@ mod tests {
         let db_path = temp_dir.path().join("test_db");
 
         // Test opening a new database.
-        let state = ArchivalState::open(&db_path);
+        let state = ArchivalState::open(&db_path, false);
         assert!(state.is_ok(), "Should successfully open database");
 
         // Drop the first instance before opening again.
         drop(state);
 
         // Test opening an existing database.
-        let state2 = ArchivalState::open(&db_path);
+        let state2 = ArchivalState::open(&db_path, false);
         assert!(state2.is_ok(), "Should successfully open existing database");
     }
 
@@ -258,7 +282,7 @@ mod tests {
     fn test_create_and_get_checkpoint_blob() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
-        let state = ArchivalState::open(&db_path).expect("Failed to open database");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
 
         // Create a blob with checkpoints 100-199.
         let start_checkpoint = 100u64.into();
@@ -317,7 +341,7 @@ mod tests {
     fn test_multiple_blobs() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
-        let state = ArchivalState::open(&db_path).expect("Failed to open database");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
 
         // Create multiple blobs.
         let blobs = vec![
@@ -368,7 +392,7 @@ mod tests {
     fn test_get_latest_stored_checkpoint() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
-        let state = ArchivalState::open(&db_path).expect("Failed to open database");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
 
         // Initially, no checkpoints stored.
         let latest = state
@@ -435,7 +459,7 @@ mod tests {
     fn test_blob_with_gaps() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
-        let state = ArchivalState::open(&db_path).expect("Failed to open database");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
 
         // Create blobs with gaps.
         let (index_map, blob_id, epoch) = create_test_blob_info(100, 199, "blob_1");
@@ -481,7 +505,7 @@ mod tests {
     fn test_empty_index_entries() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
-        let state = ArchivalState::open(&db_path).expect("Failed to open database");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
 
         // Create a blob with empty index entries.
         let empty_index_map: Vec<(String, (u64, u64))> = Vec::new();
@@ -518,7 +542,7 @@ mod tests {
     fn test_index_entry_parsing() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
-        let state = ArchivalState::open(&db_path).expect("Failed to open database");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
 
         // Create index map with various ID formats.
         let index_map = vec![
@@ -549,5 +573,62 @@ mod tests {
         assert_eq!(blob_info.index_entries[0].checkpoint_number, 1000);
         assert_eq!(blob_info.index_entries[1].checkpoint_number, 1001); // .chk stripped.
         assert_eq!(blob_info.index_entries[2].checkpoint_number, 1002);
+    }
+
+    #[test]
+    fn test_read_only_mode() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+
+        // First create database in read-write mode and add some data.
+        {
+            let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+            let index_map = vec![("1000".to_string(), (0u64, 100u64))];
+            let blob_id = BlobId::from_str("test_blob").unwrap_or(BlobId::ZERO);
+            let epoch = 1000u32.into();
+
+            state
+                .create_new_checkpoint_blob(
+                    1000u64.into(),
+                    1000u64.into(),
+                    &index_map,
+                    blob_id,
+                    epoch,
+                    false,
+                )
+                .expect("Failed to create blob");
+        }
+
+        // Now open in read-only mode.
+        let state =
+            ArchivalState::open(&db_path, true).expect("Failed to open database in read-only mode");
+
+        // Reading should work.
+        let blob_info = state
+            .get_checkpoint_blob_info(1000u64.into())
+            .expect("Should be able to read in read-only mode");
+        assert_eq!(blob_info.start_checkpoint, 1000);
+
+        // Writing should fail.
+        let index_map = vec![("2000".to_string(), (0u64, 100u64))];
+        let blob_id = BlobId::from_str("test_blob2").unwrap_or(BlobId::ZERO);
+        let epoch = 2000u32.into();
+
+        let result = state.create_new_checkpoint_blob(
+            2000u64.into(),
+            2000u64.into(),
+            &index_map,
+            blob_id,
+            epoch,
+            false,
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot create checkpoint blob in read-only mode")
+        );
     }
 }

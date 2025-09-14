@@ -3,7 +3,12 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
-use walrus_sui_archival::{archival::run_sui_archival, config::Config, inspect_blob::inspect_blob};
+use walrus_sui_archival::{
+    archival::run_sui_archival,
+    config::Config,
+    inspect_blob::inspect_blob,
+    inspect_db::{execute_inspect_db, InspectDbCommand},
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "walrus-sui-archival")]
@@ -25,7 +30,14 @@ enum Commands {
         config: String,
     },
     /// Inspect the database.
-    DbInspection,
+    InspectDb {
+        /// Path to the database.
+        #[arg(short, long, default_value = "archival_db")]
+        db_path: PathBuf,
+        /// Subcommand for database inspection.
+        #[command(subcommand)]
+        command: InspectDbCommand,
+    },
     /// Inspect a blob file.
     InspectBlob {
         /// Path to the blob file.
@@ -58,9 +70,9 @@ fn main() -> Result<()> {
             let config = Config::from_file(&config)?;
             run_sui_archival(config)?;
         }
-        Commands::DbInspection => {
+        Commands::InspectDb { db_path, command } => {
             tracing::info!("starting database inspection...");
-            println!("db inspection command not yet implemented");
+            execute_inspect_db(db_path, command)?;
         }
         Commands::InspectBlob {
             path,
