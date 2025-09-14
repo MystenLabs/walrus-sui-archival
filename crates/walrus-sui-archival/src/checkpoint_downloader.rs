@@ -68,6 +68,18 @@ impl CheckpointDownloadWorker {
                 checkpoint_number
             );
 
+            // If the checkpoint file already exists, skip it.
+            let checkpoint_file = self
+                .downloaded_checkpoint_dir
+                .join(format!("{checkpoint_number}"));
+            if checkpoint_file.exists() {
+                tracing::info!(
+                    "worker {} skipping checkpoint {}, file already exists",
+                    self.worker_id,
+                    checkpoint_number
+                );
+            }
+
             match self.download_checkpoint(checkpoint_number).await {
                 Ok(checkpoint_info) => {
                     if let Err(e) = self.tx.send(checkpoint_info).await {
@@ -95,7 +107,7 @@ impl CheckpointDownloadWorker {
     ) -> Result<CheckpointInfo> {
         let url = self
             .bucket_base_url
-            .join(&format!("{checkpoint_number}.chk"))?;
+            .join(&format!("{}.chk", checkpoint_number))?;
 
         let mut retry_count = 0;
         let mut wait_duration = self.min_retry_wait;
@@ -123,10 +135,10 @@ impl CheckpointDownloadWorker {
                     // First write to a temporary file, then rename to final name.
                     let checkpoint_file = self
                         .downloaded_checkpoint_dir
-                        .join(format!("{}.chk", checkpoint_number));
+                        .join(format!("{checkpoint_number}"));
                     let temp_file = self
                         .downloaded_checkpoint_dir
-                        .join(format!("{}.chk.tmp", checkpoint_number));
+                        .join(format!("{checkpoint_number}.tmp"));
 
                     // Write to temporary file.
                     fs::write(&temp_file, &bytes).await?;
@@ -200,7 +212,7 @@ impl CheckpointDownloader {
             let path = entry.path();
             if let Some(name) = path.file_name() {
                 if let Some(name_str) = name.to_str() {
-                    if name_str.ends_with(".chk.tmp") {
+                    if name_str.ends_with(".tmp") {
                         tracing::info!("cleaning up leftover temp file: {}", path.display());
                         if let Err(e) = fs::remove_file(&path).await {
                             tracing::warn!("failed to remove temp file {}: {}", path.display(), e);
@@ -274,22 +286,24 @@ impl CheckpointDownloader {
         download_tx: async_channel::Sender<CheckpointSequenceNumber>,
         initial_checkpoint: CheckpointSequenceNumber,
     ) -> Result<()> {
-        tokio::spawn(async move {
-            let mut current_checkpoint = initial_checkpoint;
-            loop {
-                if let Err(e) = download_tx.send(current_checkpoint).await {
-                    tracing::debug!(
-                        "failed to send checkpoint number {}: {}",
-                        current_checkpoint,
-                        e
-                    );
-                    break;
-                }
-                current_checkpoint += 1;
-                time::sleep(time::Duration::from_millis(100)).await;
+        let mut current_checkpoint = initial_checkpoint;
+        loop {
+            if let Err(e) = download_tx.send(current_checkpoint).await {
+                tracing::debug!(
+                    "failed to send checkpoint number {}: {}",
+                    current_checkpoint,
+                    e
+                );
+                break;
             }
-        })
-        .await?;
+            if current_checkpoint > 240001000 {
+                tracing::info!("ZZZZZ stop downloader");
+                break;
+            }
+            current_checkpoint += 1;
+            time::sleep(time::Duration::from_millis(100)).await;
+        }
+
         Ok(())
     }
 }
@@ -380,7 +394,7 @@ mod tests {
         assert_eq!(checkpoint_info.checkpoint_byte_size, checkpoint_bytes.len());
 
         // Verify file was written.
-        let checkpoint_file = checkpoint_dir.join(format!("{}.chk", checkpoint_number));
+        let checkpoint_file = checkpoint_dir.join(format!("{checkpoint_number}"));
         assert!(checkpoint_file.exists());
         let saved_bytes = fs::read(&checkpoint_file).await.unwrap();
         assert_eq!(saved_bytes, checkpoint_bytes);
@@ -443,7 +457,7 @@ mod tests {
         assert_eq!(checkpoint_info.checkpoint_number, checkpoint_number);
 
         // Verify file was written.
-        let checkpoint_file = checkpoint_dir.join(format!("{}.chk", checkpoint_number));
+        let checkpoint_file = checkpoint_dir.join(format!("{checkpoint_number}"));
         assert!(checkpoint_file.exists());
 
         worker_handle.await.unwrap();
@@ -504,7 +518,7 @@ mod tests {
             assert_eq!(checkpoint_info.checkpoint_number, expected_checkpoint);
 
             // Verify file was written.
-            let checkpoint_file = checkpoint_dir.join(format!("{}.chk", expected_checkpoint));
+            let checkpoint_file = checkpoint_dir.join(format!("{expected_checkpoint}"));
             assert!(checkpoint_file.exists());
         }
 
@@ -576,7 +590,7 @@ mod tests {
         // Verify files are eventually written (with timeout).
         for checkpoint_number in 0..=5 {
             tracing::info!("verifying checkpoint file {}", checkpoint_number);
-            let checkpoint_file = checkpoint_dir.join(format!("{}.chk", checkpoint_number));
+            let checkpoint_file = checkpoint_dir.join(format!("{checkpoint_number}"));
 
             let wait_result = tokio::time::timeout(Duration::from_secs(5), async {
                 while !checkpoint_file.exists() {

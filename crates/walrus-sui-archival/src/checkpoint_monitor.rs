@@ -4,7 +4,11 @@ use anyhow::{Result, anyhow};
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::sync::mpsc;
 
-use crate::{checkpoint_downloader::CheckpointInfo, config::CheckpointMonitorConfig};
+use crate::{
+    checkpoint_blob_builder::BlobBuildRequest,
+    checkpoint_downloader::CheckpointInfo,
+    config::CheckpointMonitorConfig,
+};
 
 /// Criteria for when to build a new blob.
 #[derive(Debug, Clone, PartialEq)]
@@ -105,10 +109,12 @@ pub struct CheckpointMonitor {
     last_updated_checkpoint_number: tokio::time::Instant,
     /// Last time we emitted a stall warning.
     last_stall_warning: tokio::time::Instant,
+    /// Channel to send blob build requests to CheckpointBlobBuilder.
+    blob_builder_tx: mpsc::Sender<BlobBuildRequest>,
 }
 
 impl CheckpointMonitor {
-    pub fn new(config: CheckpointMonitorConfig) -> Self {
+    pub fn new(config: CheckpointMonitorConfig, blob_builder_tx: mpsc::Sender<BlobBuildRequest>) -> Self {
         Self {
             config,
             accumulator: CheckpointAccumulator::new(),
@@ -116,6 +122,7 @@ impl CheckpointMonitor {
             next_checkpoint_number: CheckpointSequenceNumber::from(0u64),
             last_updated_checkpoint_number: tokio::time::Instant::now(),
             last_stall_warning: tokio::time::Instant::now(),
+            blob_builder_tx,
         }
     }
 
@@ -265,27 +272,33 @@ impl CheckpointMonitor {
 
     /// Build a Walrus blob from the accumulated checkpoints.
     async fn build_blob(&self) -> Result<()> {
-        // TODO: Implement actual blob building logic.
-        // This is a placeholder for now.
+        if self.accumulator.checkpoints.is_empty() {
+            return Ok(());
+        }
+
+        let start_checkpoint = self.accumulator.checkpoints.first()
+            .map(|c| c.checkpoint_number)
+            .unwrap_or(0);
+        let end_checkpoint = self.accumulator.checkpoints.last()
+            .map(|c| c.checkpoint_number)
+            .unwrap_or(0);
+
         tracing::info!(
-            "building walrus blob from checkpoints {} to {}",
-            self.accumulator
-                .checkpoints
-                .first()
-                .map(|c| c.checkpoint_number)
-                .unwrap_or(0),
-            self.accumulator
-                .checkpoints
-                .last()
-                .map(|c| c.checkpoint_number)
-                .unwrap_or(0)
+            "sending blob build request for checkpoints {} to {}",
+            start_checkpoint,
+            end_checkpoint
         );
 
-        // Placeholder - actual implementation will:
-        // 1. Read checkpoint files from disk
-        // 2. Bundle them together
-        // 3. Upload to Walrus
-        // 4. Store blob metadata
+        // Send request to CheckpointBlobBuilder.
+        let request = BlobBuildRequest {
+            start_checkpoint,
+            end_checkpoint,
+        };
+
+        if let Err(e) = self.blob_builder_tx.send(request).await {
+            tracing::error!("failed to send blob build request: {}", e);
+            return Err(anyhow!("failed to send blob build request: {}", e));
+        }
 
         Ok(())
     }
@@ -422,7 +435,8 @@ mod tests {
         tracing_subscriber::fmt::init();
 
         let config = CheckpointMonitorConfig::default();
-        let monitor = CheckpointMonitor::new(config);
+        let (blob_tx, _blob_rx) = mpsc::channel(10);
+        let monitor = CheckpointMonitor::new(config, blob_tx);
 
         let (tx, rx) = mpsc::channel(10);
 
@@ -452,7 +466,8 @@ mod tests {
         tracing_subscriber::fmt::init();
 
         let config = CheckpointMonitorConfig::default();
-        let monitor = CheckpointMonitor::new(config);
+        let (blob_tx, _blob_rx) = mpsc::channel(10);
+        let monitor = CheckpointMonitor::new(config, blob_tx);
 
         let (tx, rx) = mpsc::channel(1000);
 
@@ -487,7 +502,8 @@ mod tests {
         tracing_subscriber::fmt::init();
 
         let config = CheckpointMonitorConfig::default();
-        let monitor = CheckpointMonitor::new(config);
+        let (blob_tx, _blob_rx) = mpsc::channel(10);
+        let monitor = CheckpointMonitor::new(config, blob_tx);
 
         let (tx, rx) = mpsc::channel(10);
 

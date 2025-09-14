@@ -13,7 +13,12 @@ pub struct Config {
     pub checkpoint_downloader: CheckpointDownloaderConfig,
 
     /// Configuration for the checkpoint monitor.
+    #[serde(default)]
     pub checkpoint_monitor: CheckpointMonitorConfig,
+
+    /// Configuration for the checkpoint blob builder.
+    #[serde(default)]
+    pub checkpoint_blob_builder: CheckpointBlobBuilderConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,7 +58,7 @@ fn default_thread_pool_size() -> usize {
 }
 
 fn default_num_workers() -> usize {
-    4
+    20
 }
 
 fn default_downloaded_checkpoint_dir() -> String {
@@ -94,9 +99,40 @@ impl Default for CheckpointMonitorConfig {
 }
 
 fn default_max_accumulation_duration() -> Duration {
-    Duration::from_secs(3600) // 1 hour.
+    // Duration::from_secs(3600) // 1 hour.
+    Duration::from_secs(60) // 1 minute.
 }
 
 fn default_max_accumulation_size_bytes() -> u64 {
-    10 * 1024 * 1024 * 1024 // 10 GB.
+    5 * 1024 * 1024 * 1024 // 5 GB.
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointBlobBuilderConfig {
+    /// Directory to store checkpoint blob files.
+    /// Default: "checkpoint_blobs".
+    #[serde(default = "default_checkpoint_blobs_dir")]
+    pub checkpoint_blobs_dir: String,
+
+    /// Number of shards for Walrus blob encoding.
+    /// Default: 1000.
+    #[serde(default = "default_n_shards")]
+    pub n_shards: u16,
+}
+
+impl Default for CheckpointBlobBuilderConfig {
+    fn default() -> Self {
+        Self {
+            checkpoint_blobs_dir: default_checkpoint_blobs_dir(),
+            n_shards: default_n_shards(),
+        }
+    }
+}
+
+fn default_checkpoint_blobs_dir() -> String {
+    "checkpoint_blobs".to_string()
+}
+
+fn default_n_shards() -> u16 {
+    1000
 }

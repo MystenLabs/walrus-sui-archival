@@ -546,6 +546,8 @@ pub struct BlobBundleReader {
     data: Bytes,
     // Lazy index parsing
     index: RefCell<Option<HashMap<String, IndexEntry>>>,
+    // List of IDs in the order they appear in the blob bundle.
+    ids: RefCell<Option<Vec<String>>>,
 }
 
 impl BlobBundleReader {
@@ -595,6 +597,7 @@ impl BlobBundleReader {
         Ok(Self {
             data,
             index: RefCell::new(None),
+            ids: RefCell::new(None),
         })
     }
 
@@ -613,6 +616,7 @@ impl BlobBundleReader {
         // Parse index
         cursor.set_position(footer.index_offset);
         let mut index = HashMap::new();
+        let mut ids = Vec::new();
 
         for _ in 0..footer.index_entries {
             let entry = IndexEntry::read_from(&mut cursor)?;
@@ -623,10 +627,15 @@ impl BlobBundleReader {
                 return Err(BlobBundleError::InvalidFormat);
             }
 
+            // Add to IDs list.
+            ids.push(entry.id.clone());
+
+            // Add to index map.
             index.insert(entry.id.clone(), entry);
         }
 
         *self.index.borrow_mut() = Some(index);
+        *self.ids.borrow_mut() = Some(ids);
         Ok(())
     }
 
@@ -671,16 +680,16 @@ impl BlobBundleReader {
         Ok(data)
     }
 
-    /// List all IDs in the blob bundle
+    /// List all IDs in the blob bundle.
     pub fn list_ids(&self) -> Result<Vec<String>> {
         self.ensure_index_parsed()?;
 
-        let index = self.index.borrow();
-        let index = index
+        let ids = self.ids.borrow();
+        let ids = ids
             .as_ref()
-            .expect("index should be populated after ensure_index_parsed");
+            .expect("ids should be populated after ensure_index_parsed");
 
-        Ok(index.keys().cloned().collect())
+        Ok(ids.clone())
     }
 
     /// Get index entry by ID
@@ -695,16 +704,30 @@ impl BlobBundleReader {
         Ok(index.get(id).cloned())
     }
 
-    /// Get all index entries
+    /// Get all index entries in the order they appear in the blob bundle.
     pub fn entries(&self) -> Result<Vec<(String, IndexEntry)>> {
         self.ensure_index_parsed()?;
+
+        let ids = self.ids.borrow();
+        let ids = ids
+            .as_ref()
+            .expect("ids should be populated after ensure_index_parsed");
 
         let index = self.index.borrow();
         let index = index
             .as_ref()
             .expect("index should be populated after ensure_index_parsed");
 
-        Ok(index.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        // Return entries in the order they appear in the blob bundle.
+        Ok(ids
+            .iter()
+            .map(|id| {
+                let entry = index
+                    .get(id)
+                    .expect("id from ids list should exist in index");
+                (id.clone(), entry.clone())
+            })
+            .collect())
     }
 
     /// Read raw bytes from the blob bundle at the specified offset and length.
@@ -1390,5 +1413,65 @@ mod tests {
         let mut ids = reader.list_ids().expect("Failed to list IDs");
         ids.sort();
         assert_eq!(ids, vec!["entry1.txt", "entry2.txt", "entry3.txt"]);
+    }
+
+    #[test]
+    fn test_list_ids_order_matches_index() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create test files with specific names to test ordering.
+        let file1_path = temp_dir.path().join("zebra.txt");
+        let file2_path = temp_dir.path().join("apple.txt");
+        let file3_path = temp_dir.path().join("middle.txt");
+        let file4_path = temp_dir.path().join("001.txt");
+
+        fs::write(&file1_path, b"zebra content").expect("Failed to write file1");
+        fs::write(&file2_path, b"apple content").expect("Failed to write file2");
+        fs::write(&file3_path, b"middle content").expect("Failed to write file3");
+        fs::write(&file4_path, b"001 content").expect("Failed to write file4");
+
+        // Build blob bundle with files in this specific order.
+        let builder = BlobBundleBuilder::new(NonZeroU16::new(10).expect("10 is non-zero"));
+        let output_path = temp_dir.path().join("bundle.blob");
+        let file_paths = vec![&file1_path, &file2_path, &file3_path, &file4_path];
+        let result = builder
+            .build(&file_paths, &output_path)
+            .expect("Failed to build bundle");
+
+        // The index_map should preserve the order of files as they were added.
+        let expected_order: Vec<String> = vec![
+            "zebra.txt".to_string(),
+            "apple.txt".to_string(),
+            "middle.txt".to_string(),
+            "001.txt".to_string(),
+        ];
+        let index_order: Vec<String> = result.index_map.iter().map(|(id, _)| id.clone()).collect();
+        assert_eq!(index_order, expected_order, "Index map should preserve input order");
+
+        // Read the bundle.
+        let bundle_data = fs::read(&output_path).expect("Failed to read bundle");
+        let reader =
+            BlobBundleReader::new(Bytes::from(bundle_data)).expect("Failed to create reader");
+
+        // list_ids should return IDs in the same order as they appear in the index.
+        let ids = reader.list_ids().expect("Failed to list IDs");
+        assert_eq!(ids, expected_order, "list_ids should preserve index order");
+
+        // Verify that the order is NOT alphabetical (which would be different).
+        let mut alphabetical = expected_order.clone();
+        alphabetical.sort();
+        assert_ne!(ids, alphabetical, "Order should not be alphabetical");
+        assert_eq!(alphabetical, vec!["001.txt", "apple.txt", "middle.txt", "zebra.txt"]);
+
+        // Verify entries() also preserves order.
+        let entries = reader.entries().expect("Failed to get entries");
+        let entry_ids: Vec<String> = entries.iter().map(|(id, _)| id.clone()).collect();
+        assert_eq!(entry_ids, expected_order, "entries() should preserve index order");
+
+        // Verify data integrity for each entry.
+        assert_eq!(reader.get("zebra.txt").expect("Failed to get zebra.txt"), Bytes::from("zebra content"));
+        assert_eq!(reader.get("apple.txt").expect("Failed to get apple.txt"), Bytes::from("apple content"));
+        assert_eq!(reader.get("middle.txt").expect("Failed to get middle.txt"), Bytes::from("middle content"));
+        assert_eq!(reader.get("001.txt").expect("Failed to get 001.txt"), Bytes::from("001 content"));
     }
 }
