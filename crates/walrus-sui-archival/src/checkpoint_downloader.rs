@@ -1,12 +1,13 @@
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::Result;
 use async_channel::Receiver;
 use reqwest::Url;
 use sui_storage::blob::Blob;
-use sui_types::full_checkpoint_content::CheckpointData;
-use sui_types::messages_checkpoint::CheckpointSequenceNumber;
+use sui_types::{
+    full_checkpoint_content::CheckpointData,
+    messages_checkpoint::CheckpointSequenceNumber,
+};
 use tokio::{fs, sync, task, time};
 
 use crate::config::CheckpointDownloaderConfig;
@@ -183,7 +184,10 @@ impl CheckpointDownloader {
         }
     }
 
-    pub async fn start(mut self, initial_checkpoint: CheckpointSequenceNumber) -> Result<()> {
+    pub async fn start(
+        mut self,
+        initial_checkpoint: CheckpointSequenceNumber,
+    ) -> Result<(sync::mpsc::Receiver<CheckpointInfo>, task::JoinHandle<()>)> {
         tracing::info!(
             "starting checkpoint downloader from checkpoint {} with {} workers",
             initial_checkpoint,
@@ -220,28 +224,18 @@ impl CheckpointDownloader {
             self.worker_handles.push(handle);
         }
 
-        let driver_task = self.download_checkpoint_driver(download_tx, initial_checkpoint);
-        let receiver_task = self.download_checkpoint_receiver(result_rx);
-
-        tokio::select! {
-            driver_result = driver_task => {
-                tracing::info!("driver task stopped with result {:?}", driver_result);
-                if let Err(e) = driver_result {
-                    tracing::error!("driver task failed with error: {}", e);
-                    return Err(e);
-                }
+        // Start the driver task in the background.
+        let driver_handle = tokio::spawn(async move {
+            if let Err(e) = self
+                .download_checkpoint_driver(download_tx, initial_checkpoint)
+                .await
+            {
+                tracing::error!("checkpoint driver failed: {}", e);
             }
-            receiver_result = receiver_task => {
-                tracing::info!("receiver task stopped with result {:?}", receiver_result);
-                if let Err(e) = receiver_result {
-                    tracing::error!("receiver task failed with error: {}", e);
-                    return Err(e);
-                }
-            }
-        }
+        });
 
-        tracing::info!("checkpoint downloader stopped");
-        Ok(())
+        // Return the receiver for the CheckpointMonitor to consume.
+        Ok((result_rx, driver_handle))
     }
 
     async fn download_checkpoint_driver(
@@ -260,42 +254,22 @@ impl CheckpointDownloader {
                     );
                     break;
                 }
-                current_checkpoint = current_checkpoint + 1;
+                current_checkpoint += 1;
                 time::sleep(time::Duration::from_millis(100)).await;
             }
         })
         .await?;
         Ok(())
     }
-
-    async fn download_checkpoint_receiver(
-        &self,
-        mut result_rx: sync::mpsc::Receiver<CheckpointInfo>,
-    ) -> Result<()> {
-        while let Some(checkpoint_info) = result_rx.recv().await {
-            tracing::debug!(
-                "received checkpoint {} timestamp {} epoch {} is end of epoch {} size {}",
-                checkpoint_info.checkpoint_number,
-                checkpoint_info.timestamp_ms,
-                checkpoint_info.epoch,
-                checkpoint_info.is_end_of_epoch,
-                checkpoint_info.checkpoint_byte_size,
-            );
-
-            if checkpoint_info.checkpoint_number > 5 {
-                break;
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mockito::Server;
     use sui_storage::blob::BlobEncoding;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn create_test_checkpoint_data(checkpoint_number: u64) -> Vec<u8> {
         // Load real checkpoint data from Sui testnet and modify the checkpoint number.
@@ -563,14 +537,32 @@ mod tests {
         let downloader = CheckpointDownloader::new(config);
 
         // Start downloader (it will stop after checkpoint 5 based on the receiver logic).
-        let result = downloader.start(0).await;
-        assert!(result.is_ok());
+        let (_result_rx, driver_handle) = downloader
+            .start(0)
+            .await
+            .expect("should be able to start downloader");
 
-        // Verify files were written.
+        // Verify files are eventually written (with timeout).
         for checkpoint_number in 0..=5 {
+            tracing::info!("verifying checkpoint file {}", checkpoint_number);
             let checkpoint_file = checkpoint_dir.join(format!("{}.chk", checkpoint_number));
+
+            let wait_result = tokio::time::timeout(Duration::from_secs(5), async {
+                while !checkpoint_file.exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+
+            assert!(
+                wait_result.is_ok(),
+                "checkpoint file {} was not created in time",
+                checkpoint_number
+            );
             assert!(checkpoint_file.exists());
         }
+
+        driver_handle.abort();
     }
 
     #[tokio::test]
@@ -679,11 +671,27 @@ mod tests {
         let downloader = CheckpointDownloader::new(config);
 
         // Start downloader.
-        let result = downloader.start(0).await;
-        assert!(result.is_ok());
+        let (_result_rx, driver_handle) = downloader
+            .start(0)
+            .await
+            .expect("should be able to start downloader");
 
-        // Verify directory was created.
+        // Verify directory is eventually created (with timeout).
+        let wait_result = tokio::time::timeout(Duration::from_secs(5), async {
+            while !(checkpoint_dir.exists() && checkpoint_dir.is_dir()) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            wait_result.is_ok(),
+            "checkpoint directory was not created in time: {}",
+            checkpoint_dir.display()
+        );
         assert!(checkpoint_dir.exists());
         assert!(checkpoint_dir.is_dir());
+
+        driver_handle.abort();
     }
 }

@@ -1,8 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
-use walrus_sui_archival::archival::run_sui_archival;
-use walrus_sui_archival::config::Config;
+use walrus_sui_archival::{archival::run_sui_archival, config::Config};
 
 #[derive(Parser, Debug)]
 #[command(name = "walrus-sui-archival")]

@@ -1,8 +1,7 @@
+use std::{fs, path::Path, time::Duration};
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::Path;
-use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -12,6 +11,9 @@ pub struct Config {
 
     /// Configuration for the checkpoint downloader.
     pub checkpoint_downloader: CheckpointDownloaderConfig,
+
+    /// Configuration for the checkpoint monitor.
+    pub checkpoint_monitor: CheckpointMonitorConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,4 +66,37 @@ fn default_min_download_retry_wait() -> Duration {
 
 fn default_max_download_retry_wait() -> Duration {
     Duration::from_secs(60)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointMonitorConfig {
+    /// Maximum time duration for accumulating checkpoints before creating a blob.
+    /// Default: 1 hour.
+    #[serde(
+        default = "default_max_accumulation_duration",
+        with = "humantime_serde"
+    )]
+    pub max_accumulation_duration: Duration,
+
+    /// Maximum size in bytes for accumulated checkpoints before creating a blob.
+    /// Default: 10 GB.
+    #[serde(default = "default_max_accumulation_size_bytes")]
+    pub max_accumulation_size_bytes: u64,
+}
+
+impl Default for CheckpointMonitorConfig {
+    fn default() -> Self {
+        Self {
+            max_accumulation_duration: default_max_accumulation_duration(),
+            max_accumulation_size_bytes: default_max_accumulation_size_bytes(),
+        }
+    }
+}
+
+fn default_max_accumulation_duration() -> Duration {
+    Duration::from_secs(3600) // 1 hour.
+}
+
+fn default_max_accumulation_size_bytes() -> u64 {
+    10 * 1024 * 1024 * 1024 // 10 GB.
 }
