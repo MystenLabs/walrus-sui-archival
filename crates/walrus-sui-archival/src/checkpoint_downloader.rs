@@ -119,11 +119,21 @@ impl CheckpointDownloadWorker {
                         checkpoint_byte_size: bytes.len(),
                     };
 
-                    // Write checkpoint to disk.
+                    // Write checkpoint to disk atomically.
+                    // First write to a temporary file, then rename to final name.
                     let checkpoint_file = self
                         .downloaded_checkpoint_dir
                         .join(format!("{}.chk", checkpoint_number));
-                    fs::write(&checkpoint_file, &bytes).await?;
+                    let temp_file = self
+                        .downloaded_checkpoint_dir
+                        .join(format!("{}.chk.tmp", checkpoint_number));
+
+                    // Write to temporary file.
+                    fs::write(&temp_file, &bytes).await?;
+
+                    // Atomically rename to final file.
+                    // This ensures the file is either fully written or not present at all.
+                    fs::rename(&temp_file, &checkpoint_file).await?;
 
                     tracing::debug!(checkpoint_number, "checkpoint download and save successful");
                     return Ok(checkpoint_info);
@@ -184,6 +194,24 @@ impl CheckpointDownloader {
         }
     }
 
+    async fn cleanup_temp_files(&self) -> Result<()> {
+        let mut dir_entries = fs::read_dir(&self.downloaded_checkpoint_dir).await?;
+        while let Some(entry) = dir_entries.next_entry().await? {
+            let path = entry.path();
+            if let Some(name) = path.file_name() {
+                if let Some(name_str) = name.to_str() {
+                    if name_str.ends_with(".chk.tmp") {
+                        tracing::info!("cleaning up leftover temp file: {}", path.display());
+                        if let Err(e) = fs::remove_file(&path).await {
+                            tracing::warn!("failed to remove temp file {}: {}", path.display(), e);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn start(
         mut self,
         initial_checkpoint: CheckpointSequenceNumber,
@@ -196,6 +224,9 @@ impl CheckpointDownloader {
 
         // Create the directory if it doesn't exist.
         fs::create_dir_all(&self.downloaded_checkpoint_dir).await?;
+
+        // Clean up any leftover temporary files from previous runs.
+        self.cleanup_temp_files().await?;
 
         let (download_tx, download_rx) = async_channel::bounded::<CheckpointSequenceNumber>(100);
         let (result_tx, result_rx) = sync::mpsc::channel::<CheckpointInfo>(100);

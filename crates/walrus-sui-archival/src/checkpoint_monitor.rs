@@ -204,16 +204,6 @@ impl CheckpointMonitor {
             }
         }
 
-        // Build final blob if there are remaining checkpoints.
-        if !self.accumulator.is_empty() {
-            tracing::info!(
-                "building final blob with {} checkpoints, total size {} bytes",
-                self.accumulator.checkpoints.len(),
-                self.accumulator.total_size_bytes
-            );
-            self.build_blob().await?;
-        }
-
         // Check if there are still pending checkpoints - this would indicate missing data.
         if !self.pending_checkpoints.is_empty() {
             tracing::error!(
