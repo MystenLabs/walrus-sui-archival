@@ -4,6 +4,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
+use git_version::git_version;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{select, sync::mpsc};
 use walrus_sdk::{client::WalrusNodeClient, config::ClientConfig, sui::client::SuiContractClient};
@@ -14,6 +15,8 @@ use crate::{
     checkpoint_downloader,
     checkpoint_monitor,
     config::Config,
+    metrics::Metrics,
+    rest_api::RestApiServer,
 };
 
 pub fn run_sui_archival(config: Config) -> Result<()> {
@@ -29,6 +32,36 @@ pub fn run_sui_archival(config: Config) -> Result<()> {
 
 async fn run_application_logic(config: Config) -> Result<()> {
     tracing::info!("starting application logic in multi-thread runtime");
+
+    let registry_service = mysten_metrics::start_prometheus_server(config.metrics_address);
+    let registry = registry_service.default_registry();
+    let (_telemetry_guards, _tracing_handle) = telemetry_subscribers::TelemetryConfig::new()
+        .with_env()
+        .with_prom_registry(&registry)
+        .with_json()
+        .init();
+
+    // Build version string with git commit hash at compile time.
+    const GIT_VERSION: &str =
+        git_version!(args = ["--always", "--abbrev=12", "--dirty", "--exclude", "*"]);
+    const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+    let registry_clone = registry.clone();
+    tokio::spawn(async move {
+        // Use a static string that combines package version with git commit.
+        let version = Box::leak(format!("{}-{}", PKG_VERSION, GIT_VERSION).into_boxed_str());
+
+        registry_clone
+            .register(mysten_metrics::uptime_metric(
+                "walrus-sui-archival",
+                version,
+                "sui-walrus",
+            ))
+            .expect("metrics defined at compile time must be valid");
+    });
+
+    // Create metrics.
+    let metrics = Arc::new(Metrics::new(&registry));
 
     // Initialize the archival state with RocksDB.
     let archival_state = std::sync::Arc::new(ArchivalState::open(&config.db_path, false)?);
@@ -76,8 +109,10 @@ async fn run_application_logic(config: Config) -> Result<()> {
         tokio::spawn(async move { blob_publisher.start(blob_publisher_rx).await });
 
     // Start the checkpoint downloader and get the receiver.
-    let downloader =
-        checkpoint_downloader::CheckpointDownloader::new(config.checkpoint_downloader.clone());
+    let downloader = checkpoint_downloader::CheckpointDownloader::new(
+        config.checkpoint_downloader.clone(),
+        metrics.clone(),
+    );
     let (checkpoint_receiver, checkpoint_downloading_driver_handle) =
         downloader.start(initial_checkpoint).await?;
 
@@ -87,6 +122,14 @@ async fn run_application_logic(config: Config) -> Result<()> {
         blob_publisher_tx,
     );
     let monitor_handle = monitor.start(initial_checkpoint, checkpoint_receiver);
+
+    // Start the REST API server.
+    let rest_api_server = RestApiServer::new(
+        config.rest_api_address,
+        archival_state.clone(),
+        walrus_client.clone(),
+    );
+    let rest_api_handle = tokio::spawn(async move { rest_api_server.start().await });
 
     select! {
         checkpoint_downloading_driver_result = checkpoint_downloading_driver_handle => {
@@ -108,6 +151,13 @@ async fn run_application_logic(config: Config) -> Result<()> {
             if let Err(e) = blob_publisher_result {
                 tracing::error!("checkpoint blob publisher failed: {}", e);
                 return Err(anyhow::anyhow!("checkpoint blob publisher failed: {}", e));
+            }
+        }
+        rest_api_result = rest_api_handle => {
+            tracing::info!("REST API server stopped: {:?}", rest_api_result);
+            if let Err(e) = rest_api_result {
+                tracing::error!("REST API server failed: {}", e);
+                return Err(anyhow::anyhow!("REST API server failed: {}", e));
             }
         }
     }

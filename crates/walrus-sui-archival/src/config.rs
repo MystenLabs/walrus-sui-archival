@@ -3,6 +3,7 @@
 
 use std::{
     fs,
+    net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -35,6 +36,14 @@ pub struct Config {
     /// Configuration for the checkpoint blob publisher.
     #[serde(default)]
     pub checkpoint_blob_publisher: CheckpointBlobPublisherConfig,
+
+    /// REST API server address.
+    #[serde(default = "default_rest_api_address")]
+    pub rest_api_address: SocketAddr,
+
+    /// Metrics server address.
+    #[serde(default = "default_metrics_address")]
+    pub metrics_address: SocketAddr,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,4 +197,12 @@ fn default_min_retry_duration() -> Duration {
 
 fn default_max_retry_duration() -> Duration {
     Duration::from_secs(300)
+}
+
+fn default_rest_api_address() -> SocketAddr {
+    "0.0.0.0:9185".parse().unwrap()
+}
+
+fn default_metrics_address() -> SocketAddr {
+    "0.0.0.0:9186".parse().unwrap()
 }

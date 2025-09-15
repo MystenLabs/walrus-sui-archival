@@ -11,3 +11,5 @@ pub mod config;
 pub mod inspect_blob;
 pub mod inspect_db;
 pub mod list_blobs;
+pub mod metrics;
+pub mod rest_api;

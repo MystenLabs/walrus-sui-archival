@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{path::PathBuf, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use async_channel::Receiver;
@@ -13,7 +13,7 @@ use sui_types::{
 };
 use tokio::{fs, sync, task, time};
 
-use crate::config::CheckpointDownloaderConfig;
+use crate::{config::CheckpointDownloaderConfig, metrics::Metrics};
 
 #[derive(Debug, Clone)]
 pub struct CheckpointInfo {
@@ -29,10 +29,9 @@ pub struct CheckpointDownloadWorker {
     rx: Receiver<CheckpointSequenceNumber>,
     tx: sync::mpsc::Sender<CheckpointInfo>,
     bucket_base_url: Url,
-    downloaded_checkpoint_dir: PathBuf,
+    config: CheckpointDownloaderConfig,
     client: reqwest::Client,
-    min_retry_wait: Duration,
-    max_retry_wait: Duration,
+    metrics: Arc<Metrics>,
 }
 
 impl CheckpointDownloadWorker {
@@ -41,9 +40,8 @@ impl CheckpointDownloadWorker {
         rx: Receiver<CheckpointSequenceNumber>,
         tx: sync::mpsc::Sender<CheckpointInfo>,
         bucket_base_url: Url,
-        downloaded_checkpoint_dir: PathBuf,
-        min_retry_wait: Duration,
-        max_retry_wait: Duration,
+        config: CheckpointDownloaderConfig,
+        metrics: Arc<Metrics>,
     ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -54,10 +52,9 @@ impl CheckpointDownloadWorker {
             rx,
             tx,
             bucket_base_url,
-            downloaded_checkpoint_dir,
+            config,
             client,
-            min_retry_wait,
-            max_retry_wait,
+            metrics,
         }
     }
 
@@ -73,6 +70,7 @@ impl CheckpointDownloadWorker {
 
             // If the checkpoint file already exists, skip it.
             let checkpoint_file = self
+                .config
                 .downloaded_checkpoint_dir
                 .join(format!("{checkpoint_number}"));
             if checkpoint_file.exists() {
@@ -113,7 +111,7 @@ impl CheckpointDownloadWorker {
             .join(&format!("{}.chk", checkpoint_number))?;
 
         let mut retry_count = 0;
-        let mut wait_duration = self.min_retry_wait;
+        let mut wait_duration = self.config.min_download_retry_wait;
 
         loop {
             tracing::debug!(
@@ -137,9 +135,11 @@ impl CheckpointDownloadWorker {
                     // Write checkpoint to disk atomically.
                     // First write to a temporary file, then rename to final name.
                     let checkpoint_file = self
+                        .config
                         .downloaded_checkpoint_dir
                         .join(format!("{checkpoint_number}"));
                     let temp_file = self
+                        .config
                         .downloaded_checkpoint_dir
                         .join(format!("{checkpoint_number}.tmp"));
 
@@ -149,6 +149,11 @@ impl CheckpointDownloadWorker {
                     // Atomically rename to final file.
                     // This ensures the file is either fully written or not present at all.
                     fs::rename(&temp_file, &checkpoint_file).await?;
+
+                    // Update metrics.
+                    self.metrics
+                        .latest_downloaded_checkpoint
+                        .set(checkpoint_number as i64);
 
                     tracing::debug!(checkpoint_number, "checkpoint download and save successful");
                     return Ok(checkpoint_info);
@@ -167,7 +172,8 @@ impl CheckpointDownloadWorker {
                     time::sleep(wait_duration).await;
 
                     // Exponential backoff with max cap.
-                    wait_duration = std::cmp::min(wait_duration * 2, self.max_retry_wait);
+                    wait_duration =
+                        std::cmp::min(wait_duration * 2, self.config.max_download_retry_wait);
                 }
             }
         }
@@ -192,25 +198,23 @@ pub struct CheckpointDownloader {
     num_workers: usize,
     worker_handles: Vec<task::JoinHandle<()>>,
     bucket_base_url: Url,
-    downloaded_checkpoint_dir: PathBuf,
-    min_retry_wait: Duration,
-    max_retry_wait: Duration,
+    config: CheckpointDownloaderConfig,
+    metrics: Arc<Metrics>,
 }
 
 impl CheckpointDownloader {
-    pub fn new(config: CheckpointDownloaderConfig) -> Self {
+    pub fn new(config: CheckpointDownloaderConfig, metrics: Arc<Metrics>) -> Self {
         Self {
             num_workers: config.num_workers,
             worker_handles: Vec::new(),
             bucket_base_url: Url::parse(&config.bucket_base_url).expect("invalid bucket base URL"),
-            downloaded_checkpoint_dir: config.downloaded_checkpoint_dir,
-            min_retry_wait: config.min_download_retry_wait,
-            max_retry_wait: config.max_download_retry_wait,
+            config,
+            metrics,
         }
     }
 
     async fn cleanup_temp_files(&self) -> Result<()> {
-        let mut dir_entries = fs::read_dir(&self.downloaded_checkpoint_dir).await?;
+        let mut dir_entries = fs::read_dir(&self.config.downloaded_checkpoint_dir).await?;
         while let Some(entry) = dir_entries.next_entry().await? {
             let path = entry.path();
             if let Some(name) = path.file_name()
@@ -237,7 +241,7 @@ impl CheckpointDownloader {
         );
 
         // Create the directory if it doesn't exist.
-        fs::create_dir_all(&self.downloaded_checkpoint_dir).await?;
+        fs::create_dir_all(&self.config.downloaded_checkpoint_dir).await?;
 
         // Clean up any leftover temporary files from previous runs.
         self.cleanup_temp_files().await?;
@@ -249,18 +253,15 @@ impl CheckpointDownloader {
             let worker_rx = download_rx.clone();
             let worker_tx = result_tx.clone();
             let bucket_base_url = self.bucket_base_url.clone();
-            let downloaded_checkpoint_dir = self.downloaded_checkpoint_dir.clone();
-            let min_retry_wait = self.min_retry_wait;
-            let max_retry_wait = self.max_retry_wait;
+            let metrics = self.metrics.clone();
 
             let worker = CheckpointDownloadWorker::new(
                 worker_id,
                 worker_rx,
                 worker_tx,
                 bucket_base_url,
-                downloaded_checkpoint_dir,
-                min_retry_wait,
-                max_retry_wait,
+                self.config.clone(),
+                metrics,
             );
 
             let handle = tokio::spawn(async move {
@@ -308,11 +309,19 @@ impl CheckpointDownloader {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use mockito::Server;
+    use prometheus::Registry;
     use sui_storage::blob::BlobEncoding;
     use tempfile::TempDir;
 
     use super::*;
+
+    fn create_test_metrics() -> Arc<Metrics> {
+        let registry = Registry::new();
+        Arc::new(Metrics::new(&registry))
+    }
 
     fn create_test_checkpoint_data(checkpoint_number: u64) -> Vec<u8> {
         // Load real checkpoint data from Sui testnet and modify the checkpoint number.
@@ -363,15 +372,22 @@ mod tests {
             .with_body(&checkpoint_bytes)
             .create();
 
+        let config = CheckpointDownloaderConfig {
+            num_workers: 1,
+            bucket_base_url: server.url(),
+            downloaded_checkpoint_dir: checkpoint_dir.clone(),
+            min_download_retry_wait: Duration::from_millis(100),
+            max_download_retry_wait: Duration::from_secs(1),
+        };
+
         // Create and start worker.
         let worker = CheckpointDownloadWorker::new(
             0,
             rx,
             result_tx,
             Url::parse(&server.url()).unwrap(),
-            checkpoint_dir.clone(),
-            Duration::from_millis(100),
-            Duration::from_secs(1),
+            config,
+            create_test_metrics(),
         );
 
         // Send checkpoint number to download.
@@ -431,14 +447,21 @@ mod tests {
             .create();
 
         // Create and start worker with short retry intervals.
+        let config = CheckpointDownloaderConfig {
+            num_workers: 1,
+            bucket_base_url: server.url(),
+            downloaded_checkpoint_dir: checkpoint_dir.clone(),
+            min_download_retry_wait: Duration::from_millis(10),
+            max_download_retry_wait: Duration::from_millis(100),
+        };
+
         let worker = CheckpointDownloadWorker::new(
             0,
             rx,
             result_tx,
             Url::parse(&server.url()).unwrap(),
-            checkpoint_dir.clone(),
-            Duration::from_millis(10), // Short retry for testing.
-            Duration::from_millis(100),
+            config,
+            create_test_metrics(),
         );
 
         // Send checkpoint number to download.
@@ -489,14 +512,21 @@ mod tests {
         }
 
         // Create and start worker.
+        let config = CheckpointDownloaderConfig {
+            num_workers: 1,
+            bucket_base_url: server.url(),
+            downloaded_checkpoint_dir: checkpoint_dir.clone(),
+            min_download_retry_wait: Duration::from_millis(100),
+            max_download_retry_wait: Duration::from_secs(1),
+        };
+
         let worker = CheckpointDownloadWorker::new(
             0,
             rx,
             result_tx,
             Url::parse(&server.url()).unwrap(),
-            checkpoint_dir.clone(),
-            Duration::from_millis(100),
-            Duration::from_secs(1),
+            config,
+            create_test_metrics(),
         );
 
         // Send multiple checkpoint numbers.
@@ -533,7 +563,7 @@ mod tests {
             min_download_retry_wait: Duration::from_millis(100),
             max_download_retry_wait: Duration::from_secs(10),
         };
-        let downloader = CheckpointDownloader::new(config);
+        let downloader = CheckpointDownloader::new(config, create_test_metrics());
 
         assert_eq!(downloader.num_workers, 4);
         assert_eq!(
@@ -541,11 +571,17 @@ mod tests {
             "https://example.com/bucket/"
         );
         assert_eq!(
-            downloader.downloaded_checkpoint_dir,
+            downloader.config.downloaded_checkpoint_dir,
             PathBuf::from("/tmp/checkpoints")
         );
-        assert_eq!(downloader.min_retry_wait, Duration::from_millis(100));
-        assert_eq!(downloader.max_retry_wait, Duration::from_secs(10));
+        assert_eq!(
+            downloader.config.min_download_retry_wait,
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            downloader.config.max_download_retry_wait,
+            Duration::from_secs(10)
+        );
     }
 
     #[tokio::test]
@@ -577,7 +613,7 @@ mod tests {
             min_download_retry_wait: Duration::from_millis(10),
             max_download_retry_wait: Duration::from_millis(100),
         };
-        let downloader = CheckpointDownloader::new(config);
+        let downloader = CheckpointDownloader::new(config, create_test_metrics());
 
         // Start downloader (it will stop after checkpoint 5 based on the receiver logic).
         let (_result_rx, driver_handle) = downloader
@@ -649,14 +685,21 @@ mod tests {
             .create();
 
         // Create and start worker with very short retry intervals.
+        let config = CheckpointDownloaderConfig {
+            num_workers: 1,
+            bucket_base_url: server.url(),
+            downloaded_checkpoint_dir: checkpoint_dir.clone(),
+            min_download_retry_wait: Duration::from_millis(1),
+            max_download_retry_wait: Duration::from_millis(2),
+        };
+
         let worker = CheckpointDownloadWorker::new(
             0,
             rx,
             result_tx,
             Url::parse(&server.url()).unwrap(),
-            checkpoint_dir.clone(),
-            Duration::from_millis(1), // Very short for testing.
-            Duration::from_millis(2),
+            config,
+            create_test_metrics(),
         );
 
         // Send checkpoint number to download.
@@ -711,7 +754,7 @@ mod tests {
             min_download_retry_wait: Duration::from_millis(10),
             max_download_retry_wait: Duration::from_millis(100),
         };
-        let downloader = CheckpointDownloader::new(config);
+        let downloader = CheckpointDownloader::new(config, create_test_metrics());
 
         // Start downloader.
         let (_result_rx, driver_handle) = downloader

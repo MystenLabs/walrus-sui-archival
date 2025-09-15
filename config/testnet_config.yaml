@@ -5,6 +5,14 @@ client_config_path: ./config/client_config.yaml
 # Total number of threads for the tokio runtime thread pool.
 thread_pool_size: 8
 
+# REST API server address.
+# Default: 0.0.0.0:9185
+rest_api_address: "0.0.0.0:9185"
+
+# Metrics server address.
+# Default: 0.0.0.0:9186
+metrics_address: "0.0.0.0:9186"
+
 # Configuration for the checkpoint downloader.
 checkpoint_downloader:
   # Base URL for the S3 bucket containing checkpoints.
