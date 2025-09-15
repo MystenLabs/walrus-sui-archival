@@ -1,3 +1,6 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use std::{num::NonZeroU16, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
