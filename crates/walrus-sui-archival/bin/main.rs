@@ -63,6 +63,9 @@ enum Commands {
         /// Optional length to read (used when index is not specified).
         #[arg(short = 'l', long)]
         length: Option<u64>,
+        /// Print full deserialized CheckpointData (verbose output).
+        #[arg(short = 'f', long)]
+        full: bool,
     },
     /// List all blobs owned by the wallet.
     ListOwnedBlobs {
@@ -105,6 +108,7 @@ fn main() -> Result<()> {
             index,
             offset,
             length,
+            full,
         } => {
             match (&path, &blob_id) {
                 (Some(p), None) => tracing::info!("inspecting blob file: {}", p.display()),
@@ -120,6 +124,7 @@ fn main() -> Result<()> {
                 index,
                 offset,
                 length,
+                full,
             ))?;
         }
         Commands::ListOwnedBlobs { client_config } => {

@@ -20,6 +20,7 @@ use walrus_sdk::{client::WalrusNodeClient, config::ClientConfig};
 /// * `index` - Optional index to inspect a specific entry
 /// * `offset` - Optional offset to read from (used when index is not specified)
 /// * `length` - Optional length to read (used when index is not specified)
+/// * `full` - Print full deserialized CheckpointData
 pub async fn inspect_blob(
     path: Option<PathBuf>,
     blob_id: Option<String>,
@@ -27,6 +28,7 @@ pub async fn inspect_blob(
     index: Option<usize>,
     offset: Option<u64>,
     length: Option<u64>,
+    full: bool,
 ) -> Result<()> {
     // Get the blob data either from file or Walrus.
     let bytes = match (path, blob_id) {
@@ -62,10 +64,10 @@ pub async fn inspect_blob(
 
     if let Some(idx) = index {
         // Inspect a specific entry by index.
-        inspect_by_index(&reader, idx)?;
+        inspect_by_index(&reader, idx, full)?;
     } else if let (Some(offset), Some(length)) = (offset, length) {
         // Read raw data by offset and length.
-        inspect_by_range(&reader, offset, length)?;
+        inspect_by_range(&reader, offset, length, full)?;
     } else {
         // List all entries.
         list_all_entries(&reader)?;
@@ -75,7 +77,7 @@ pub async fn inspect_blob(
 }
 
 /// Inspect a specific entry by index.
-fn inspect_by_index(reader: &BlobBundleReader, idx: usize) -> Result<()> {
+fn inspect_by_index(reader: &BlobBundleReader, idx: usize, full: bool) -> Result<()> {
     // Get list of all IDs in the blob.
     let ids = reader.list_ids()?;
     println!("blob metadata:");
@@ -108,33 +110,40 @@ fn inspect_by_index(reader: &BlobBundleReader, idx: usize) -> Result<()> {
     // Try to deserialize as checkpoint.
     match Blob::from_bytes::<CheckpointData>(&data) {
         Ok(checkpoint_data) => {
-            println!(
-                "  checkpoint number: {}",
-                checkpoint_data.checkpoint_summary.sequence_number
-            );
-            println!("  epoch: {}", checkpoint_data.checkpoint_summary.epoch);
-            println!(
-                "  timestamp: {} ms",
-                checkpoint_data.checkpoint_summary.timestamp_ms
-            );
-            println!(
-                "  network total transactions: {}",
-                checkpoint_data
-                    .checkpoint_summary
-                    .network_total_transactions
-            );
-            println!(
-                "  transaction count: {}",
-                checkpoint_data.transactions.len()
-            );
-            if checkpoint_data
-                .checkpoint_summary
-                .end_of_epoch_data
-                .is_some()
-            {
-                println!("  end of epoch: yes");
+            if full {
+                // Print full deserialized CheckpointData.
+                println!("full checkpoint data:");
+                println!("{:#?}", checkpoint_data);
             } else {
-                println!("  end of epoch: no");
+                // Print summary only.
+                println!(
+                    "  checkpoint number: {}",
+                    checkpoint_data.checkpoint_summary.sequence_number
+                );
+                println!("  epoch: {}", checkpoint_data.checkpoint_summary.epoch);
+                println!(
+                    "  timestamp: {} ms",
+                    checkpoint_data.checkpoint_summary.timestamp_ms
+                );
+                println!(
+                    "  network total transactions: {}",
+                    checkpoint_data
+                        .checkpoint_summary
+                        .network_total_transactions
+                );
+                println!(
+                    "  transaction count: {}",
+                    checkpoint_data.transactions.len()
+                );
+                if checkpoint_data
+                    .checkpoint_summary
+                    .end_of_epoch_data
+                    .is_some()
+                {
+                    println!("  end of epoch: yes");
+                } else {
+                    println!("  end of epoch: no");
+                }
             }
         }
         Err(e) => {
@@ -149,7 +158,7 @@ fn inspect_by_index(reader: &BlobBundleReader, idx: usize) -> Result<()> {
 }
 
 /// Read raw data by offset and length.
-fn inspect_by_range(reader: &BlobBundleReader, offset: u64, length: u64) -> Result<()> {
+fn inspect_by_range(reader: &BlobBundleReader, offset: u64, length: u64, full: bool) -> Result<()> {
     println!("reading raw data:");
     println!("  offset: {} bytes", offset);
     println!("  length: {} bytes", length);
@@ -163,33 +172,40 @@ fn inspect_by_range(reader: &BlobBundleReader, offset: u64, length: u64) -> Resu
     match Blob::from_bytes::<CheckpointData>(&data) {
         Ok(checkpoint_data) => {
             println!("successfully deserialized as checkpoint:");
-            println!(
-                "  checkpoint number: {}",
-                checkpoint_data.checkpoint_summary.sequence_number
-            );
-            println!("  epoch: {}", checkpoint_data.checkpoint_summary.epoch);
-            println!(
-                "  timestamp: {} ms",
-                checkpoint_data.checkpoint_summary.timestamp_ms
-            );
-            println!(
-                "  network total transactions: {}",
-                checkpoint_data
-                    .checkpoint_summary
-                    .network_total_transactions
-            );
-            println!(
-                "  transaction count: {}",
-                checkpoint_data.transactions.len()
-            );
-            if checkpoint_data
-                .checkpoint_summary
-                .end_of_epoch_data
-                .is_some()
-            {
-                println!("  end of epoch: yes");
+            if full {
+                // Print full deserialized CheckpointData.
+                println!("full checkpoint data:");
+                println!("{:#?}", checkpoint_data);
             } else {
-                println!("  end of epoch: no");
+                // Print summary only.
+                println!(
+                    "  checkpoint number: {}",
+                    checkpoint_data.checkpoint_summary.sequence_number
+                );
+                println!("  epoch: {}", checkpoint_data.checkpoint_summary.epoch);
+                println!(
+                    "  timestamp: {} ms",
+                    checkpoint_data.checkpoint_summary.timestamp_ms
+                );
+                println!(
+                    "  network total transactions: {}",
+                    checkpoint_data
+                        .checkpoint_summary
+                        .network_total_transactions
+                );
+                println!(
+                    "  transaction count: {}",
+                    checkpoint_data.transactions.len()
+                );
+                if checkpoint_data
+                    .checkpoint_summary
+                    .end_of_epoch_data
+                    .is_some()
+                {
+                    println!("  end of epoch: yes");
+                } else {
+                    println!("  end of epoch: no");
+                }
             }
         }
         Err(_) => {
