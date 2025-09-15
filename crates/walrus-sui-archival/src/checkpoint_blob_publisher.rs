@@ -12,7 +12,11 @@ use walrus_sdk::{
     sui::client::{BlobPersistence, SuiContractClient},
 };
 
-use crate::{archival_state::ArchivalState, config::CheckpointBlobPublisherConfig};
+use crate::{
+    archival_state::ArchivalState,
+    config::CheckpointBlobPublisherConfig,
+    metrics::Metrics,
+};
 
 /// Message sent from CheckpointMonitor to CheckpointBlobPublisher.
 #[derive(Debug, Clone)]
@@ -32,6 +36,7 @@ pub struct CheckpointBlobPublisher {
     n_shards: NonZeroU16,
     config: CheckpointBlobPublisherConfig,
     downloaded_checkpoint_dir: PathBuf,
+    metrics: Arc<Metrics>,
 }
 
 impl CheckpointBlobPublisher {
@@ -40,6 +45,7 @@ impl CheckpointBlobPublisher {
         walrus_client: Arc<WalrusNodeClient<SuiContractClient>>,
         config: CheckpointBlobPublisherConfig,
         downloaded_checkpoint_dir: PathBuf,
+        metrics: Arc<Metrics>,
     ) -> Result<Self> {
         let n_shards = walrus_client.get_committees().await?.n_shards();
         Ok(Self {
@@ -48,6 +54,7 @@ impl CheckpointBlobPublisher {
             n_shards,
             config,
             downloaded_checkpoint_dir,
+            metrics,
         })
     }
 
@@ -90,6 +97,8 @@ impl CheckpointBlobPublisher {
     }
 
     async fn build_and_upload_blob(&self, request: BlobBuildRequest) -> Result<()> {
+        // Track the latency of building blobs.
+        let build_timer = self.metrics.blob_build_latency_seconds.start_timer();
         let start_checkpoint = request.start_checkpoint;
         let end_checkpoint = request.end_checkpoint;
 
@@ -142,7 +151,20 @@ impl CheckpointBlobPublisher {
             result.total_size
         );
 
+        // Track blob size metrics.
+        let blob_size = result.total_size as i64;
+        self.metrics.blob_size_bytes.observe(blob_size as f64);
+        self.metrics.latest_blob_size_bytes.set(blob_size);
+
+        // Stop the build timer before starting upload.
+        build_timer.observe_duration();
+
         self.upload_blob_to_walrus(&request, &result).await?;
+
+        // Track the latest checkpoint included in uploaded blob.
+        self.metrics
+            .latest_uploaded_checkpoint
+            .set(request.end_checkpoint as i64);
 
         // Clean up the downloaded checkpoints and uploaded blobs.
         self.clean_up_downloaded_checkpoints_and_uploaded_blobs(&request, &result)
@@ -162,6 +184,9 @@ impl CheckpointBlobPublisher {
         request: &BlobBuildRequest,
         result: &BlobBundleBuildResult,
     ) -> Result<()> {
+        // Track the latency of uploading blobs.
+        let upload_timer = self.metrics.blob_upload_latency_seconds.start_timer();
+
         let (blob_id, end_epoch) = {
             let blob = fs::read(&result.file_path)
                 .await
@@ -184,6 +209,9 @@ impl CheckpointBlobPublisher {
                         if let Some(blob_store_result) = results.first() {
                             // Check if the blob was successfully stored.
                             if blob_store_result.is_not_stored() {
+                                // Track upload failures with not_stored status.
+                                self.metrics.blobs_uploaded_not_stored.inc();
+
                                 tracing::error!(
                                     "blob upload failed with is_not_stored status, retrying in {:?}",
                                     retry_delay
@@ -193,6 +221,10 @@ impl CheckpointBlobPublisher {
                                 retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
                                 continue;
                             }
+
+                            // Track successful uploads.
+                            self.metrics.blobs_uploaded_success.inc();
+                            upload_timer.observe_duration();
 
                             // Successfully stored.
                             break (
@@ -214,6 +246,9 @@ impl CheckpointBlobPublisher {
                         }
                     }
                     Err(e) => {
+                        // Track upload failures.
+                        self.metrics.blobs_uploaded_failed.inc();
+
                         tracing::error!("blob upload failed: {}, retrying in {:?}", e, retry_delay);
                         tokio::time::sleep(retry_delay).await;
                         // Exponential backoff.
@@ -251,6 +286,10 @@ impl CheckpointBlobPublisher {
             request.end_checkpoint
         );
 
+        // Track checkpoints being cleaned up.
+        let checkpoints_count = request.end_checkpoint - request.start_checkpoint + 1;
+        self.metrics.checkpoints_cleaned.inc_by(checkpoints_count);
+
         for checkpoint_num in request.start_checkpoint..=request.end_checkpoint {
             let checkpoint_file = self
                 .downloaded_checkpoint_dir
@@ -266,6 +305,11 @@ impl CheckpointBlobPublisher {
             }
         }
 
+        // Track latest checkpoint cleaned up.
+        self.metrics
+            .latest_cleaned_checkpoint
+            .set(request.end_checkpoint as i64);
+
         // Remove the uploaded blob.
         if let Err(e) = std::fs::remove_file(&result.file_path) {
             // Do not stop if file removal fails.
@@ -274,6 +318,9 @@ impl CheckpointBlobPublisher {
                 result.file_path.display(),
                 e
             );
+        } else {
+            self.metrics.local_blobs_removed.inc();
+            tracing::info!("removed uploaded blob: {}", result.file_path.display());
         }
 
         Ok(())

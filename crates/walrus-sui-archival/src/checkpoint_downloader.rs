@@ -15,6 +15,17 @@ use tokio::{fs, sync, task, time};
 
 use crate::{config::CheckpointDownloaderConfig, metrics::Metrics};
 
+/// Guard that decrements active worker count when dropped.
+struct WorkerGuard {
+    metrics: Arc<Metrics>,
+}
+
+impl Drop for WorkerGuard {
+    fn drop(&mut self) {
+        self.metrics.active_download_workers.dec();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CheckpointInfo {
     pub checkpoint_number: CheckpointSequenceNumber,
@@ -60,6 +71,12 @@ impl CheckpointDownloadWorker {
 
     pub async fn start(self) {
         tracing::debug!("worker {} started", self.worker_id);
+
+        // Track the number of active workers.
+        self.metrics.active_download_workers.inc();
+        let _worker_guard = WorkerGuard {
+            metrics: self.metrics.clone(),
+        };
 
         while let Ok(checkpoint_number) = self.rx.recv().await {
             tracing::debug!(
@@ -151,9 +168,7 @@ impl CheckpointDownloadWorker {
                     fs::rename(&temp_file, &checkpoint_file).await?;
 
                     // Update metrics.
-                    self.metrics
-                        .latest_downloaded_checkpoint
-                        .set(checkpoint_number as i64);
+                    self.metrics.total_downloaded_checkpoints.inc();
 
                     tracing::debug!(checkpoint_number, "checkpoint download and save successful");
                     return Ok(checkpoint_info);
@@ -167,6 +182,23 @@ impl CheckpointDownloadWorker {
                         "failed to download checkpoint, retrying after wait: {}",
                         e
                     );
+
+                    // Track download failures.
+                    // Try to extract status code from error.
+                    let status_label = if let Some(reqwest_err) = e.downcast_ref::<reqwest::Error>()
+                    {
+                        if let Some(status) = reqwest_err.status() {
+                            status.as_str().to_string()
+                        } else {
+                            "other".to_string()
+                        }
+                    } else {
+                        "other".to_string()
+                    };
+                    self.metrics
+                        .download_failures
+                        .with_label_values(&[&status_label])
+                        .inc();
 
                     // Wait before retrying.
                     time::sleep(wait_duration).await;
@@ -214,6 +246,8 @@ impl CheckpointDownloader {
     }
 
     async fn cleanup_temp_files(&self) -> Result<()> {
+        // Track the number of temp files cleaned up.
+        let mut cleaned_count = 0u64;
         let mut dir_entries = fs::read_dir(&self.config.downloaded_checkpoint_dir).await?;
         while let Some(entry) = dir_entries.next_entry().await? {
             let path = entry.path();
@@ -221,12 +255,19 @@ impl CheckpointDownloader {
                 && let Some(name_str) = name.to_str()
                 && name_str.ends_with(".tmp")
             {
-                tracing::info!("cleaning up leftover temp file: {}", path.display());
+                tracing::debug!("cleaning up leftover temp file: {}", path.display());
                 if let Err(e) = fs::remove_file(&path).await {
                     tracing::warn!("failed to remove temp file {}: {}", path.display(), e);
+                } else {
+                    cleaned_count += 1;
                 }
             }
         }
+
+        if cleaned_count > 0 {
+            self.metrics.temp_files_cleaned.inc_by(cleaned_count);
+        }
+
         Ok(())
     }
 
@@ -300,6 +341,8 @@ impl CheckpointDownloader {
                 break;
             }
             current_checkpoint += 1;
+
+            // TODO(zhe): reduce when final prod.
             time::sleep(time::Duration::from_millis(100)).await;
         }
 

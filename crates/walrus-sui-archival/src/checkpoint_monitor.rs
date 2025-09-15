@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
@@ -11,6 +11,7 @@ use crate::{
     checkpoint_blob_publisher::BlobBuildRequest,
     checkpoint_downloader::CheckpointInfo,
     config::CheckpointMonitorConfig,
+    metrics::Metrics,
 };
 
 /// Criteria for when to build a new blob.
@@ -114,12 +115,14 @@ pub struct CheckpointMonitor {
     last_stall_warning: tokio::time::Instant,
     /// Channel to send blob build requests to CheckpointBlobPublisher.
     blob_publisher_tx: mpsc::Sender<BlobBuildRequest>,
+    metrics: Arc<Metrics>,
 }
 
 impl CheckpointMonitor {
     pub fn new(
         config: CheckpointMonitorConfig,
         blob_publisher_tx: mpsc::Sender<BlobBuildRequest>,
+        metrics: Arc<Metrics>,
     ) -> Self {
         Self {
             config,
@@ -129,6 +132,7 @@ impl CheckpointMonitor {
             last_updated_checkpoint_number: tokio::time::Instant::now(),
             last_stall_warning: tokio::time::Instant::now(),
             blob_publisher_tx,
+            metrics,
         }
     }
 
@@ -269,6 +273,11 @@ impl CheckpointMonitor {
         // Add the checkpoint to the accumulator.
         self.accumulator.add(checkpoint_info);
 
+        // Update metrics.
+        self.metrics
+            .latest_processed_checkpoint
+            .set(self.next_checkpoint_number as i64);
+
         // Update the next expected checkpoint number.
         self.next_checkpoint_number += 1;
         self.last_updated_checkpoint_number = tokio::time::Instant::now();
@@ -315,6 +324,9 @@ impl CheckpointMonitor {
             end_of_epoch,
         };
 
+        // Track the total number of blobs started to build.
+        self.metrics.blob_build_requests_sent.inc();
+
         if let Err(e) = self.blob_publisher_tx.send(request).await {
             tracing::error!("failed to send blob build request: {}", e);
             return Err(anyhow!("failed to send blob build request: {}", e));
@@ -326,7 +338,14 @@ impl CheckpointMonitor {
 
 #[cfg(test)]
 mod tests {
+    use prometheus::Registry;
+
     use super::*;
+
+    fn create_test_metrics() -> Arc<Metrics> {
+        let registry = Registry::new();
+        Arc::new(Metrics::new(&registry))
+    }
 
     fn create_test_checkpoint_info(
         checkpoint_number: u64,
@@ -456,7 +475,7 @@ mod tests {
 
         let config = CheckpointMonitorConfig::default();
         let (blob_tx, _blob_rx) = mpsc::channel(10);
-        let monitor = CheckpointMonitor::new(config, blob_tx);
+        let monitor = CheckpointMonitor::new(config, blob_tx, create_test_metrics());
 
         let (tx, rx) = mpsc::channel(10);
 
@@ -487,7 +506,7 @@ mod tests {
 
         let config = CheckpointMonitorConfig::default();
         let (blob_tx, _blob_rx) = mpsc::channel(10);
-        let monitor = CheckpointMonitor::new(config, blob_tx);
+        let monitor = CheckpointMonitor::new(config, blob_tx, create_test_metrics());
 
         let (tx, rx) = mpsc::channel(1000);
 
@@ -523,7 +542,7 @@ mod tests {
 
         let config = CheckpointMonitorConfig::default();
         let (blob_tx, _blob_rx) = mpsc::channel(10);
-        let monitor = CheckpointMonitor::new(config, blob_tx);
+        let monitor = CheckpointMonitor::new(config, blob_tx, create_test_metrics());
 
         let (tx, rx) = mpsc::channel(10);
 

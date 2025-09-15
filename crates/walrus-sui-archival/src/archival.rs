@@ -103,6 +103,7 @@ async fn run_application_logic(config: Config) -> Result<()> {
             .checkpoint_downloader
             .downloaded_checkpoint_dir
             .clone(),
+        metrics.clone(),
     )
     .await?;
     let blob_publisher_handle =
@@ -120,6 +121,7 @@ async fn run_application_logic(config: Config) -> Result<()> {
     let monitor = checkpoint_monitor::CheckpointMonitor::new(
         config.checkpoint_monitor.clone(),
         blob_publisher_tx,
+        metrics.clone(),
     );
     let monitor_handle = monitor.start(initial_checkpoint, checkpoint_receiver);
 
