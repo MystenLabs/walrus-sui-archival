@@ -3,10 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use walrus_sdk::{
     config::ClientConfig,
-    sui::{
-        client::ExpirySelectionPolicy,
-        types::Blob,
-    },
+    sui::{client::ExpirySelectionPolicy, types::Blob},
 };
 
 /// Lists all blobs owned by the wallet in the client config.
@@ -35,7 +32,10 @@ pub async fn list_owned_blobs(client_config: PathBuf) -> Result<()> {
     }
 
     println!("Found {} blob(s):\n", owned_blobs.len());
-    println!("{:<70} {:<70} {:<15} {:<10} {:<10}", "Blob ID", "Object ID", "Size (bytes)", "Encoding", "Expiry Epoch");
+    println!(
+        "{:<70} {:<70} {:<15} {:<10} {:<10}",
+        "Blob ID", "Object ID", "Size (bytes)", "Encoding", "Expiry Epoch"
+    );
     println!("{}", "-".repeat(145));
 
     for blob in owned_blobs {
@@ -47,11 +47,7 @@ pub async fn list_owned_blobs(client_config: PathBuf) -> Result<()> {
 
         println!(
             "{:<70} {:<70} {:<15} {:<10} {:<10}",
-            blob_id,
-            object_id,
-            size,
-            encoding,
-            expiry_epoch
+            blob_id, object_id, size, encoding, expiry_epoch
         );
     }
 

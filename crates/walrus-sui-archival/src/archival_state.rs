@@ -100,10 +100,10 @@ impl ArchivalState {
         let blob_info = CheckpointBlobInfo {
             version: CHECKPOINT_BLOB_INFO_VERSION,
             blob_id: blob_id.to_string().into_bytes(),
-            start_checkpoint: start_checkpoint.into(),
-            end_checkpoint: end_checkpoint.into(),
+            start_checkpoint,
+            end_checkpoint,
             end_of_epoch,
-            blob_expiration_epoch: blob_expiration_epoch.into(),
+            blob_expiration_epoch,
             index_entries,
         };
 
@@ -155,12 +155,12 @@ impl ArchivalState {
 
             // Check if this blob contains our checkpoint.
             // The blob contains checkpoints from start_checkpoint to end_checkpoint (inclusive).
-            if start_checkpoint <= checkpoint && checkpoint <= blob_info.end_checkpoint.into() {
+            if start_checkpoint <= checkpoint && checkpoint <= blob_info.end_checkpoint {
                 return Ok(blob_info);
             }
 
             // If we've gone past where the checkpoint could be, stop searching.
-            if blob_info.end_checkpoint < checkpoint.into() {
+            if blob_info.end_checkpoint < checkpoint {
                 break;
             }
         }
@@ -192,7 +192,7 @@ impl ArchivalState {
             let blob_info = CheckpointBlobInfo::decode(value_bytes.as_ref())?;
 
             // Return the last checkpoint number in the blob.
-            Ok(Some(blob_info.end_checkpoint.into()))
+            Ok(Some(blob_info.end_checkpoint))
         } else {
             // No blobs stored yet.
             Ok(None)
@@ -252,6 +252,7 @@ mod tests {
 
     use super::*;
 
+    #[allow(clippy::type_complexity)]
     fn create_test_blob_info(
         start: u64,
         end: u64,
@@ -269,7 +270,7 @@ mod tests {
         }
 
         let blob_id = BlobId::from_str(blob_id).unwrap_or(BlobId::ZERO);
-        let epoch = 1000u32.into();
+        let epoch = 1000u32;
 
         (index_map, blob_id, epoch)
     }
@@ -298,8 +299,8 @@ mod tests {
         let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
 
         // Create a blob with checkpoints 100-199.
-        let start_checkpoint = 100u64.into();
-        let end_checkpoint = 199u64.into();
+        let start_checkpoint = 100u64;
+        let end_checkpoint = 199u64;
         let (index_map, blob_id, epoch) = create_test_blob_info(100, 199, "test_blob_1");
 
         // Store the blob info.
@@ -316,34 +317,34 @@ mod tests {
         // Test getting checkpoint blob by various checkpoint numbers.
 
         // Test with start checkpoint.
-        let blob_info = state.get_checkpoint_blob_info(100u64.into());
+        let blob_info = state.get_checkpoint_blob_info(100u64);
         assert!(blob_info.is_ok(), "Should find blob for checkpoint 100");
         let blob_info = blob_info.unwrap();
         assert_eq!(blob_info.start_checkpoint, 100);
         assert_eq!(blob_info.end_checkpoint, 199);
-        assert_eq!(blob_info.end_of_epoch, false);
+        assert!(!blob_info.end_of_epoch);
         assert_eq!(blob_info.index_entries.len(), 100);
 
         // Test with middle checkpoint.
-        let blob_info = state.get_checkpoint_blob_info(150u64.into());
+        let blob_info = state.get_checkpoint_blob_info(150u64);
         assert!(blob_info.is_ok(), "Should find blob for checkpoint 150");
         let blob_info = blob_info.unwrap();
         assert_eq!(blob_info.start_checkpoint, 100);
         assert_eq!(blob_info.end_checkpoint, 199);
 
         // Test with end checkpoint.
-        let blob_info = state.get_checkpoint_blob_info(199u64.into());
+        let blob_info = state.get_checkpoint_blob_info(199u64);
         assert!(blob_info.is_ok(), "Should find blob for checkpoint 199");
         let blob_info = blob_info.unwrap();
         assert_eq!(blob_info.start_checkpoint, 100);
         assert_eq!(blob_info.end_checkpoint, 199);
 
         // Test with checkpoint before range.
-        let blob_info = state.get_checkpoint_blob_info(99u64.into());
+        let blob_info = state.get_checkpoint_blob_info(99u64);
         assert!(blob_info.is_err(), "Should not find blob for checkpoint 99");
 
         // Test with checkpoint after range.
-        let blob_info = state.get_checkpoint_blob_info(200u64.into());
+        let blob_info = state.get_checkpoint_blob_info(200u64);
         assert!(
             blob_info.is_err(),
             "Should not find blob for checkpoint 200"
@@ -367,14 +368,7 @@ mod tests {
         for (start, end, blob_id, end_of_epoch) in &blobs {
             let (index_map, blob_id, epoch) = create_test_blob_info(*start, *end, blob_id);
             state
-                .create_new_checkpoint_blob(
-                    (*start).into(),
-                    (*end).into(),
-                    &index_map,
-                    blob_id,
-                    epoch,
-                    *end_of_epoch,
-                )
+                .create_new_checkpoint_blob(*start, *end, &index_map, blob_id, epoch, *end_of_epoch)
                 .expect("Failed to create blob");
         }
 
@@ -388,17 +382,17 @@ mod tests {
 
         for (checkpoint, expected_start, expected_end) in test_cases {
             let blob_info = state
-                .get_checkpoint_blob_info(checkpoint.into())
-                .expect(&format!("Should find blob for checkpoint {}", checkpoint));
+                .get_checkpoint_blob_info(checkpoint)
+                .unwrap_or_else(|_| panic!("Should find blob for checkpoint {}", checkpoint));
             assert_eq!(blob_info.start_checkpoint, expected_start);
             assert_eq!(blob_info.end_checkpoint, expected_end);
         }
 
         // Test end of epoch flag.
         let blob_info = state
-            .get_checkpoint_blob_info(350u64.into())
+            .get_checkpoint_blob_info(350u64)
             .expect("Should find blob");
-        assert_eq!(blob_info.end_of_epoch, true);
+        assert!(blob_info.end_of_epoch);
     }
 
     #[test]
@@ -416,56 +410,35 @@ mod tests {
         // Add first blob.
         let (index_map, blob_id, epoch) = create_test_blob_info(100, 199, "blob_1");
         state
-            .create_new_checkpoint_blob(
-                100u64.into(),
-                199u64.into(),
-                &index_map,
-                blob_id,
-                epoch,
-                false,
-            )
+            .create_new_checkpoint_blob(100u64, 199u64, &index_map, blob_id, epoch, false)
             .expect("Failed to create blob");
 
         let latest = state
             .get_latest_stored_checkpoint()
             .expect("Should not error");
-        assert_eq!(latest, Some(199u64.into()));
+        assert_eq!(latest, Some(199u64));
 
         // Add second blob with higher checkpoints.
         let (index_map, blob_id, epoch) = create_test_blob_info(200, 299, "blob_2");
         state
-            .create_new_checkpoint_blob(
-                200u64.into(),
-                299u64.into(),
-                &index_map,
-                blob_id,
-                epoch,
-                false,
-            )
+            .create_new_checkpoint_blob(200u64, 299u64, &index_map, blob_id, epoch, false)
             .expect("Failed to create blob");
 
         let latest = state
             .get_latest_stored_checkpoint()
             .expect("Should not error");
-        assert_eq!(latest, Some(299u64.into()));
+        assert_eq!(latest, Some(299u64));
 
         // Add third blob.
         let (index_map, blob_id, epoch) = create_test_blob_info(300, 399, "blob_3");
         state
-            .create_new_checkpoint_blob(
-                300u64.into(),
-                399u64.into(),
-                &index_map,
-                blob_id,
-                epoch,
-                false,
-            )
+            .create_new_checkpoint_blob(300u64, 399u64, &index_map, blob_id, epoch, false)
             .expect("Failed to create blob");
 
         let latest = state
             .get_latest_stored_checkpoint()
             .expect("Should not error");
-        assert_eq!(latest, Some(399u64.into()));
+        assert_eq!(latest, Some(399u64));
     }
 
     #[test]
@@ -477,32 +450,18 @@ mod tests {
         // Create blobs with gaps.
         let (index_map, blob_id, epoch) = create_test_blob_info(100, 199, "blob_1");
         state
-            .create_new_checkpoint_blob(
-                100u64.into(),
-                199u64.into(),
-                &index_map,
-                blob_id,
-                epoch,
-                false,
-            )
+            .create_new_checkpoint_blob(100u64, 199u64, &index_map, blob_id, epoch, false)
             .expect("Failed to create blob");
 
         // Gap from 200-299.
 
         let (index_map, blob_id, epoch) = create_test_blob_info(300, 399, "blob_2");
         state
-            .create_new_checkpoint_blob(
-                300u64.into(),
-                399u64.into(),
-                &index_map,
-                blob_id,
-                epoch,
-                false,
-            )
+            .create_new_checkpoint_blob(300u64, 399u64, &index_map, blob_id, epoch, false)
             .expect("Failed to create blob");
 
         // Test checkpoints in the gap.
-        let result = state.get_checkpoint_blob_info(250u64.into());
+        let result = state.get_checkpoint_blob_info(250u64);
         assert!(
             result.is_err(),
             "Should not find blob for checkpoint in gap"
@@ -510,8 +469,8 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("no blob found"));
 
         // Test checkpoints in stored ranges.
-        assert!(state.get_checkpoint_blob_info(150u64.into()).is_ok());
-        assert!(state.get_checkpoint_blob_info(350u64.into()).is_ok());
+        assert!(state.get_checkpoint_blob_info(150u64).is_ok());
+        assert!(state.get_checkpoint_blob_info(350u64).is_ok());
     }
 
     #[test]
@@ -523,22 +482,15 @@ mod tests {
         // Create a blob with empty index entries.
         let empty_index_map: Vec<(String, (u64, u64))> = Vec::new();
         let blob_id = BlobId::from_str("empty_blob").unwrap_or(BlobId::ZERO);
-        let epoch = 1000u32.into();
+        let epoch = 1000u32;
 
         state
-            .create_new_checkpoint_blob(
-                500u64.into(),
-                599u64.into(),
-                &empty_index_map,
-                blob_id,
-                epoch,
-                false,
-            )
+            .create_new_checkpoint_blob(500u64, 599u64, &empty_index_map, blob_id, epoch, false)
             .expect("Failed to create blob");
 
         // Should still be able to find the blob.
         let blob_info = state
-            .get_checkpoint_blob_info(550u64.into())
+            .get_checkpoint_blob_info(550u64)
             .expect("Should find blob");
         assert_eq!(blob_info.start_checkpoint, 500);
         assert_eq!(blob_info.end_checkpoint, 599);
@@ -548,7 +500,7 @@ mod tests {
         let latest = state
             .get_latest_stored_checkpoint()
             .expect("Should not error");
-        assert_eq!(latest, Some(599u64.into()));
+        assert_eq!(latest, Some(599u64));
     }
 
     #[test]
@@ -565,21 +517,14 @@ mod tests {
         ];
 
         let blob_id = BlobId::from_str("test_blob").unwrap_or(BlobId::ZERO);
-        let epoch = 1000u32.into();
+        let epoch = 1000u32;
 
         state
-            .create_new_checkpoint_blob(
-                1000u64.into(),
-                1002u64.into(),
-                &index_map,
-                blob_id,
-                epoch,
-                false,
-            )
+            .create_new_checkpoint_blob(1000u64, 1002u64, &index_map, blob_id, epoch, false)
             .expect("Failed to create blob");
 
         let blob_info = state
-            .get_checkpoint_blob_info(1001u64.into())
+            .get_checkpoint_blob_info(1001u64)
             .expect("Should find blob");
 
         // Check that checkpoint numbers were parsed correctly.
@@ -598,17 +543,10 @@ mod tests {
             let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
             let index_map = vec![("1000".to_string(), (0u64, 100u64))];
             let blob_id = BlobId::from_str("test_blob").unwrap_or(BlobId::ZERO);
-            let epoch = 1000u32.into();
+            let epoch = 1000u32;
 
             state
-                .create_new_checkpoint_blob(
-                    1000u64.into(),
-                    1000u64.into(),
-                    &index_map,
-                    blob_id,
-                    epoch,
-                    false,
-                )
+                .create_new_checkpoint_blob(1000u64, 1000u64, &index_map, blob_id, epoch, false)
                 .expect("Failed to create blob");
         }
 
@@ -618,23 +556,17 @@ mod tests {
 
         // Reading should work.
         let blob_info = state
-            .get_checkpoint_blob_info(1000u64.into())
+            .get_checkpoint_blob_info(1000u64)
             .expect("Should be able to read in read-only mode");
         assert_eq!(blob_info.start_checkpoint, 1000);
 
         // Writing should fail.
         let index_map = vec![("2000".to_string(), (0u64, 100u64))];
         let blob_id = BlobId::from_str("test_blob2").unwrap_or(BlobId::ZERO);
-        let epoch = 2000u32.into();
+        let epoch = 2000u32;
 
-        let result = state.create_new_checkpoint_blob(
-            2000u64.into(),
-            2000u64.into(),
-            &index_map,
-            blob_id,
-            epoch,
-            false,
-        );
+        let result =
+            state.create_new_checkpoint_blob(2000u64, 2000u64, &index_map, blob_id, epoch, false);
 
         assert!(result.is_err());
         assert!(

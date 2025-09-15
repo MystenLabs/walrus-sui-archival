@@ -172,7 +172,7 @@ async fn cleanup_orphaned_downloaded_checkpoints_and_uploaded_blobs(
         };
 
         // Remove the file if it's before the initial checkpoint.
-        if checkpoint_num < initial_checkpoint.into() {
+        if checkpoint_num < initial_checkpoint {
             match tokio::fs::remove_file(&path).await {
                 Ok(_) => {
                     removed_count += 1;

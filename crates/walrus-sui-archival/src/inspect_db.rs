@@ -133,7 +133,11 @@ fn list_blobs(state: &ArchivalState) -> Result<()> {
     println!("\nsummary:");
     println!("  total blobs: {}", blobs.len());
     println!("  total checkpoint entries: {}", total_entries);
-    println!("  total data size: {} bytes ({:.2} GB)", total_size, total_size as f64 / (1024.0 * 1024.0 * 1024.0));
+    println!(
+        "  total data size: {} bytes ({:.2} GB)",
+        total_size,
+        total_size as f64 / (1024.0 * 1024.0 * 1024.0)
+    );
 
     Ok(())
 }

@@ -200,7 +200,7 @@ impl CheckpointDownloader {
             num_workers: config.num_workers,
             worker_handles: Vec::new(),
             bucket_base_url: Url::parse(&config.bucket_base_url).expect("invalid bucket base URL"),
-            downloaded_checkpoint_dir: PathBuf::from(config.downloaded_checkpoint_dir),
+            downloaded_checkpoint_dir: config.downloaded_checkpoint_dir,
             min_retry_wait: config.min_download_retry_wait,
             max_retry_wait: config.max_download_retry_wait,
         }
@@ -210,14 +210,13 @@ impl CheckpointDownloader {
         let mut dir_entries = fs::read_dir(&self.downloaded_checkpoint_dir).await?;
         while let Some(entry) = dir_entries.next_entry().await? {
             let path = entry.path();
-            if let Some(name) = path.file_name() {
-                if let Some(name_str) = name.to_str() {
-                    if name_str.ends_with(".tmp") {
-                        tracing::info!("cleaning up leftover temp file: {}", path.display());
-                        if let Err(e) = fs::remove_file(&path).await {
-                            tracing::warn!("failed to remove temp file {}: {}", path.display(), e);
-                        }
-                    }
+            if let Some(name) = path.file_name()
+                && let Some(name_str) = name.to_str()
+                && name_str.ends_with(".tmp")
+            {
+                tracing::info!("cleaning up leftover temp file: {}", path.display());
+                if let Err(e) = fs::remove_file(&path).await {
+                    tracing::warn!("failed to remove temp file {}: {}", path.display(), e);
                 }
             }
         }
