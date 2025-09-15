@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 use walrus_sui_archival::{
     archival::run_sui_archival,
+    burn_blobs::burn_all_blobs,
     config::Config,
     inspect_blob::inspect_blob,
     inspect_db::{InspectDbCommand, execute_inspect_db},
@@ -53,6 +54,13 @@ enum Commands {
         #[arg(short = 'l', long)]
         length: Option<u64>,
     },
+    /// [DEV TOOL] Burn all blobs owned by the wallet (hidden from help).
+    #[command(hide = true)]
+    BurnAllBlobs {
+        /// Path to client configuration file.
+        #[arg(short, long, default_value = "config/client_config.yaml")]
+        config: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -82,6 +90,12 @@ fn main() -> Result<()> {
         } => {
             tracing::info!("inspecting blob file: {}", path.display());
             inspect_blob(path, index, offset, length)?;
+        }
+        Commands::BurnAllBlobs { config } => {
+            tracing::warn!("starting burn all blobs command (dev tool)...");
+            // Create tokio runtime for async operation.
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(burn_all_blobs(config))?;
         }
     }
 

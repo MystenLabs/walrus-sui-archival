@@ -47,7 +47,7 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     fs::File,
-    io::{self, Cursor, Read, Seek, SeekFrom, Write},
+    io::{self, Cursor, Read, Seek, Write},
     num::NonZeroU16,
     path::{Path, PathBuf},
 };
@@ -443,7 +443,7 @@ impl BlobBundleBuilder {
             let path = path.as_ref();
 
             // Get the current position in the output file (this is the offset for this entry)
-            let offset = output_file.seek(SeekFrom::Current(0))?;
+            let offset = output_file.stream_position()?;
 
             // Open input file
             let mut input_file = File::open(path)?;
@@ -501,7 +501,7 @@ impl BlobBundleBuilder {
         }
 
         // Record where the index starts
-        let index_offset = output_file.seek(SeekFrom::Current(0))?;
+        let index_offset = output_file.stream_position()?;
 
         // Write index entries
         for entry in &index_entries {
@@ -515,7 +515,7 @@ impl BlobBundleBuilder {
         footer.write_to(&mut output_file)?;
 
         // Get final file size
-        let total_size = output_file.seek(SeekFrom::Current(0))?;
+        let total_size = output_file.stream_position()?;
 
         // Ensure all data is written to disk
         output_file.sync_all()?;
