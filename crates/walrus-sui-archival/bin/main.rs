@@ -27,7 +27,7 @@ enum Commands {
     Run {
         /// Path to configuration file.
         #[arg(short, long, default_value = "config/testnet_config.yaml")]
-        config: String,
+        config: PathBuf,
     },
     /// Inspect the database.
     InspectDb {

@@ -10,6 +10,10 @@ use walrus_core::EpochCount;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Path to the client config file.
+    #[serde(default = "default_client_config_path")]
+    pub client_config_path: PathBuf,
+
     /// Path to the RocksDB database directory.
     #[serde(default = "default_db_path")]
     pub db_path: PathBuf,
@@ -60,6 +64,12 @@ impl Config {
         let config: Config = serde_yaml::from_str(&contents)?;
         Ok(config)
     }
+}
+
+fn default_client_config_path() -> PathBuf {
+    ["./", "config", "wallet", "client_config.yaml"]
+        .iter()
+        .collect()
 }
 
 fn default_db_path() -> PathBuf {
@@ -135,6 +145,14 @@ pub struct CheckpointBlobPublisherConfig {
     /// Number of epochs to store in the database.
     #[serde(default = "default_store_epoch_length")]
     pub store_epoch_length: EpochCount,
+
+    /// Minimum retry duration for blob upload.
+    #[serde(default = "default_min_retry_duration", with = "humantime_serde")]
+    pub min_retry_duration: Duration,
+
+    /// Maximum retry duration for blob upload.
+    #[serde(default = "default_max_retry_duration", with = "humantime_serde")]
+    pub max_retry_duration: Duration,
 }
 
 impl Default for CheckpointBlobPublisherConfig {
@@ -143,6 +161,8 @@ impl Default for CheckpointBlobPublisherConfig {
             checkpoint_blobs_dir: default_checkpoint_blobs_dir(),
             n_shards: default_n_shards(),
             store_epoch_length: default_store_epoch_length(),
+            min_retry_duration: default_min_retry_duration(),
+            max_retry_duration: default_max_retry_duration(),
         }
     }
 }
@@ -157,4 +177,12 @@ fn default_n_shards() -> u16 {
 
 fn default_store_epoch_length() -> EpochCount {
     5
+}
+
+fn default_min_retry_duration() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_max_retry_duration() -> Duration {
+    Duration::from_secs(300)
 }

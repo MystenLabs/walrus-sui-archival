@@ -1,8 +1,9 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{select, sync::mpsc};
+use walrus_sdk::{client::WalrusNodeClient, config::ClientConfig, sui::client::SuiContractClient};
 
 use crate::{
     archival_state::ArchivalState,
@@ -33,6 +34,9 @@ async fn run_application_logic(config: Config) -> Result<()> {
         config.db_path
     );
 
+    // Initialize walrus client.
+    let walrus_client = Arc::new(initialize_walrus_client(config.clone()).await?);
+
     // TODO(zhe): remove testing initial checkpoint.
     let initial_checkpoint = archival_state
         .get_latest_stored_checkpoint()?
@@ -57,12 +61,14 @@ async fn run_application_logic(config: Config) -> Result<()> {
     // Start the checkpoint blob publisher.
     let blob_publisher = checkpoint_blob_publisher::CheckpointBlobPublisher::new(
         archival_state.clone(),
+        walrus_client.clone(),
         config.checkpoint_blob_publisher.clone(),
         config
             .checkpoint_downloader
             .downloaded_checkpoint_dir
             .clone(),
-    )?;
+    )
+    .await?;
     let blob_publisher_handle =
         tokio::spawn(async move { blob_publisher.start(blob_publisher_rx).await });
 
@@ -104,6 +110,17 @@ async fn run_application_logic(config: Config) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn initialize_walrus_client(config: Config) -> Result<WalrusNodeClient<SuiContractClient>> {
+    let (client_config, _) =
+        ClientConfig::load_from_multi_config(config.client_config_path, Some("testnet"))?;
+    let sui_client = client_config
+        .new_contract_client_with_wallet_in_config(None)
+        .await?;
+    let walrus_client =
+        WalrusNodeClient::new_contract_client_with_refresher(client_config, sui_client).await?;
+    Ok(walrus_client)
 }
 
 async fn cleanup_orphaned_downloaded_checkpoints_and_uploaded_blobs(

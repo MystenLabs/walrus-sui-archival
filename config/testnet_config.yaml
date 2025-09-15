@@ -1,5 +1,7 @@
 # Configuration for walrus-sui-archival.
 
+client_config_path: ./config/client_config.yaml
+
 # Total number of threads for the tokio runtime thread pool.
 thread_pool_size: 8
 

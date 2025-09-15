@@ -1,10 +1,13 @@
 use std::{num::NonZeroU16, path::PathBuf, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use blob_bundle::{BlobBundleBuildResult, BlobBundleBuilder};
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{fs, sync::mpsc};
-use walrus_core::BlobId;
+use walrus_sdk::{
+    client::{StoreArgs, WalrusNodeClient},
+    sui::client::{BlobPersistence, SuiContractClient},
+};
 
 use crate::{archival_state::ArchivalState, config::CheckpointBlobPublisherConfig};
 
@@ -22,18 +25,24 @@ pub struct BlobBuildRequest {
 /// A long-running service that builds blob files from checkpoint ranges.
 pub struct CheckpointBlobPublisher {
     archival_state: Arc<ArchivalState>,
+    walrus_client: Arc<WalrusNodeClient<SuiContractClient>>,
+    n_shards: NonZeroU16,
     config: CheckpointBlobPublisherConfig,
     downloaded_checkpoint_dir: PathBuf,
 }
 
 impl CheckpointBlobPublisher {
-    pub fn new(
+    pub async fn new(
         archival_state: Arc<ArchivalState>,
+        walrus_client: Arc<WalrusNodeClient<SuiContractClient>>,
         config: CheckpointBlobPublisherConfig,
         downloaded_checkpoint_dir: PathBuf,
     ) -> Result<Self> {
+        let n_shards = walrus_client.get_committees().await?.n_shards();
         Ok(Self {
             archival_state,
+            walrus_client,
+            n_shards,
             config,
             downloaded_checkpoint_dir,
         })
@@ -110,12 +119,8 @@ impl CheckpointBlobPublisher {
             return Ok(());
         }
 
-        // TODO(zhe): get this info from Walrus.
-        let n_shards = NonZeroU16::new(self.config.n_shards)
-            .ok_or_else(|| anyhow::anyhow!("n_shards must be non-zero"))?;
-
         // Create the blob bundle.
-        let builder = BlobBundleBuilder::new(n_shards);
+        let builder = BlobBundleBuilder::new(self.n_shards);
 
         // Generate output filename.
         let blob_filename = format!(
@@ -154,8 +159,66 @@ impl CheckpointBlobPublisher {
         request: &BlobBuildRequest,
         result: &BlobBundleBuildResult,
     ) -> Result<()> {
-        // TODO(zhe): Upload the blob to Walrus.
-        let blob_id = BlobId::ZERO;
+        let (blob_id, end_epoch) = {
+            let blob = fs::read(&result.file_path)
+                .await
+                .context("read blob file")?;
+
+            let mut store_args = StoreArgs::default_with_epochs(self.config.store_epoch_length);
+            store_args.persistence = BlobPersistence::Permanent;
+
+            // Infinite retry with exponential backoff.
+            let mut retry_delay = self.config.min_retry_duration;
+            let max_retry_delay = self.config.max_retry_duration;
+
+            loop {
+                match self
+                    .walrus_client
+                    .reserve_and_store_blobs_retry_committees(&[blob.as_slice()], &[], &store_args)
+                    .await
+                {
+                    Ok(results) => {
+                        if let Some(blob_store_result) = results.first() {
+                            // Check if the blob was successfully stored.
+                            if blob_store_result.is_not_stored() {
+                                tracing::error!(
+                                    "blob upload failed with is_not_stored status, retrying in {:?}",
+                                    retry_delay
+                                );
+                                tokio::time::sleep(retry_delay).await;
+                                // Exponential backoff.
+                                retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
+                                continue;
+                            }
+
+                            // Successfully stored.
+                            break (
+                                blob_store_result
+                                    .blob_id()
+                                    .expect("blob id should be present"),
+                                blob_store_result
+                                    .end_epoch()
+                                    .expect("end epoch should be present"),
+                            );
+                        } else {
+                            tracing::error!(
+                                "blob upload returned empty results, retrying in {:?}",
+                                retry_delay
+                            );
+                            tokio::time::sleep(retry_delay).await;
+                            // Exponential backoff.
+                            retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("blob upload failed: {}, retrying in {:?}", e, retry_delay);
+                        tokio::time::sleep(retry_delay).await;
+                        // Exponential backoff.
+                        retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
+                    }
+                }
+            }
+        };
 
         // Log the index map for debugging.
         tracing::debug!("blob index map:");
@@ -163,16 +226,12 @@ impl CheckpointBlobPublisher {
             tracing::debug!("  {} -> offset: {}, length: {} bytes", id, offset, length);
         }
 
-        // TODO(zhe): Calculate the blob expiration epoch. This is currently incorrect. Need to
-        // first get the current epoch from Walrus.
-        let blob_expiration_epoch = self.config.store_epoch_length;
-
         self.archival_state.create_new_checkpoint_blob(
             request.start_checkpoint,
             request.end_checkpoint,
             &result.index_map,
             blob_id,
-            blob_expiration_epoch,
+            end_epoch,
             request.end_of_epoch,
         )?;
         Ok(())

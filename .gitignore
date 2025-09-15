@@ -29,3 +29,4 @@ CLAUDE.md
 downloaded_checkpoint_dir/
 checkpoint_blobs/
 archival_db/
+config/wallet/
