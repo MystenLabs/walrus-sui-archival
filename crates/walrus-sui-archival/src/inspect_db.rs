@@ -16,6 +16,8 @@ pub enum InspectDbCommand {
     },
     /// Get the latest stored checkpoint number.
     GetLatestCheckpoint,
+    /// List all blobs tracked in the database.
+    ListBlobs,
 }
 
 /// Execute the inspect database command.
@@ -29,6 +31,7 @@ pub fn execute_inspect_db(db_path: PathBuf, command: InspectDbCommand) -> Result
             get_checkpoint_blob_info(&state, checkpoint)
         }
         InspectDbCommand::GetLatestCheckpoint => get_latest_checkpoint(&state),
+        InspectDbCommand::ListBlobs => list_blobs(&state),
     }
 }
 
@@ -85,6 +88,52 @@ fn get_latest_checkpoint(state: &ArchivalState) -> Result<()> {
             println!("no checkpoints stored in the database");
         }
     }
+
+    Ok(())
+}
+
+/// List all blobs tracked in the database.
+fn list_blobs(state: &ArchivalState) -> Result<()> {
+    let blobs = state.list_all_blobs()?;
+
+    if blobs.is_empty() {
+        println!("no blobs tracked in the database");
+        return Ok(());
+    }
+
+    println!("found {} blob(s) in the database:\n", blobs.len());
+    println!(
+        "{:<70} {:<15} {:<15} {:<10} {:<15} {:<10}",
+        "Blob ID", "Start CP", "End CP", "EOE", "Expiry Epoch", "Entries"
+    );
+    println!("{}", "-".repeat(145));
+
+    let mut total_entries = 0;
+    let mut total_size = 0u64;
+
+    for blob_info in &blobs {
+        let blob_id = String::from_utf8_lossy(&blob_info.blob_id);
+        let entries_count = blob_info.index_entries.len();
+        let blob_size: u64 = blob_info.index_entries.iter().map(|e| e.length).sum();
+
+        total_entries += entries_count;
+        total_size += blob_size;
+
+        println!(
+            "{:<70} {:<15} {:<15} {:<10} {:<15} {:<10}",
+            blob_id,
+            blob_info.start_checkpoint,
+            blob_info.end_checkpoint,
+            if blob_info.end_of_epoch { "Yes" } else { "No" },
+            blob_info.blob_expiration_epoch,
+            entries_count
+        );
+    }
+
+    println!("\nsummary:");
+    println!("  total blobs: {}", blobs.len());
+    println!("  total checkpoint entries: {}", total_entries);
+    println!("  total data size: {} bytes ({:.2} GB)", total_size, total_size as f64 / (1024.0 * 1024.0 * 1024.0));
 
     Ok(())
 }

@@ -7,3 +7,4 @@ pub mod checkpoint_monitor;
 pub mod config;
 pub mod inspect_blob;
 pub mod inspect_db;
+pub mod list_blobs;

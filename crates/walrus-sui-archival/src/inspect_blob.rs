@@ -1,27 +1,58 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, str::FromStr};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use blob_bundle::BlobBundleReader;
 use bytes::Bytes;
 use sui_storage::blob::Blob;
 use sui_types::full_checkpoint_content::CheckpointData;
+use walrus_core::{BlobId, encoding::Primary};
+use walrus_sdk::{client::WalrusNodeClient, config::ClientConfig};
 
-/// Inspect a blob file.
+/// Inspect a blob - either from a local file or by fetching from Walrus.
 ///
 /// # Arguments
-/// * `path` - Path to the blob file
+/// * `path` - Optional path to the blob file
+/// * `blob_id` - Optional blob ID to fetch from Walrus
+/// * `client_config` - Optional path to client config (required if using blob_id)
 /// * `index` - Optional index to inspect a specific entry
 /// * `offset` - Optional offset to read from (used when index is not specified)
 /// * `length` - Optional length to read (used when index is not specified)
-pub fn inspect_blob(
-    path: PathBuf,
+pub async fn inspect_blob(
+    path: Option<PathBuf>,
+    blob_id: Option<String>,
+    client_config: Option<PathBuf>,
     index: Option<usize>,
     offset: Option<u64>,
     length: Option<u64>,
 ) -> Result<()> {
-    // Read the blob file.
-    let data = std::fs::read(&path)?;
-    let bytes = Bytes::from(data);
+    // Get the blob data either from file or Walrus.
+    let bytes = match (path, blob_id) {
+        (Some(path), None) => {
+            // Read from local file.
+            tracing::info!("reading blob from local file: {}", path.display());
+            let data = std::fs::read(&path)?;
+            Bytes::from(data)
+        }
+        (None, Some(blob_id_str)) => {
+            // Fetch from Walrus.
+            tracing::info!("fetching blob from walrus: {}", blob_id_str);
+
+            let client_config_path = client_config
+                .ok_or_else(|| anyhow::anyhow!("client config required when using blob ID"))?;
+
+            // Parse the blob ID.
+            let blob_id = BlobId::from_str(&blob_id_str).context("failed to parse blob ID")?;
+
+            // Fetch the blob from Walrus.
+            fetch_blob_from_walrus(blob_id, client_config_path).await?
+        }
+        (Some(_), Some(_)) => {
+            return Err(anyhow::anyhow!("cannot specify both path and blob ID"));
+        }
+        (None, None) => {
+            return Err(anyhow::anyhow!("must specify either path or blob ID"));
+        }
+    };
 
     // Open the blob bundle for reading.
     let reader = BlobBundleReader::new(bytes)?;
@@ -203,6 +234,36 @@ fn inspect_by_range(reader: &BlobBundleReader, offset: u64, length: u64) -> Resu
     }
 
     Ok(())
+}
+
+/// Fetch a blob from Walrus by its ID.
+async fn fetch_blob_from_walrus(blob_id: BlobId, client_config_path: PathBuf) -> Result<Bytes> {
+    // Load the client configuration.
+    let (client_config, _) =
+        ClientConfig::load_from_multi_config(&client_config_path, Some("testnet"))
+            .context("failed to load client config")?;
+
+    // Create the Sui client.
+    let sui_client = client_config
+        .new_contract_client_with_wallet_in_config(None)
+        .await
+        .context("failed to create Sui client")?;
+
+    // Create the Walrus client.
+    let walrus_client =
+        WalrusNodeClient::new_contract_client_with_refresher(client_config, sui_client)
+            .await
+            .context("failed to create Walrus client")?;
+
+    // Fetch the blob.
+    tracing::info!("downloading blob {} from walrus...", blob_id);
+    let data = walrus_client
+        .read_blob_retry_committees::<Primary>(&blob_id)
+        .await
+        .context("failed to fetch blob from Walrus")?;
+
+    tracing::info!("successfully fetched blob ({} bytes)", data.len());
+    Ok(Bytes::from(data))
 }
 
 /// List all entries in the blob.

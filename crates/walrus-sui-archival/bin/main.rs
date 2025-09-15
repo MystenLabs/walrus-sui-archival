@@ -9,6 +9,7 @@ use walrus_sui_archival::{
     config::Config,
     inspect_blob::inspect_blob,
     inspect_db::{InspectDbCommand, execute_inspect_db},
+    list_blobs::list_owned_blobs,
 };
 
 #[derive(Parser, Debug)]
@@ -39,11 +40,17 @@ enum Commands {
         #[command(subcommand)]
         command: InspectDbCommand,
     },
-    /// Inspect a blob file.
+    /// Inspect a blob file or fetch from Walrus.
     InspectBlob {
-        /// Path to the blob file.
-        #[arg(short, long)]
-        path: PathBuf,
+        /// Path to the blob file (mutually exclusive with blob-id).
+        #[arg(short, long, conflicts_with = "blob_id")]
+        path: Option<PathBuf>,
+        /// Blob ID to fetch from Walrus (mutually exclusive with path).
+        #[arg(short, long, conflicts_with = "path")]
+        blob_id: Option<String>,
+        /// Path to client configuration file (required when using blob-id).
+        #[arg(short, long, default_value = "config/client_config.yaml")]
+        client_config: Option<PathBuf>,
         /// Optional index to inspect a specific entry.
         #[arg(short, long)]
         index: Option<usize>,
@@ -54,12 +61,18 @@ enum Commands {
         #[arg(short = 'l', long)]
         length: Option<u64>,
     },
+    /// List all blobs owned by the wallet.
+    ListOwnedBlobs {
+        /// Path to client configuration file.
+        #[arg(short, long, default_value = "config/client_config.yaml")]
+        client_config: PathBuf,
+    },
     /// [DEV TOOL] Burn all blobs owned by the wallet (hidden from help).
     #[command(hide = true)]
     BurnAllBlobs {
         /// Path to client configuration file.
         #[arg(short, long, default_value = "config/client_config.yaml")]
-        config: PathBuf,
+        client_config: PathBuf,
     },
 }
 
@@ -84,18 +97,39 @@ fn main() -> Result<()> {
         }
         Commands::InspectBlob {
             path,
+            blob_id,
+            client_config,
             index,
             offset,
             length,
         } => {
-            tracing::info!("inspecting blob file: {}", path.display());
-            inspect_blob(path, index, offset, length)?;
+            match (&path, &blob_id) {
+                (Some(p), None) => tracing::info!("inspecting blob file: {}", p.display()),
+                (None, Some(id)) => tracing::info!("inspecting blob from walrus: {}", id),
+                _ => {}
+            }
+            // Create tokio runtime for async operation.
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(inspect_blob(
+                path,
+                blob_id,
+                client_config,
+                index,
+                offset,
+                length,
+            ))?;
         }
-        Commands::BurnAllBlobs { config } => {
+        Commands::ListOwnedBlobs { client_config } => {
+            tracing::info!("starting list owned blobs command...");
+            // Create tokio runtime for async operation.
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(list_owned_blobs(client_config))?;
+        }
+        Commands::BurnAllBlobs { client_config } => {
             tracing::warn!("starting burn all blobs command (dev tool)...");
             // Create tokio runtime for async operation.
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(burn_all_blobs(config))?;
+            runtime.block_on(burn_all_blobs(client_config))?;
         }
     }
 

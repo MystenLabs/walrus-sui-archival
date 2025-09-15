@@ -198,6 +198,26 @@ impl ArchivalState {
             Ok(None)
         }
     }
+
+    /// List all checkpoint blobs in the database.
+    pub fn list_all_blobs(&self) -> Result<Vec<CheckpointBlobInfo>> {
+        let cf = self
+            .db
+            .cf_handle(CF_CHECKPOINT_BLOB_INFO)
+            .expect("column family must exist");
+
+        // Create an iterator in forward order.
+        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
+
+        let mut blobs = Vec::new();
+        for item in iter {
+            let (_key_bytes, value_bytes) = item?;
+            let blob_info = CheckpointBlobInfo::decode(value_bytes.as_ref())?;
+            blobs.push(blob_info);
+        }
+
+        Ok(blobs)
+    }
 }
 
 #[inline]
