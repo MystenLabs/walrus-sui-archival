@@ -38,8 +38,11 @@ async fn run_application_logic(config: Config) -> Result<()> {
     let registry = registry_service.default_registry();
 
     // Build version string with git commit hash at compile time.
-    const GIT_VERSION: &str =
-        git_version!(args = ["--always", "--abbrev=12", "--dirty", "--exclude", "*"]);
+    const GIT_VERSION: &str = if let Some(revision) = option_env!("GIT_REVISION") {
+        revision
+    } else {
+        git_version!(args = ["--always", "--abbrev=12", "--dirty", "--exclude", "*"])
+    };
     const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
     let registry_clone = registry.clone();
