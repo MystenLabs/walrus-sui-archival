@@ -18,7 +18,7 @@ use sui_types::{
     messages_checkpoint::CheckpointSequenceNumber,
 };
 use walrus_core::{BlobId, encoding::Primary};
-use walrus_sdk::{client::WalrusNodeClient, sui::client::SuiContractClient};
+use walrus_sdk::{ObjectID, client::WalrusNodeClient, sui::client::SuiContractClient};
 
 use crate::archival_state::ArchivalState;
 
@@ -116,6 +116,7 @@ async fn list_all_blobs(State(app_state): State<AppState>) -> Result<Html<String
         html.push_str("<table>\n");
         html.push_str("<tr>\n");
         html.push_str("<th>Blob ID</th>\n");
+        html.push_str("<th>Object ID</th>\n");
         html.push_str("<th>Start Checkpoint</th>\n");
         html.push_str("<th>End Checkpoint</th>\n");
         html.push_str("<th>End of Epoch</th>\n");
@@ -129,6 +130,7 @@ async fn list_all_blobs(State(app_state): State<AppState>) -> Result<Html<String
 
         for blob_info in &blobs {
             let blob_id = String::from_utf8_lossy(&blob_info.blob_id);
+            let object_id = ObjectID::from_bytes(&blob_info.object_id).unwrap_or(ObjectID::ZERO);
             let entries_count = blob_info.index_entries.len();
             let blob_size: u64 = blob_info.index_entries.iter().map(|e| e.length).sum();
 
@@ -137,6 +139,7 @@ async fn list_all_blobs(State(app_state): State<AppState>) -> Result<Html<String
 
             html.push_str("<tr>\n");
             html.push_str(&format!("<td>{}</td>\n", blob_id));
+            html.push_str(&format!("<td>{}</td>\n", object_id));
             html.push_str(&format!("<td>{}</td>\n", blob_info.start_checkpoint));
             html.push_str(&format!("<td>{}</td>\n", blob_info.end_checkpoint));
             html.push_str(&format!(
@@ -190,6 +193,7 @@ struct CheckpointQuery {
 #[derive(Serialize)]
 struct CheckpointLocationResponse {
     blob_id: String,
+    object_id: String,
     index: usize,
     offset: u64,
     length: u64,
@@ -199,6 +203,7 @@ struct CheckpointLocationResponse {
 #[derive(Serialize)]
 struct CheckpointContentResponse {
     blob_id: String,
+    object_id: String,
     index: usize,
     offset: u64,
     length: u64,
@@ -245,11 +250,15 @@ async fn get_checkpoint(
 
     let (index, entry) = entry;
     let blob_id = String::from_utf8_lossy(&blob_info.blob_id).to_string();
+    let object_id = ObjectID::from_bytes(&blob_info.object_id)
+        .map(|id| id.to_string())
+        .unwrap_or_else(|_| ObjectID::ZERO.to_string());
 
     if !params.content {
         // Return just the location info.
         let response = CheckpointLocationResponse {
             blob_id,
+            object_id,
             index,
             offset: entry.offset,
             length: entry.length,
@@ -302,6 +311,7 @@ async fn get_checkpoint(
 
     let response = CheckpointContentResponse {
         blob_id,
+        object_id,
         index,
         offset: entry.offset,
         length: entry.length,

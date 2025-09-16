@@ -8,7 +8,8 @@ use blob_bundle::{BlobBundleBuildResult, BlobBundleBuilder};
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{fs, sync::mpsc};
 use walrus_sdk::{
-    client::{StoreArgs, WalrusNodeClient},
+    client::{StoreArgs, WalrusNodeClient, responses::BlobStoreResult},
+    store_optimizations::StoreOptimizations,
     sui::client::{BlobPersistence, SuiContractClient},
 };
 
@@ -187,13 +188,17 @@ impl CheckpointBlobPublisher {
         // Track the latency of uploading blobs.
         let upload_timer = self.metrics.blob_upload_latency_seconds.start_timer();
 
-        let (blob_id, end_epoch) = {
+        let (blob_id, object_id, end_epoch) = {
             let blob = fs::read(&result.file_path)
                 .await
                 .context("read blob file")?;
 
             let mut store_args = StoreArgs::default_with_epochs(self.config.store_epoch_length);
             store_args.persistence = BlobPersistence::Permanent;
+
+            // TODO(zhewu): check if this is necessary. Currently, we turn off the optimization
+            // because we have to have a blob object owned by us so that we can extend it.
+            store_args.store_optimizations = StoreOptimizations::none();
 
             // Infinite retry with exponential backoff.
             let mut retry_delay = self.config.min_retry_duration;
@@ -226,15 +231,20 @@ impl CheckpointBlobPublisher {
                             self.metrics.blobs_uploaded_success.inc();
                             upload_timer.observe_duration();
 
+                            let (blob_id, object_id, end_epoch) = match blob_store_result {
+                                BlobStoreResult::NewlyCreated { blob_object, .. } => (
+                                    blob_object.blob_id,
+                                    blob_object.id,
+                                    blob_object.storage.end_epoch,
+                                ),
+                                _ => {
+                                    // At this point, we should only have the NewlyCreated result.
+                                    panic!("unexpected blob store result: {:?}", blob_store_result);
+                                }
+                            };
+
                             // Successfully stored.
-                            break (
-                                blob_store_result
-                                    .blob_id()
-                                    .expect("blob id should be present"),
-                                blob_store_result
-                                    .end_epoch()
-                                    .expect("end epoch should be present"),
-                            );
+                            break (blob_id, object_id, end_epoch);
                         } else {
                             tracing::error!(
                                 "blob upload returned empty results, retrying in {:?}",
@@ -269,6 +279,7 @@ impl CheckpointBlobPublisher {
             request.end_checkpoint,
             &result.index_map,
             blob_id,
+            object_id,
             end_epoch,
             request.end_of_epoch,
         )?;

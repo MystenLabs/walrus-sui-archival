@@ -394,7 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_download_worker_successful_download() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
         // Setup test environment.
         let temp_dir = TempDir::new().unwrap();
         let checkpoint_dir = temp_dir.path().to_path_buf();
@@ -461,7 +461,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_download_worker_retry_on_failure() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
         // Setup test environment.
         let temp_dir = TempDir::new().unwrap();
         let checkpoint_dir = temp_dir.path().to_path_buf();
@@ -529,7 +529,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_download_worker_multiple_checkpoints() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
         // Setup test environment.
         let temp_dir = TempDir::new().unwrap();
         let checkpoint_dir = temp_dir.path().to_path_buf();
@@ -598,7 +598,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_downloader_initialization() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
         let config = CheckpointDownloaderConfig {
             num_workers: 4,
             bucket_base_url: "https://example.com/bucket/".to_string(),
@@ -629,7 +629,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_downloader_with_multiple_workers() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
         // Setup test environment.
         let temp_dir = TempDir::new().unwrap();
         let checkpoint_dir = temp_dir.path().to_path_buf();
@@ -689,7 +689,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_info_creation() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
         let checkpoint_info = CheckpointInfo {
             checkpoint_number: 100,
             epoch: 5,
@@ -707,7 +707,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_download_worker_invalid_checkpoint_data() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         // Setup test environment.
         let temp_dir = TempDir::new().unwrap();
@@ -766,7 +766,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_downloader_creates_directory() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         // Use a temporary directory that doesn't exist yet.
         let temp_dir = TempDir::new().unwrap();

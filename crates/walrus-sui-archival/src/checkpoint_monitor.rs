@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_accumulator_should_build_blob_time_exceeded() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let config = CheckpointMonitorConfig {
             max_accumulation_duration: Duration::from_secs(3600), // 1 hour.
@@ -391,7 +391,7 @@ mod tests {
 
     #[test]
     fn test_accumulator_should_build_blob_size_exceeded() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let config = CheckpointMonitorConfig {
             max_accumulation_duration: Duration::from_secs(3600),
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_accumulator_should_build_blob_end_of_epoch() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let config = CheckpointMonitorConfig::default();
 
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn test_accumulator_operations() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut accumulator = CheckpointAccumulator::new();
 
@@ -471,7 +471,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_monitor_ordering() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let config = CheckpointMonitorConfig::default();
         let (blob_tx, _blob_rx) = mpsc::channel(10);
@@ -502,7 +502,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_monitor_detects_holes() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let config = CheckpointMonitorConfig::default();
         let (blob_tx, _blob_rx) = mpsc::channel(10);
@@ -538,7 +538,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_checkpoint_monitor_rejects_duplicate() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let config = CheckpointMonitorConfig::default();
         let (blob_tx, _blob_rx) = mpsc::channel(10);

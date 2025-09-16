@@ -12,20 +12,23 @@ message CheckpointBlobInfo {
   // Blob identifier (32 bytes).
   bytes blob_id = 2;
 
+  // Blob object ID (32 bytes).
+  bytes object_id = 3;
+
   // First checkpoint number in this blob.
-  uint64 start_checkpoint = 3;
+  uint64 start_checkpoint = 4;
 
   // Last checkpoint number in this blob (inclusive).
-  uint64 end_checkpoint = 4;
+  uint64 end_checkpoint = 5;
 
   // Whether this blob contains the last transaction of the Sui epoch.
-  bool end_of_epoch = 5;
+  bool end_of_epoch = 6;
 
   // Epoch when this blob will be expired.
-  uint32 blob_expiration_epoch = 6;
+  uint32 blob_expiration_epoch = 7;
 
   // Index entries mapping checkpoint numbers to their offset/length in the blob.
-  repeated IndexEntry index_entries = 7;
+  repeated IndexEntry index_entries = 8;
 
   // Reserved fields for future use (100-199).
   // This allows adding new fields without breaking compatibility.

@@ -16,6 +16,7 @@ pub mod proto {
 }
 
 use proto::{CheckpointBlobInfo, IndexEntry};
+use walrus_sdk::ObjectID;
 
 /// Column family names.
 const CF_CHECKPOINT_BLOB_INFO: &str = "checkpoint_blob_info";
@@ -69,12 +70,14 @@ impl ArchivalState {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_new_checkpoint_blob(
         &self,
         start_checkpoint: CheckpointSequenceNumber,
         end_checkpoint: CheckpointSequenceNumber,
         index_map: &[(String, (u64, u64))],
         blob_id: BlobId,
+        object_id: ObjectID,
         blob_expiration_epoch: Epoch,
         end_of_epoch: bool,
     ) -> Result<()> {
@@ -103,6 +106,7 @@ impl ArchivalState {
         let blob_info = CheckpointBlobInfo {
             version: CHECKPOINT_BLOB_INFO_VERSION,
             blob_id: blob_id.to_string().into_bytes(),
+            object_id: object_id.to_string().into_bytes(),
             start_checkpoint,
             end_checkpoint,
             end_of_epoch,
@@ -312,6 +316,7 @@ mod tests {
             end_checkpoint,
             &index_map,
             blob_id,
+            ObjectID::random(),
             epoch,
             false,
         );
@@ -371,7 +376,15 @@ mod tests {
         for (start, end, blob_id, end_of_epoch) in &blobs {
             let (index_map, blob_id, epoch) = create_test_blob_info(*start, *end, blob_id);
             state
-                .create_new_checkpoint_blob(*start, *end, &index_map, blob_id, epoch, *end_of_epoch)
+                .create_new_checkpoint_blob(
+                    *start,
+                    *end,
+                    &index_map,
+                    blob_id,
+                    ObjectID::random(),
+                    epoch,
+                    *end_of_epoch,
+                )
                 .expect("Failed to create blob");
         }
 
@@ -413,7 +426,15 @@ mod tests {
         // Add first blob.
         let (index_map, blob_id, epoch) = create_test_blob_info(100, 199, "blob_1");
         state
-            .create_new_checkpoint_blob(100u64, 199u64, &index_map, blob_id, epoch, false)
+            .create_new_checkpoint_blob(
+                100u64,
+                199u64,
+                &index_map,
+                blob_id,
+                ObjectID::random(),
+                epoch,
+                false,
+            )
             .expect("Failed to create blob");
 
         let latest = state
@@ -424,7 +445,15 @@ mod tests {
         // Add second blob with higher checkpoints.
         let (index_map, blob_id, epoch) = create_test_blob_info(200, 299, "blob_2");
         state
-            .create_new_checkpoint_blob(200u64, 299u64, &index_map, blob_id, epoch, false)
+            .create_new_checkpoint_blob(
+                200u64,
+                299u64,
+                &index_map,
+                blob_id,
+                ObjectID::random(),
+                epoch,
+                false,
+            )
             .expect("Failed to create blob");
 
         let latest = state
@@ -435,7 +464,15 @@ mod tests {
         // Add third blob.
         let (index_map, blob_id, epoch) = create_test_blob_info(300, 399, "blob_3");
         state
-            .create_new_checkpoint_blob(300u64, 399u64, &index_map, blob_id, epoch, false)
+            .create_new_checkpoint_blob(
+                300u64,
+                399u64,
+                &index_map,
+                blob_id,
+                ObjectID::random(),
+                epoch,
+                false,
+            )
             .expect("Failed to create blob");
 
         let latest = state
@@ -453,14 +490,30 @@ mod tests {
         // Create blobs with gaps.
         let (index_map, blob_id, epoch) = create_test_blob_info(100, 199, "blob_1");
         state
-            .create_new_checkpoint_blob(100u64, 199u64, &index_map, blob_id, epoch, false)
+            .create_new_checkpoint_blob(
+                100u64,
+                199u64,
+                &index_map,
+                blob_id,
+                ObjectID::random(),
+                epoch,
+                false,
+            )
             .expect("Failed to create blob");
 
         // Gap from 200-299.
 
         let (index_map, blob_id, epoch) = create_test_blob_info(300, 399, "blob_2");
         state
-            .create_new_checkpoint_blob(300u64, 399u64, &index_map, blob_id, epoch, false)
+            .create_new_checkpoint_blob(
+                300u64,
+                399u64,
+                &index_map,
+                blob_id,
+                ObjectID::random(),
+                epoch,
+                false,
+            )
             .expect("Failed to create blob");
 
         // Test checkpoints in the gap.
@@ -488,7 +541,15 @@ mod tests {
         let epoch = 1000u32;
 
         state
-            .create_new_checkpoint_blob(500u64, 599u64, &empty_index_map, blob_id, epoch, false)
+            .create_new_checkpoint_blob(
+                500u64,
+                599u64,
+                &empty_index_map,
+                blob_id,
+                ObjectID::random(),
+                epoch,
+                false,
+            )
             .expect("Failed to create blob");
 
         // Should still be able to find the blob.
@@ -523,7 +584,15 @@ mod tests {
         let epoch = 1000u32;
 
         state
-            .create_new_checkpoint_blob(1000u64, 1002u64, &index_map, blob_id, epoch, false)
+            .create_new_checkpoint_blob(
+                1000u64,
+                1002u64,
+                &index_map,
+                blob_id,
+                ObjectID::random(),
+                epoch,
+                false,
+            )
             .expect("Failed to create blob");
 
         let blob_info = state
@@ -549,7 +618,15 @@ mod tests {
             let epoch = 1000u32;
 
             state
-                .create_new_checkpoint_blob(1000u64, 1000u64, &index_map, blob_id, epoch, false)
+                .create_new_checkpoint_blob(
+                    1000u64,
+                    1000u64,
+                    &index_map,
+                    blob_id,
+                    ObjectID::random(),
+                    epoch,
+                    false,
+                )
                 .expect("Failed to create blob");
         }
 
@@ -568,8 +645,15 @@ mod tests {
         let blob_id = BlobId::from_str("test_blob2").unwrap_or(BlobId::ZERO);
         let epoch = 2000u32;
 
-        let result =
-            state.create_new_checkpoint_blob(2000u64, 2000u64, &index_map, blob_id, epoch, false);
+        let result = state.create_new_checkpoint_blob(
+            2000u64,
+            2000u64,
+            &index_map,
+            blob_id,
+            ObjectID::random(),
+            epoch,
+            false,
+        );
 
         assert!(result.is_err());
         assert!(

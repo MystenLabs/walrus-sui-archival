@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Subcommand;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
+use walrus_sdk::ObjectID;
 
 use crate::archival_state::ArchivalState;
 
@@ -47,6 +48,9 @@ fn get_checkpoint_blob_info(state: &ArchivalState, checkpoint: u64) -> Result<()
             let index_position = checkpoint_seq - blob_info.start_checkpoint;
             println!("checkpoint blob info for checkpoint {}:", checkpoint);
             println!("  blob id: {}", String::from_utf8_lossy(&blob_info.blob_id));
+            let object_id =
+                ObjectID::from_bytes(&blob_info.object_id).expect("Failed to parse object ID");
+            println!("  object id: {}", object_id);
             println!("  index position: {}", index_position);
             println!(
                 "  offset in blob: {}",
@@ -106,16 +110,18 @@ fn list_blobs(state: &ArchivalState) -> Result<()> {
 
     println!("found {} blob(s) in the database:\n", blobs.len());
     println!(
-        "{:<70} {:<15} {:<15} {:<10} {:<15} {:<10}",
-        "Blob ID", "Start CP", "End CP", "EOE", "Expiry Epoch", "Entries"
+        "{:<70} {:<70} {:<15} {:<15} {:<10} {:<15} {:<10}",
+        "Blob ID", "Object ID", "Start CP", "End CP", "EOE", "Expiry Epoch", "Entries"
     );
-    println!("{}", "-".repeat(145));
+    println!("{}", "-".repeat(215));
 
     let mut total_entries = 0;
     let mut total_size = 0u64;
 
     for blob_info in &blobs {
         let blob_id = String::from_utf8_lossy(&blob_info.blob_id);
+        let object_id =
+            ObjectID::from_bytes(&blob_info.object_id).expect("Failed to parse object ID");
         let entries_count = blob_info.index_entries.len();
         let blob_size: u64 = blob_info.index_entries.iter().map(|e| e.length).sum();
 
@@ -123,8 +129,9 @@ fn list_blobs(state: &ArchivalState) -> Result<()> {
         total_size += blob_size;
 
         println!(
-            "{:<70} {:<15} {:<15} {:<10} {:<15} {:<10}",
+            "{:<70} {:<70} {:<15} {:<15} {:<10} {:<15} {:<10}",
             blob_id,
+            object_id,
             blob_info.start_checkpoint,
             blob_info.end_checkpoint,
             if blob_info.end_of_epoch { "Yes" } else { "No" },
