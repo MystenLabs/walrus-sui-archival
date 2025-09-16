@@ -33,7 +33,7 @@ enum Commands {
     /// Run the main archival process.
     Run {
         /// Path to configuration file.
-        #[arg(short, long, default_value = "config/testnet_config.yaml")]
+        #[arg(short, long, default_value = "config/testnet_local_config.yaml")]
         config: PathBuf,
     },
     /// Inspect the database.

@@ -1,29 +1,19 @@
 # Configuration for walrus-sui-archival.
-
-client_config_path: ./config/client_config.yaml
-
-# Total number of threads for the tokio runtime thread pool.
-thread_pool_size: 8
-
-# REST API server address.
-# Default: 0.0.0.0:9185
+client_config_path: /opt/walrus/config/wallet/client_config.yaml
+db_path: /opt/walrus/data/db
+thread_pool_size: 16
 rest_api_address: "0.0.0.0:9185"
-
-# Metrics server address.
-# Default: 0.0.0.0:9186
 metrics_address: "0.0.0.0:9186"
-
-# Configuration for the checkpoint downloader.
 checkpoint_downloader:
-  # Base URL for the S3 bucket containing checkpoints.
   bucket_base_url: "https://checkpoints.testnet.sui.io"
-
-  # Directory to store downloaded checkpoint data.
-  # If not specified, defaults to "downloaded_checkpoint_dir"
-  downloaded_checkpoint_dir: "downloaded_checkpoint_dir"
-
+  num_workers: 14
+  downloaded_checkpoint_dir: /opt/walrus/data/downloaded_checkpoints
+checkpoint_monitor:
+  max_accumulation_duration: 1h
+  max_accumulation_size_bytes: 3GB
 checkpoint_blob_publisher:
-  store_epoch_length: 1
-
+  store_epoch_length: 2
+  checkpoint_blobs_dir: /opt/walrus/data/checkpoint_blobs
 checkpoint_blob_extender:
-  check_interval: 60s
+  check_interval: 3600s
+  extend_epoch_length: 2

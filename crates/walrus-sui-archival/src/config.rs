@@ -153,11 +153,6 @@ pub struct CheckpointBlobPublisherConfig {
     #[serde(default = "default_checkpoint_blobs_dir")]
     pub checkpoint_blobs_dir: PathBuf,
 
-    /// Number of shards for Walrus blob encoding.
-    /// Default: 1000.
-    #[serde(default = "default_n_shards")]
-    pub n_shards: u16,
-
     /// Number of epochs to store in the database.
     #[serde(default = "default_store_epoch_length")]
     pub store_epoch_length: EpochCount,
@@ -175,7 +170,6 @@ impl Default for CheckpointBlobPublisherConfig {
     fn default() -> Self {
         Self {
             checkpoint_blobs_dir: default_checkpoint_blobs_dir(),
-            n_shards: default_n_shards(),
             store_epoch_length: default_store_epoch_length(),
             min_retry_duration: default_min_retry_duration(),
             max_retry_duration: default_max_retry_duration(),
@@ -185,10 +179,6 @@ impl Default for CheckpointBlobPublisherConfig {
 
 fn default_checkpoint_blobs_dir() -> PathBuf {
     ["./", "checkpoint_blobs"].iter().collect()
-}
-
-fn default_n_shards() -> u16 {
-    1000
 }
 
 fn default_store_epoch_length() -> EpochCount {

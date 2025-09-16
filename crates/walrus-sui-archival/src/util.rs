@@ -40,13 +40,6 @@ macro_rules! bin_version {
 #[macro_export]
 macro_rules! git_revision {
     () => {
-        const _ASSERT_IS_BINARY: () = {
-            env!(
-                "CARGO_BIN_NAME",
-                "`bin_version!()` must be used from a binary"
-            );
-        };
-
         /// The Git revision obtained through `git describe` at compile time.
         const GIT_REVISION: &str = {
             if let Some(revision) = option_env!("GIT_REVISION") {

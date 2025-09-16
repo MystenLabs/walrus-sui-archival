@@ -13,7 +13,7 @@ Archives Sui checkpoints by downloading them from S3, bundling into compressed b
 cargo build --release
 
 # Run archival service
-cargo run -- run --config config/testnet_config.yaml
+cargo run -- run --config config/testnet_local_config.yaml
 
 # Query archived data via REST API (default port 8080)
 curl http://localhost:8080/checkpoints/12345
@@ -54,4 +54,4 @@ docker run -v /path/to/config:/config walrus-sui-archival:latest run --config /c
 
 ## Configuration
 
-See `config/testnet_config.yaml` for example configuration.
+See `config/testnet_local_config.yaml` for example configuration.
