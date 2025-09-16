@@ -21,3 +21,9 @@ checkpoint_downloader:
   # Directory to store downloaded checkpoint data.
   # If not specified, defaults to "downloaded_checkpoint_dir"
   downloaded_checkpoint_dir: "downloaded_checkpoint_dir"
+
+checkpoint_blob_publisher:
+  store_epoch_length: 1
+
+checkpoint_blob_extender:
+  check_interval: 60s

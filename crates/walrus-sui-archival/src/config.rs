@@ -44,6 +44,10 @@ pub struct Config {
     /// Metrics server address.
     #[serde(default = "default_metrics_address")]
     pub metrics_address: SocketAddr,
+
+    /// Configuration for the checkpoint blob extender.
+    #[serde(default)]
+    pub checkpoint_blob_extender: CheckpointBlobExtenderConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -205,4 +209,56 @@ fn default_rest_api_address() -> SocketAddr {
 
 fn default_metrics_address() -> SocketAddr {
     "0.0.0.0:9186".parse().unwrap()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointBlobExtenderConfig {
+    /// Number of epochs to extend blobs by.
+    #[serde(default = "default_extend_epoch_length")]
+    pub extend_epoch_length: EpochCount,
+
+    /// Minimum retry duration for transaction submission.
+    #[serde(
+        default = "default_min_transaction_retry_duration",
+        with = "humantime_serde"
+    )]
+    pub min_transaction_retry_duration: Duration,
+
+    /// Maximum retry duration for transaction submission.
+    #[serde(
+        default = "default_max_transaction_retry_duration",
+        with = "humantime_serde"
+    )]
+    pub max_transaction_retry_duration: Duration,
+
+    /// Interval to check for blobs to extend.
+    #[serde(default = "default_check_interval", with = "humantime_serde")]
+    pub check_interval: Duration,
+}
+
+impl Default for CheckpointBlobExtenderConfig {
+    fn default() -> Self {
+        Self {
+            extend_epoch_length: default_extend_epoch_length(),
+            min_transaction_retry_duration: default_min_transaction_retry_duration(),
+            max_transaction_retry_duration: default_max_transaction_retry_duration(),
+            check_interval: default_check_interval(),
+        }
+    }
+}
+
+fn default_extend_epoch_length() -> EpochCount {
+    5
+}
+
+fn default_min_transaction_retry_duration() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_max_transaction_retry_duration() -> Duration {
+    Duration::from_secs(120)
+}
+
+fn default_check_interval() -> Duration {
+    Duration::from_secs(30 * 60)
 }

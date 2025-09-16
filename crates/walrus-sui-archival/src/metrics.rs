@@ -44,6 +44,14 @@ pub struct Metrics {
     pub latest_cleaned_checkpoint: IntGauge,
     /// Total local blobs removed.
     pub local_blobs_removed: IntCounter,
+
+    // Blob extension metrics.
+    /// Total blob extensions attempted.
+    pub blob_extensions_attempted: IntCounter,
+    /// Total blob extensions succeeded.
+    pub blob_extensions_succeeded: IntCounter,
+    /// Total blob extensions failed.
+    pub blob_extensions_failed: IntCounter,
 }
 
 impl Metrics {
@@ -142,6 +150,23 @@ impl Metrics {
             IntCounter::new("local_blobs_removed", "Total local blobs removed")
                 .expect("metrics defined at compile time must be valid");
 
+        // Blob extension metrics.
+        let blob_extensions_attempted = IntCounter::new(
+            "blob_extensions_attempted",
+            "Total blob extensions attempted",
+        )
+        .expect("metrics defined at compile time must be valid");
+
+        let blob_extensions_succeeded = IntCounter::new(
+            "blob_extensions_succeeded",
+            "Total blob extensions succeeded",
+        )
+        .expect("metrics defined at compile time must be valid");
+
+        let blob_extensions_failed =
+            IntCounter::new("blob_extensions_failed", "Total blob extensions failed")
+                .expect("metrics defined at compile time must be valid");
+
         // Register all metrics.
         registry
             .register(Box::new(total_downloaded_checkpoints.clone()))
@@ -194,6 +219,15 @@ impl Metrics {
         registry
             .register(Box::new(local_blobs_removed.clone()))
             .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(blob_extensions_attempted.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(blob_extensions_succeeded.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(blob_extensions_failed.clone()))
+            .expect("metrics defined at compile time must be valid");
 
         Self {
             total_downloaded_checkpoints,
@@ -213,6 +247,9 @@ impl Metrics {
             checkpoints_cleaned,
             latest_cleaned_checkpoint,
             local_blobs_removed,
+            blob_extensions_attempted,
+            blob_extensions_succeeded,
+            blob_extensions_failed,
         }
     }
 }

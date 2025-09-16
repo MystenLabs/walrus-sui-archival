@@ -106,7 +106,7 @@ impl ArchivalState {
         let blob_info = CheckpointBlobInfo {
             version: CHECKPOINT_BLOB_INFO_VERSION,
             blob_id: blob_id.to_string().into_bytes(),
-            object_id: object_id.to_string().into_bytes(),
+            object_id: object_id.to_vec(),
             start_checkpoint,
             end_checkpoint,
             end_of_epoch,
@@ -224,6 +224,75 @@ impl ArchivalState {
         }
 
         Ok(blobs)
+    }
+
+    /// Update the expiration epoch of an existing blob.
+    pub fn update_blob_expiration_epoch(
+        &self,
+        start_checkpoint: CheckpointSequenceNumber,
+        blob_id: &BlobId,
+        object_id: &ObjectID,
+        new_expiration_epoch: Epoch,
+    ) -> Result<()> {
+        if self.read_only {
+            return Err(anyhow::anyhow!(
+                "cannot update blob expiration epoch in read-only mode"
+            ));
+        }
+
+        let cf = self
+            .db
+            .cf_handle(CF_CHECKPOINT_BLOB_INFO)
+            .expect("column family must exist");
+
+        // Use start_checkpoint as key for point read.
+        let key = be_fix_int_ser(&start_checkpoint)?;
+
+        // Get the blob info for this start_checkpoint.
+        let value = self.db.get_cf(&cf, &key)?.ok_or_else(|| {
+            anyhow::anyhow!("no blob found with start_checkpoint {}", start_checkpoint)
+        })?;
+
+        let mut blob_info = CheckpointBlobInfo::decode(value.as_ref())?;
+
+        // Verify blob_id matches.
+        let stored_blob_id_str = String::from_utf8_lossy(&blob_info.blob_id);
+        if stored_blob_id_str != blob_id.to_string() {
+            return Err(anyhow::anyhow!(
+                "blob_id mismatch: expected {}, found {}",
+                blob_id,
+                stored_blob_id_str
+            ));
+        }
+
+        // Verify object_id matches.
+        let stored_object_id = ObjectID::from_bytes(&blob_info.object_id)
+            .map_err(|e| anyhow::anyhow!("failed to parse object ID: {}", e))?;
+        if stored_object_id != *object_id {
+            return Err(anyhow::anyhow!(
+                "object_id mismatch: expected {}, found {}",
+                object_id,
+                stored_object_id
+            ));
+        }
+
+        // Update the expiration epoch.
+        let old_epoch = blob_info.blob_expiration_epoch;
+        blob_info.blob_expiration_epoch = new_expiration_epoch;
+
+        // Serialize and store the updated blob info.
+        let updated_blob_info_bytes = blob_info.encode_to_vec();
+        self.db.put_cf(&cf, key, updated_blob_info_bytes)?;
+
+        tracing::info!(
+            "updated blob expiration epoch for start_checkpoint {} (object {}) from epoch {} to epoch {}",
+            start_checkpoint,
+            object_id,
+            old_epoch,
+            new_expiration_epoch
+        );
+
+        Ok(())
     }
 }
 
@@ -662,5 +731,242 @@ mod tests {
                 .to_string()
                 .contains("cannot create checkpoint blob in read-only mode")
         );
+    }
+
+    #[test]
+    fn test_update_blob_expiration_epoch() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+
+        // Create a blob first.
+        let start_checkpoint = 100u64;
+        let end_checkpoint = 199u64;
+        let (index_map, blob_id, initial_epoch) = create_test_blob_info(100, 199, "test_blob_1");
+        let object_id = ObjectID::random();
+
+        // Store the blob info.
+        state
+            .create_new_checkpoint_blob(
+                start_checkpoint,
+                end_checkpoint,
+                &index_map,
+                blob_id,
+                object_id,
+                initial_epoch,
+                false,
+            )
+            .expect("Failed to create blob");
+
+        // Verify initial expiration epoch.
+        let blob_info = state
+            .get_checkpoint_blob_info(150u64)
+            .expect("Should find blob");
+        assert_eq!(blob_info.blob_expiration_epoch, initial_epoch);
+
+        // Update the expiration epoch.
+        let new_epoch = 2000u32;
+        state
+            .update_blob_expiration_epoch(start_checkpoint, &blob_id, &object_id, new_epoch)
+            .expect("Should successfully update expiration epoch");
+
+        // Verify the epoch was updated.
+        let updated_blob_info = state
+            .get_checkpoint_blob_info(150u64)
+            .expect("Should find blob");
+        assert_eq!(updated_blob_info.blob_expiration_epoch, new_epoch);
+
+        // Verify other fields remain unchanged.
+        assert_eq!(updated_blob_info.start_checkpoint, start_checkpoint);
+        assert_eq!(updated_blob_info.end_checkpoint, end_checkpoint);
+        assert_eq!(updated_blob_info.index_entries.len(), 100);
+        assert!(!updated_blob_info.end_of_epoch);
+    }
+
+    #[test]
+    fn test_update_blob_expiration_epoch_wrong_blob_id() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+
+        // Create a blob with BlobId::ZERO.
+        let start_checkpoint = 100u64;
+        let blob_id = BlobId::ZERO;
+        let mut index_map = Vec::new();
+        for checkpoint_num in 100..=199 {
+            let id = format!("{}", checkpoint_num);
+            index_map.push((id, ((checkpoint_num - 100) * 1000, 1000)));
+        }
+        let epoch = 1000u32;
+        let object_id = ObjectID::random();
+
+        state
+            .create_new_checkpoint_blob(
+                start_checkpoint,
+                199u64,
+                &index_map,
+                blob_id,
+                object_id,
+                epoch,
+                false,
+            )
+            .expect("Failed to create blob");
+
+        // Try to update with wrong blob_id - create from different bytes.
+        let wrong_blob_bytes = [1u8; 32];
+        let wrong_blob_id = BlobId(wrong_blob_bytes);
+
+        // Ensure they're actually different.
+        assert_ne!(blob_id, wrong_blob_id, "Blob IDs should be different");
+
+        let result =
+            state.update_blob_expiration_epoch(start_checkpoint, &wrong_blob_id, &object_id, 2000);
+
+        assert!(
+            result.is_err(),
+            "Expected error for wrong blob_id, but got Ok"
+        );
+        assert!(result.unwrap_err().to_string().contains("blob_id mismatch"));
+    }
+
+    #[test]
+    fn test_update_blob_expiration_epoch_wrong_object_id() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+
+        // Create a blob.
+        let start_checkpoint = 100u64;
+        let (index_map, blob_id, epoch) = create_test_blob_info(100, 199, "test_blob_1");
+        let object_id = ObjectID::random();
+
+        state
+            .create_new_checkpoint_blob(
+                start_checkpoint,
+                199u64,
+                &index_map,
+                blob_id,
+                object_id,
+                epoch,
+                false,
+            )
+            .expect("Failed to create blob");
+
+        // Try to update with wrong object_id.
+        let wrong_object_id = ObjectID::random();
+        let result =
+            state.update_blob_expiration_epoch(start_checkpoint, &blob_id, &wrong_object_id, 2000);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("object_id mismatch")
+        );
+    }
+
+    #[test]
+    fn test_update_blob_expiration_epoch_nonexistent_checkpoint() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+
+        // Try to update a non-existent blob.
+        let blob_id = BlobId::from_str("test_blob").unwrap_or(BlobId::ZERO);
+        let object_id = ObjectID::random();
+        let result = state.update_blob_expiration_epoch(999u64, &blob_id, &object_id, 2000);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no blob found with start_checkpoint 999")
+        );
+    }
+
+    #[test]
+    fn test_update_blob_expiration_epoch_read_only_mode() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+
+        // First create a blob in read-write mode.
+        {
+            let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+            let (index_map, blob_id, epoch) = create_test_blob_info(100, 199, "test_blob");
+            let object_id = ObjectID::random();
+
+            state
+                .create_new_checkpoint_blob(
+                    100u64, 199u64, &index_map, blob_id, object_id, epoch, false,
+                )
+                .expect("Failed to create blob");
+        }
+
+        // Now open in read-only mode and try to update.
+        let state =
+            ArchivalState::open(&db_path, true).expect("Failed to open database in read-only mode");
+        let blob_id = BlobId::from_str("test_blob").unwrap_or(BlobId::ZERO);
+        let object_id = ObjectID::random();
+
+        let result = state.update_blob_expiration_epoch(100u64, &blob_id, &object_id, 2000);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot update blob expiration epoch in read-only mode")
+        );
+    }
+
+    #[test]
+    fn test_update_multiple_blobs_expiration_epochs() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+
+        // Create multiple blobs.
+        let blobs = vec![
+            (100u64, 199u64, "blob_1", ObjectID::random(), 1000u32),
+            (200u64, 299u64, "blob_2", ObjectID::random(), 1100u32),
+            (300u64, 399u64, "blob_3", ObjectID::random(), 1200u32),
+        ];
+
+        // Create all blobs.
+        for (start, end, blob_id_str, object_id, epoch) in &blobs {
+            let (index_map, blob_id, _) = create_test_blob_info(*start, *end, blob_id_str);
+            state
+                .create_new_checkpoint_blob(
+                    *start, *end, &index_map, blob_id, *object_id, *epoch, false,
+                )
+                .expect("Failed to create blob");
+        }
+
+        // Update each blob's expiration epoch.
+        for (start, _, blob_id_str, object_id, old_epoch) in &blobs {
+            let blob_id = BlobId::from_str(blob_id_str).unwrap_or(BlobId::ZERO);
+            let new_epoch = old_epoch + 500;
+
+            state
+                .update_blob_expiration_epoch(*start, &blob_id, object_id, new_epoch)
+                .expect("Should successfully update expiration epoch");
+
+            // Verify the update.
+            let blob_info = state
+                .get_checkpoint_blob_info(*start)
+                .expect("Should find blob");
+            assert_eq!(blob_info.blob_expiration_epoch, new_epoch);
+        }
+
+        // Verify all blobs have been updated correctly.
+        let all_blobs = state.list_all_blobs().expect("Should list all blobs");
+        assert_eq!(all_blobs.len(), 3);
+
+        for (i, blob_info) in all_blobs.iter().enumerate() {
+            let expected_new_epoch = blobs[i].4 + 500;
+            assert_eq!(blob_info.blob_expiration_epoch, expected_new_epoch);
+        }
     }
 }

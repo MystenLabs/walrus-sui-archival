@@ -11,6 +11,7 @@ use walrus_sdk::{client::WalrusNodeClient, config::ClientConfig, sui::client::Su
 
 use crate::{
     archival_state::ArchivalState,
+    checkpoint_blob_extender::CheckpointBlobExtender,
     checkpoint_blob_publisher::{self, BlobBuildRequest},
     checkpoint_downloader,
     checkpoint_monitor,
@@ -128,6 +129,15 @@ async fn run_application_logic(config: Config) -> Result<()> {
     );
     let rest_api_handle = tokio::spawn(async move { rest_api_server.start().await });
 
+    // Start the checkpoint blob extender.
+    let blob_extender = CheckpointBlobExtender::new(
+        archival_state.clone(),
+        walrus_client.clone(),
+        config.checkpoint_blob_extender.clone(),
+        metrics.clone(),
+    );
+    let blob_extender_handle = tokio::spawn(async move { blob_extender.start().await });
+
     select! {
         checkpoint_downloading_driver_result = checkpoint_downloading_driver_handle => {
             tracing::info!("checkpoint downloading driver stopped: {:?}", checkpoint_downloading_driver_result);
@@ -155,6 +165,13 @@ async fn run_application_logic(config: Config) -> Result<()> {
             if let Err(e) = rest_api_result {
                 tracing::error!("REST API server failed: {}", e);
                 return Err(anyhow::anyhow!("REST API server failed: {}", e));
+            }
+        }
+        blob_extender_result = blob_extender_handle => {
+            tracing::info!("checkpoint blob extender stopped: {:?}", blob_extender_result);
+            if let Err(e) = blob_extender_result {
+                tracing::error!("checkpoint blob extender failed: {}", e);
+                return Err(anyhow::anyhow!("checkpoint blob extender failed: {}", e));
             }
         }
     }
