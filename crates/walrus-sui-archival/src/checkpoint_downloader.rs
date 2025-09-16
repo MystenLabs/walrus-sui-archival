@@ -343,7 +343,7 @@ impl CheckpointDownloader {
             current_checkpoint += 1;
 
             // TODO(zhe): reduce when final prod.
-            time::sleep(time::Duration::from_millis(100)).await;
+            // time::sleep(time::Duration::from_millis(100)).await;
         }
 
         Ok(())
