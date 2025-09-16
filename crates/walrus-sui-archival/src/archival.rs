@@ -35,11 +35,6 @@ async fn run_application_logic(config: Config) -> Result<()> {
 
     let registry_service = mysten_metrics::start_prometheus_server(config.metrics_address);
     let registry = registry_service.default_registry();
-    let (_telemetry_guards, _tracing_handle) = telemetry_subscribers::TelemetryConfig::new()
-        .with_env()
-        .with_prom_registry(&registry)
-        .with_json()
-        .init();
 
     // Build version string with git commit hash at compile time.
     const GIT_VERSION: &str =

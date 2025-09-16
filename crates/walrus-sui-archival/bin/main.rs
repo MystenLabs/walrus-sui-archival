@@ -84,6 +84,13 @@ enum Commands {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Initialize telemetry for all commands to enable logging.
+    // If we need span latency, we need to add the prom_registry to the telemetry config.
+    let (_telemetry_guards, _tracing_handle) = telemetry_subscribers::TelemetryConfig::new()
+        .with_env()
+        .with_json()
+        .init();
+
     match args.command {
         Commands::Run { config } => {
             tracing::info!("starting walrus-sui-archival run command...");
