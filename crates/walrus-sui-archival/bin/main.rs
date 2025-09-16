@@ -54,7 +54,7 @@ enum Commands {
         #[arg(short, long, conflicts_with = "path")]
         blob_id: Option<String>,
         /// Path to client configuration file (required when using blob-id).
-        #[arg(short, long, default_value = "config/client_config.yaml")]
+        #[arg(short, long, default_value = "config/local_client_config.yaml")]
         client_config: Option<PathBuf>,
         /// Optional index to inspect a specific entry.
         #[arg(short, long)]
@@ -72,14 +72,14 @@ enum Commands {
     /// List all blobs owned by the wallet.
     ListOwnedBlobs {
         /// Path to client configuration file.
-        #[arg(short, long, default_value = "config/client_config.yaml")]
+        #[arg(short, long, default_value = "config/local_client_config.yaml")]
         client_config: PathBuf,
     },
     /// [DEV TOOL] Burn all blobs owned by the wallet (hidden from help).
     #[command(hide = true)]
     BurnAllBlobs {
         /// Path to client configuration file.
-        #[arg(short, long, default_value = "config/client_config.yaml")]
+        #[arg(short, long, default_value = "config/local_client_config.yaml")]
         client_config: PathBuf,
     },
 }
