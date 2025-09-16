@@ -19,6 +19,7 @@ bincode.workspace = true
 blob-bundle.workspace = true
 bytes.workspace = true
 clap.workspace = true
+const-str = "0.5"
 git-version = "0.3.9"
 humantime-serde.workspace = true
 mysten-metrics.workspace = true

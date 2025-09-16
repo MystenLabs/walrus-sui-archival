@@ -4,7 +4,6 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use git_version::git_version;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{select, sync::mpsc};
 use walrus_sdk::{client::WalrusNodeClient, config::ClientConfig, sui::client::SuiContractClient};
@@ -20,7 +19,7 @@ use crate::{
     rest_api::RestApiServer,
 };
 
-pub fn run_sui_archival(config: Config) -> Result<()> {
+pub fn run_sui_archival(config: Config, version: &'static str) -> Result<()> {
     tracing::info!("starting sui archival process...");
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -28,28 +27,17 @@ pub fn run_sui_archival(config: Config) -> Result<()> {
         .enable_all()
         .build()?;
 
-    runtime.block_on(async { run_application_logic(config).await })
+    runtime.block_on(async { run_application_logic(config, version).await })
 }
 
-async fn run_application_logic(config: Config) -> Result<()> {
+async fn run_application_logic(config: Config, version: &'static str) -> Result<()> {
     tracing::info!("starting application logic in multi-thread runtime");
 
     let registry_service = mysten_metrics::start_prometheus_server(config.metrics_address);
     let registry = registry_service.default_registry();
 
-    // Build version string with git commit hash at compile time.
-    const GIT_VERSION: &str = if let Some(revision) = option_env!("GIT_REVISION") {
-        revision
-    } else {
-        git_version!(args = ["--always", "--abbrev=12", "--dirty", "--exclude", "*"])
-    };
-    const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
-
     let registry_clone = registry.clone();
     tokio::spawn(async move {
-        // Use a static string that combines package version with git commit.
-        let version = Box::leak(format!("{}-{}", PKG_VERSION, GIT_VERSION).into_boxed_str());
-
         registry_clone
             .register(mysten_metrics::uptime_metric(
                 "walrus-sui-archival",

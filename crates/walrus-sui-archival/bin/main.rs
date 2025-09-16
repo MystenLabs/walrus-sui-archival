@@ -14,6 +14,9 @@ use walrus_sui_archival::{
     list_blobs::list_owned_blobs,
 };
 
+// Define version constants.
+walrus_sui_archival::bin_version!();
+
 #[derive(Parser, Debug)]
 #[command(name = "walrus-sui-archival")]
 #[command(author, version, about, long_about = None)]
@@ -95,7 +98,7 @@ fn main() -> Result<()> {
         Commands::Run { config } => {
             tracing::info!("starting walrus-sui-archival run command...");
             let config = Config::from_file(&config)?;
-            run_sui_archival(config)?;
+            run_sui_archival(config, VERSION)?;
         }
         Commands::InspectDb { db_path, command } => {
             tracing::info!("starting database inspection...");

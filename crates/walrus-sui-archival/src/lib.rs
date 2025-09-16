@@ -14,3 +14,7 @@ pub mod inspect_db;
 pub mod list_blobs;
 pub mod metrics;
 pub mod rest_api;
+pub mod util;
+
+// Re-export the hidden module for macros.
+pub use util::_hidden;
