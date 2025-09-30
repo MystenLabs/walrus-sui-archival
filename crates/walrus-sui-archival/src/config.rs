@@ -198,7 +198,7 @@ fn default_rest_api_address() -> SocketAddr {
 }
 
 fn default_metrics_address() -> SocketAddr {
-    "0.0.0.0:9186".parse().unwrap()
+    "0.0.0.0:9184".parse().unwrap()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

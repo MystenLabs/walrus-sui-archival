@@ -10,8 +10,8 @@ thread_pool_size: 8
 rest_api_address: "0.0.0.0:9185"
 
 # Metrics server address.
-# Default: 0.0.0.0:9186
-metrics_address: "0.0.0.0:9186"
+# Default: 0.0.0.0:9184
+metrics_address: "0.0.0.0:9184"
 
 # Configuration for the checkpoint downloader.
 checkpoint_downloader:
