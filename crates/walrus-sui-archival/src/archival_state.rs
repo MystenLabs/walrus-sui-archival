@@ -205,6 +205,19 @@ impl ArchivalState {
         }
     }
 
+    /// Count the number of checkpoint blob records in the database.
+    pub fn count_checkpoint_blobs(&self) -> Result<usize> {
+        let cf = self
+            .db
+            .cf_handle(CF_CHECKPOINT_BLOB_INFO)
+            .expect("column family must exist");
+
+        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
+        let count = iter.count();
+
+        Ok(count)
+    }
+
     /// List all checkpoint blobs in the database.
     pub fn list_all_blobs(&self) -> Result<Vec<CheckpointBlobInfo>> {
         let cf = self
@@ -223,6 +236,35 @@ impl ArchivalState {
         }
 
         Ok(blobs)
+    }
+
+    /// Populate the database from a list of checkpoint blob info records.
+    /// This is typically used to restore from a metadata blob snapshot.
+    pub fn populate_from_checkpoint_blob_infos(
+        &self,
+        blob_infos: Vec<CheckpointBlobInfo>,
+    ) -> Result<()> {
+        if self.read_only {
+            return Err(anyhow::anyhow!(
+                "cannot populate database in read-only mode"
+            ));
+        }
+
+        tracing::info!("populating database with {} checkpoint blob records", blob_infos.len());
+
+        let cf = self
+            .db
+            .cf_handle(CF_CHECKPOINT_BLOB_INFO)
+            .expect("column family must exist");
+
+        for blob_info in blob_infos {
+            let key = blob_info.start_checkpoint.to_be_bytes();
+            let value = blob_info.encode_to_vec();
+            self.db.put_cf(&cf, key, value)?;
+        }
+
+        tracing::info!("database population completed successfully");
+        Ok(())
     }
 
     /// Get the database handle for direct access.

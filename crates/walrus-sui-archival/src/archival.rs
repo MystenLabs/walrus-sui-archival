@@ -65,6 +65,34 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         config.db_path
     );
 
+    // Check if the database is empty and populate from metadata blob if needed.
+    let record_count = archival_state.count_checkpoint_blobs()?;
+    tracing::info!("database contains {} checkpoint blob records", record_count);
+
+    if record_count == 0 {
+        tracing::info!("database is empty, attempting to populate from metadata blob");
+
+        match crate::util::load_checkpoint_blob_infos_from_metadata(
+            &config.client_config_path,
+            config.archival_state_snapshot.metadata_pointer_object_id,
+            &config.context,
+        )
+        .await
+        {
+            Ok(blob_infos) => {
+                tracing::info!("loaded {} records from metadata blob", blob_infos.len());
+                archival_state.populate_from_checkpoint_blob_infos(blob_infos)?;
+                tracing::info!("database populated successfully");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "failed to load metadata blob, starting with empty database: {}",
+                    e
+                );
+            }
+        }
+    }
+
     let (client_config, _) =
         ClientConfig::load_from_multi_config(config.client_config_path, Some(&config.context))?;
 

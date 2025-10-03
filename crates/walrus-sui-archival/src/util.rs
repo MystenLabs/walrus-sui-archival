@@ -237,6 +237,105 @@ pub async fn fetch_metadata_blob_id(
     ))
 }
 
+/// Load checkpoint blob info records from a metadata blob stored in Walrus.
+///
+/// This function fetches the metadata blob ID from the on-chain pointer,
+/// downloads the parquet file from Walrus, parses it, and returns all
+/// CheckpointBlobInfo records.
+pub async fn load_checkpoint_blob_infos_from_metadata(
+    client_config_path: impl AsRef<Path>,
+    metadata_pointer_object_id: SuiObjectID,
+    context: &str,
+) -> Result<Vec<crate::archival_state::proto::CheckpointBlobInfo>> {
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+    use prost::Message;
+    use walrus_core::encoding::Primary;
+
+    tracing::info!("loading checkpoint blob infos from metadata blob");
+
+    // Fetch the blob ID from the on-chain metadata pointer.
+    let blob_id_opt =
+        fetch_metadata_blob_id(client_config_path.as_ref(), metadata_pointer_object_id, context)
+            .await?;
+
+    let blob_id = match blob_id_opt {
+        Some(id) => {
+            tracing::info!("found metadata blob ID: {}", id);
+            id
+        }
+        None => {
+            return Err(anyhow::anyhow!(
+                "no metadata blob ID found in the on-chain pointer"
+            ));
+        }
+    };
+
+    // Initialize Walrus read client to fetch the blob.
+    let (client_config, _) =
+        ClientConfig::load_from_multi_config(client_config_path.as_ref(), Some(context))?;
+    let sui_client = client_config
+        .new_contract_client_with_wallet_in_config(None)
+        .await?;
+    let read_client = sui_client.read_client().clone();
+    let walrus_read_client =
+        WalrusNodeClient::new_read_client_with_refresher(client_config, read_client).await?;
+
+    // Download the blob from Walrus.
+    tracing::info!("downloading metadata blob from walrus...");
+    let blob_data = walrus_read_client.read_blob::<Primary>(&blob_id).await?;
+    tracing::info!("downloaded {} bytes from walrus", blob_data.len());
+
+    // Write blob data to a temporary file for parquet parsing.
+    let temp_file = std::env::temp_dir().join(format!("metadata_blob_{}.parquet", blob_id));
+    std::fs::write(&temp_file, &blob_data)?;
+
+    // Parse the parquet file.
+    tracing::info!("parsing parquet file...");
+    let file = std::fs::File::open(&temp_file)?;
+    let reader = SerializedFileReader::new(file)?;
+
+    let metadata = reader.metadata();
+    tracing::info!("parquet file has {} row groups", metadata.num_row_groups());
+
+    let mut checkpoint_blob_infos = Vec::new();
+
+    // Iterate through all row groups.
+    for i in 0..metadata.num_row_groups() {
+        let row_group_reader = reader.get_row_group(i)?;
+        let num_rows = row_group_reader.metadata().num_rows() as usize;
+
+        // Get the column reader for checkpoint_blob_info.
+        let mut column_reader = row_group_reader.get_column_reader(0)?;
+
+        if let parquet::column::reader::ColumnReader::ByteArrayColumnReader(ref mut reader) =
+            column_reader
+        {
+            let mut values = Vec::with_capacity(num_rows);
+            let mut def_levels = Vec::with_capacity(num_rows);
+
+            let (num_read, _, _) = reader.read_records(num_rows, Some(&mut def_levels), None, &mut values)?;
+
+            tracing::info!("read {} records from row group {}", num_read, i);
+
+            for value in values.iter() {
+                let checkpoint_blob_info =
+                    crate::archival_state::proto::CheckpointBlobInfo::decode(value.data())?;
+                checkpoint_blob_infos.push(checkpoint_blob_info);
+            }
+        }
+    }
+
+    // Clean up temporary file.
+    std::fs::remove_file(&temp_file)?;
+
+    tracing::info!(
+        "loaded {} checkpoint blob info records from metadata blob",
+        checkpoint_blob_infos.len()
+    );
+
+    Ok(checkpoint_blob_infos)
+}
+
 pub async fn initialize_walrus_client(
     client_config: ClientConfig,
 ) -> Result<WalrusNodeClient<SuiContractClient>> {
