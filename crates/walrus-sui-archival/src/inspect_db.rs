@@ -24,14 +24,14 @@ pub enum InspectDbCommand {
 }
 
 /// Execute the inspect database command.
-pub fn execute_inspect_db(db_path: PathBuf, command: InspectDbCommand) -> Result<()> {
+pub async fn execute_inspect_db(db_path: PathBuf, command: InspectDbCommand) -> Result<()> {
     // Open the archival state database.
     let state = ArchivalState::open(&db_path, true)?;
     tracing::info!("opened archival database at {}", db_path.display());
 
     match command {
         InspectDbCommand::GetCheckpointBlobInfo { checkpoint } => {
-            get_checkpoint_blob_info(&state, checkpoint)
+            get_checkpoint_blob_info(&state, checkpoint).await
         }
         InspectDbCommand::GetLatestCheckpoint => get_latest_checkpoint(&state),
         InspectDbCommand::ListBlobs => list_blobs(&state),
@@ -39,10 +39,10 @@ pub fn execute_inspect_db(db_path: PathBuf, command: InspectDbCommand) -> Result
 }
 
 /// Get and display checkpoint blob info for a specific checkpoint.
-fn get_checkpoint_blob_info(state: &ArchivalState, checkpoint: u64) -> Result<()> {
+async fn get_checkpoint_blob_info(state: &ArchivalState, checkpoint: u64) -> Result<()> {
     let checkpoint_seq = CheckpointSequenceNumber::from(checkpoint);
 
-    match state.get_checkpoint_blob_info(checkpoint_seq) {
+    match state.get_checkpoint_blob_info(checkpoint_seq).await {
         Ok(blob_info) => {
             let index_position = checkpoint_seq - blob_info.start_checkpoint;
             println!("checkpoint blob info for checkpoint {}:", checkpoint);

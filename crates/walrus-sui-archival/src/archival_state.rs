@@ -5,10 +5,13 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use bincode::Options;
+use blob_bundle::BlobBundleReader;
+use bytes::Bytes;
 use prost::Message;
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksOptions};
 use sui_types::{base_types::ObjectID, messages_checkpoint::CheckpointSequenceNumber};
-use walrus_core::{BlobId, Epoch};
+use walrus_core::{BlobId, Epoch, encoding::Primary};
+use walrus_sdk::{SuiReadClient, client::WalrusNodeClient};
 
 // Include the generated protobuf code.
 pub mod proto {
@@ -27,6 +30,7 @@ const CHECKPOINT_BLOB_INFO_VERSION: u32 = 1;
 pub struct ArchivalState {
     db: Arc<DB>,
     read_only: bool,
+    walrus_read_client: Option<Arc<WalrusNodeClient<SuiReadClient>>>,
 }
 
 impl ArchivalState {
@@ -66,7 +70,13 @@ impl ArchivalState {
         Ok(Self {
             db: Arc::new(db),
             read_only,
+            walrus_read_client: None,
         })
+    }
+
+    /// Set the Walrus read client for fetching blob data.
+    pub fn set_walrus_read_client(&mut self, client: Arc<WalrusNodeClient<SuiReadClient>>) {
+        self.walrus_read_client = Some(client);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -133,48 +143,154 @@ impl ArchivalState {
     ///
     /// This function searches for a blob where start_checkpoint <= checkpoint <= end_checkpoint.
     /// Returns an error if no blob contains the requested checkpoint.
-    pub fn get_checkpoint_blob_info(
+    pub async fn get_checkpoint_blob_info(
         &self,
         checkpoint: CheckpointSequenceNumber,
     ) -> Result<CheckpointBlobInfo> {
-        let cf = self
-            .db
-            .cf_handle(CF_CHECKPOINT_BLOB_INFO)
-            .expect("column family must exist");
+        // First, find the blob_info synchronously without holding cf across await.
+        let (start_checkpoint, mut blob_info) = {
+            let cf = self
+                .db
+                .cf_handle(CF_CHECKPOINT_BLOB_INFO)
+                .expect("column family must exist");
 
-        // Create an iterator and seek to the position at or before the target checkpoint.
-        let seek_key = be_fix_int_ser(&checkpoint)?;
-        let iter = self.db.iterator_cf(
-            &cf,
-            rocksdb::IteratorMode::From(&seek_key, rocksdb::Direction::Reverse),
-        );
+            // Create an iterator and seek to the position at or before the target checkpoint.
+            let seek_key = be_fix_int_ser(&checkpoint)?;
+            let iter = self.db.iterator_cf(
+                &cf,
+                rocksdb::IteratorMode::From(&seek_key, rocksdb::Direction::Reverse),
+            );
 
-        // Iterate backwards to find a blob that might contain this checkpoint.
-        for item in iter {
-            let (key_bytes, value_bytes) = item?;
+            let mut found: Option<(CheckpointSequenceNumber, CheckpointBlobInfo)> = None;
 
-            // Deserialize the key to get the start checkpoint.
-            let start_checkpoint: CheckpointSequenceNumber = be_fix_int_deser(&key_bytes)?;
+            // Iterate backwards to find a blob that might contain this checkpoint.
+            for item in iter {
+                let (key_bytes, value_bytes) = item?;
 
-            // Deserialize the blob info.
-            let blob_info = CheckpointBlobInfo::decode(value_bytes.as_ref())?;
+                // Deserialize the key to get the start checkpoint.
+                let start_checkpoint: CheckpointSequenceNumber = be_fix_int_deser(&key_bytes)?;
 
-            // Check if this blob contains our checkpoint.
-            // The blob contains checkpoints from start_checkpoint to end_checkpoint (inclusive).
-            if start_checkpoint <= checkpoint && checkpoint <= blob_info.end_checkpoint {
-                return Ok(blob_info);
+                // Deserialize the blob info.
+                let blob_info = CheckpointBlobInfo::decode(value_bytes.as_ref())?;
+
+                // Check if this blob contains our checkpoint.
+                // The blob contains checkpoints from start_checkpoint to end_checkpoint (inclusive).
+                if start_checkpoint <= checkpoint && checkpoint <= blob_info.end_checkpoint {
+                    found = Some((start_checkpoint, blob_info));
+                    break;
+                }
+
+                // If we've gone past where the checkpoint could be, stop searching.
+                if blob_info.end_checkpoint < checkpoint {
+                    break;
+                }
             }
 
-            // If we've gone past where the checkpoint could be, stop searching.
-            if blob_info.end_checkpoint < checkpoint {
-                break;
-            }
+            found.ok_or_else(|| {
+                anyhow::anyhow!("no blob found containing checkpoint {}", checkpoint)
+            })?
+        };
+
+        // Now handle async operations outside the scope where cf was held.
+        // If index_entries is empty, fetch from Walrus blob.
+        if blob_info.index_entries.is_empty() {
+            tracing::info!(
+                "index entries empty for checkpoint {}, fetching from walrus blob",
+                checkpoint
+            );
+            blob_info = self
+                .fetch_and_populate_index_entries(start_checkpoint, blob_info)
+                .await?;
         }
 
-        Err(anyhow::anyhow!(
-            "no blob found containing checkpoint {}",
-            checkpoint
-        ))
+        Ok(blob_info)
+    }
+
+    /// Fetch blob from Walrus and populate index entries.
+    async fn fetch_and_populate_index_entries(
+        &self,
+        start_checkpoint: CheckpointSequenceNumber,
+        mut blob_info: CheckpointBlobInfo,
+    ) -> Result<CheckpointBlobInfo> {
+        if self.walrus_read_client.is_none() {
+            tracing::info!("walrus read client not set, cannot fetch blob index");
+            return Ok(blob_info);
+        }
+
+        let walrus_client = self
+            .walrus_read_client
+            .as_ref()
+            .expect("walrus read client must be set");
+
+        let blob_id_str = String::from_utf8_lossy(&blob_info.blob_id).to_string();
+        let blob_id: walrus_core::BlobId = blob_id_str
+            .parse()
+            .map_err(|e| anyhow::anyhow!("failed to parse blob ID: {}", e))?;
+
+        tracing::info!(
+            "fetching blob {} from walrus to extract index entries",
+            blob_id
+        );
+
+        // Download the blob from Walrus.
+        let blob_data = walrus_client.read_blob::<Primary>(&blob_id).await?;
+
+        tracing::info!(
+            "downloaded {} bytes for blob {}, parsing blob bundle",
+            blob_data.len(),
+            blob_id
+        );
+
+        // Parse the blob as a BlobBundle.
+        let blob_bundle = BlobBundleReader::new(Bytes::from(blob_data))?;
+
+        // Convert blob bundle index to CheckpointBlobInfo index entries.
+        let index_entries: Vec<IndexEntry> = blob_bundle
+            .entries()?
+            .iter()
+            .map(|(checkpoint_id, entry)| {
+                let checkpoint_number = checkpoint_id
+                    .parse::<u64>()
+                    .expect("invalid checkpoint number");
+                IndexEntry {
+                    checkpoint_number,
+                    offset: entry.offset,
+                    length: entry.length,
+                }
+            })
+            .collect();
+
+        blob_info.index_entries = index_entries;
+
+        tracing::info!(
+            "populated {} index entries for blob {}",
+            blob_info.index_entries.len(),
+            blob_id
+        );
+
+        // Write the updated blob_info back to the database.
+        if !self.read_only {
+            let cf = self
+                .db
+                .cf_handle(CF_CHECKPOINT_BLOB_INFO)
+                .expect("column family must exist");
+
+            let key = be_fix_int_ser(&start_checkpoint)?;
+            let value = blob_info.encode_to_vec();
+            self.db.put_cf(&cf, key, value)?;
+
+            tracing::info!(
+                "updated database with populated index entries for checkpoint {}",
+                start_checkpoint
+            );
+        } else {
+            tracing::warn!(
+                "database is read-only, skipping index entries persistence for checkpoint {}",
+                start_checkpoint
+            );
+        }
+
+        Ok(blob_info)
     }
 
     /// Get the latest stored checkpoint number.
@@ -250,7 +366,10 @@ impl ArchivalState {
             ));
         }
 
-        tracing::info!("populating database with {} checkpoint blob records", blob_infos.len());
+        tracing::info!(
+            "populating database with {} checkpoint blob records",
+            blob_infos.len()
+        );
 
         let cf = self
             .db
@@ -258,7 +377,7 @@ impl ArchivalState {
             .expect("column family must exist");
 
         for blob_info in blob_infos {
-            let key = blob_info.start_checkpoint.to_be_bytes();
+            let key = be_fix_int_ser(&blob_info.start_checkpoint)?;
             let value = blob_info.encode_to_vec();
             self.db.put_cf(&cf, key, value)?;
         }
@@ -414,8 +533,8 @@ mod tests {
         assert!(state2.is_ok(), "Should successfully open existing database");
     }
 
-    #[test]
-    fn test_create_and_get_checkpoint_blob() {
+    #[tokio::test]
+    async fn test_create_and_get_checkpoint_blob() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
         let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
@@ -440,7 +559,7 @@ mod tests {
         // Test getting checkpoint blob by various checkpoint numbers.
 
         // Test with start checkpoint.
-        let blob_info = state.get_checkpoint_blob_info(100u64);
+        let blob_info = state.get_checkpoint_blob_info(100u64).await;
         assert!(blob_info.is_ok(), "Should find blob for checkpoint 100");
         let blob_info = blob_info.unwrap();
         assert_eq!(blob_info.start_checkpoint, 100);
@@ -449,33 +568,33 @@ mod tests {
         assert_eq!(blob_info.index_entries.len(), 100);
 
         // Test with middle checkpoint.
-        let blob_info = state.get_checkpoint_blob_info(150u64);
+        let blob_info = state.get_checkpoint_blob_info(150u64).await;
         assert!(blob_info.is_ok(), "Should find blob for checkpoint 150");
         let blob_info = blob_info.unwrap();
         assert_eq!(blob_info.start_checkpoint, 100);
         assert_eq!(blob_info.end_checkpoint, 199);
 
         // Test with end checkpoint.
-        let blob_info = state.get_checkpoint_blob_info(199u64);
+        let blob_info = state.get_checkpoint_blob_info(199u64).await;
         assert!(blob_info.is_ok(), "Should find blob for checkpoint 199");
         let blob_info = blob_info.unwrap();
         assert_eq!(blob_info.start_checkpoint, 100);
         assert_eq!(blob_info.end_checkpoint, 199);
 
         // Test with checkpoint before range.
-        let blob_info = state.get_checkpoint_blob_info(99u64);
+        let blob_info = state.get_checkpoint_blob_info(99u64).await;
         assert!(blob_info.is_err(), "Should not find blob for checkpoint 99");
 
         // Test with checkpoint after range.
-        let blob_info = state.get_checkpoint_blob_info(200u64);
+        let blob_info = state.get_checkpoint_blob_info(200u64).await;
         assert!(
             blob_info.is_err(),
             "Should not find blob for checkpoint 200"
         );
     }
 
-    #[test]
-    fn test_multiple_blobs() {
+    #[tokio::test]
+    async fn test_multiple_blobs() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
         let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
@@ -514,6 +633,7 @@ mod tests {
         for (checkpoint, expected_start, expected_end) in test_cases {
             let blob_info = state
                 .get_checkpoint_blob_info(checkpoint)
+                .await
                 .unwrap_or_else(|_| panic!("Should find blob for checkpoint {}", checkpoint));
             assert_eq!(blob_info.start_checkpoint, expected_start);
             assert_eq!(blob_info.end_checkpoint, expected_end);
@@ -522,6 +642,7 @@ mod tests {
         // Test end of epoch flag.
         let blob_info = state
             .get_checkpoint_blob_info(350u64)
+            .await
             .expect("Should find blob");
         assert!(blob_info.end_of_epoch);
     }
@@ -596,8 +717,8 @@ mod tests {
         assert_eq!(latest, Some(399u64));
     }
 
-    #[test]
-    fn test_blob_with_gaps() {
+    #[tokio::test]
+    async fn test_blob_with_gaps() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
         let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
@@ -632,7 +753,7 @@ mod tests {
             .expect("Failed to create blob");
 
         // Test checkpoints in the gap.
-        let result = state.get_checkpoint_blob_info(250u64);
+        let result = state.get_checkpoint_blob_info(250u64).await;
         assert!(
             result.is_err(),
             "Should not find blob for checkpoint in gap"
@@ -640,12 +761,12 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("no blob found"));
 
         // Test checkpoints in stored ranges.
-        assert!(state.get_checkpoint_blob_info(150u64).is_ok());
-        assert!(state.get_checkpoint_blob_info(350u64).is_ok());
+        assert!(state.get_checkpoint_blob_info(150u64).await.is_ok());
+        assert!(state.get_checkpoint_blob_info(350u64).await.is_ok());
     }
 
-    #[test]
-    fn test_empty_index_entries() {
+    #[tokio::test]
+    async fn test_empty_index_entries() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
         let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
@@ -670,6 +791,7 @@ mod tests {
         // Should still be able to find the blob.
         let blob_info = state
             .get_checkpoint_blob_info(550u64)
+            .await
             .expect("Should find blob");
         assert_eq!(blob_info.start_checkpoint, 500);
         assert_eq!(blob_info.end_checkpoint, 599);
@@ -682,8 +804,8 @@ mod tests {
         assert_eq!(latest, Some(599u64));
     }
 
-    #[test]
-    fn test_index_entry_parsing() {
+    #[tokio::test]
+    async fn test_index_entry_parsing() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
         let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
@@ -712,6 +834,7 @@ mod tests {
 
         let blob_info = state
             .get_checkpoint_blob_info(1001u64)
+            .await
             .expect("Should find blob");
 
         // Check that checkpoint numbers were parsed correctly.
@@ -720,8 +843,8 @@ mod tests {
         assert_eq!(blob_info.index_entries[2].checkpoint_number, 1002);
     }
 
-    #[test]
-    fn test_read_only_mode() {
+    #[tokio::test]
+    async fn test_read_only_mode() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
 
@@ -752,6 +875,7 @@ mod tests {
         // Reading should work.
         let blob_info = state
             .get_checkpoint_blob_info(1000u64)
+            .await
             .expect("Should be able to read in read-only mode");
         assert_eq!(blob_info.start_checkpoint, 1000);
 
@@ -779,8 +903,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_update_blob_expiration_epoch() {
+    #[tokio::test]
+    async fn test_update_blob_expiration_epoch() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
         let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
@@ -807,6 +931,7 @@ mod tests {
         // Verify initial expiration epoch.
         let blob_info = state
             .get_checkpoint_blob_info(150u64)
+            .await
             .expect("Should find blob");
         assert_eq!(blob_info.blob_expiration_epoch, initial_epoch);
 
@@ -819,6 +944,7 @@ mod tests {
         // Verify the epoch was updated.
         let updated_blob_info = state
             .get_checkpoint_blob_info(150u64)
+            .await
             .expect("Should find blob");
         assert_eq!(updated_blob_info.blob_expiration_epoch, new_epoch);
 
@@ -967,8 +1093,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_update_multiple_blobs_expiration_epochs() {
+    #[tokio::test]
+    async fn test_update_multiple_blobs_expiration_epochs() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");
         let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
@@ -1002,6 +1128,7 @@ mod tests {
             // Verify the update.
             let blob_info = state
                 .get_checkpoint_blob_info(*start)
+                .await
                 .expect("Should find blob");
             assert_eq!(blob_info.blob_expiration_epoch, new_epoch);
         }

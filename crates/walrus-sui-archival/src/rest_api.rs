@@ -221,6 +221,7 @@ async fn get_checkpoint(
     let blob_info = match app_state
         .archival_state
         .get_checkpoint_blob_info(checkpoint_num)
+        .await
     {
         Ok(info) => info,
         Err(e) => {

@@ -103,7 +103,9 @@ impl ArchivalStateSnapshotCreator {
 
         // create parquet file from rocksdb data.
         let records_count = self.create_parquet_file(&snapshot_file)?;
-        self.metrics.snapshot_records_total.set(records_count as i64);
+        self.metrics
+            .snapshot_records_total
+            .set(records_count as i64);
 
         creation_timer.observe_duration();
 
@@ -294,7 +296,10 @@ impl ArchivalStateSnapshotCreator {
         }
 
         writer.close()?;
-        tracing::info!("parquet file created successfully with {} records", total_records);
+        tracing::info!(
+            "parquet file created successfully with {} records",
+            total_records
+        );
 
         Ok(total_records)
     }
@@ -348,5 +353,187 @@ impl ArchivalStateSnapshotCreator {
         tracing::info!("snapshot uploaded to walrus with blob_id: {}", blob_id);
 
         Ok(blob_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::archival_state::proto;
+
+    #[test]
+    fn test_create_and_parse_parquet_file() {
+        tracing_subscriber::fmt::init();
+
+        // Create a temporary directory for the test database.
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test_db");
+
+        // Create archival state and populate with test data.
+        let archival_state = Arc::new(ArchivalState::open(&db_path, false).unwrap());
+
+        // Create test checkpoint blob info records.
+        let test_records = vec![
+            proto::CheckpointBlobInfo {
+                version: 1,
+                blob_id: b"test_blob_id_1_padded_to_32byte".to_vec(),
+                start_checkpoint: 100,
+                end_checkpoint: 199,
+                end_of_epoch: false,
+                blob_expiration_epoch: 1000,
+                object_id: vec![1u8; 32],
+                index_entries: vec![
+                    proto::IndexEntry {
+                        checkpoint_number: 100,
+                        offset: 0,
+                        length: 1024,
+                    },
+                    proto::IndexEntry {
+                        checkpoint_number: 150,
+                        offset: 1024,
+                        length: 2048,
+                    },
+                ],
+            },
+            proto::CheckpointBlobInfo {
+                version: 1,
+                blob_id: b"test_blob_id_2_padded_to_32byte".to_vec(),
+                start_checkpoint: 200,
+                end_checkpoint: 299,
+                end_of_epoch: true,
+                blob_expiration_epoch: 2000,
+                object_id: vec![2u8; 32],
+                index_entries: vec![proto::IndexEntry {
+                    checkpoint_number: 200,
+                    offset: 0,
+                    length: 512,
+                }],
+            },
+            proto::CheckpointBlobInfo {
+                version: 1,
+                blob_id: b"test_blob_id_3_padded_to_32byte".to_vec(),
+                start_checkpoint: 300,
+                end_checkpoint: 399,
+                end_of_epoch: false,
+                blob_expiration_epoch: 3000,
+                object_id: vec![3u8; 32],
+                index_entries: vec![],
+            },
+        ];
+
+        // Populate the database with test records.
+        archival_state
+            .populate_from_checkpoint_blob_infos(test_records.clone())
+            .unwrap();
+
+        // Verify the database has the correct number of records.
+        let count = archival_state.count_checkpoint_blobs().unwrap();
+        assert_eq!(count, 3, "database should contain 3 records");
+
+        // Create a mock ArchivalStateSnapshotCreator to access create_parquet_file.
+        let temp_snapshot_dir = TempDir::new().unwrap();
+        let snapshot_file = temp_snapshot_dir.path().join("test_snapshot.parquet");
+
+        // Create the parquet file using a simpler approach.
+        let db = archival_state.get_db();
+        let cf_handle = db
+            .cf_handle(crate::archival_state::CF_CHECKPOINT_BLOB_INFO)
+            .unwrap();
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new(
+                "checkpoint_blob_info",
+                arrow::datatypes::DataType::Binary,
+                false,
+            ),
+        ]));
+
+        let file = std::fs::File::create(&snapshot_file).unwrap();
+        let props = parquet::file::properties::WriterProperties::builder().build();
+        let mut writer =
+            parquet::arrow::ArrowWriter::try_new(file, schema.clone(), Some(props)).unwrap();
+
+        let mut values = Vec::new();
+        let iter = db.iterator_cf(&cf_handle, rocksdb::IteratorMode::Start);
+        for item in iter {
+            let (_key, value) = item.unwrap();
+            let mut checkpoint_blob_info =
+                proto::CheckpointBlobInfo::decode(value.as_ref()).unwrap();
+            checkpoint_blob_info.index_entries.clear();
+            values.push(checkpoint_blob_info.encode_to_vec());
+        }
+
+        let value_array = arrow::array::BinaryArray::from(
+            values.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+        );
+        let batch =
+            arrow::record_batch::RecordBatch::try_new(schema.clone(), vec![Arc::new(value_array)])
+                .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Read the parquet file data.
+        let parquet_data = std::fs::read(&snapshot_file).unwrap();
+
+        // Parse the parquet file using the utility function.
+        let parsed_records =
+            crate::util::parse_checkpoint_blob_infos_from_parquet(&parquet_data).unwrap();
+
+        // Verify the parsed records match the original data.
+        assert_eq!(
+            parsed_records.len(),
+            test_records.len(),
+            "parsed records count should match original"
+        );
+
+        for (i, parsed) in parsed_records.iter().enumerate() {
+            let original = &test_records[i];
+            assert_eq!(
+                parsed.blob_id, original.blob_id,
+                "blob_id should match for record {}",
+                i
+            );
+            assert_eq!(
+                parsed.start_checkpoint, original.start_checkpoint,
+                "start_checkpoint should match for record {}",
+                i
+            );
+            assert_eq!(
+                parsed.end_checkpoint, original.end_checkpoint,
+                "end_checkpoint should match for record {}",
+                i
+            );
+            assert_eq!(
+                parsed.end_of_epoch, original.end_of_epoch,
+                "end_of_epoch should match for record {}",
+                i
+            );
+            assert_eq!(
+                parsed.blob_expiration_epoch, original.blob_expiration_epoch,
+                "blob_expiration_epoch should match for record {}",
+                i
+            );
+            assert_eq!(
+                parsed.object_id, original.object_id,
+                "object_id should match for record {}",
+                i
+            );
+            // Index entries should be empty (cleared during snapshot creation).
+            assert_eq!(
+                parsed.index_entries.len(),
+                0,
+                "index_entries should be cleared for record {}",
+                i
+            );
+        }
+
+        println!(
+            "test passed: created parquet file with {} records and successfully parsed them back",
+            parsed_records.len()
+        );
     }
 }

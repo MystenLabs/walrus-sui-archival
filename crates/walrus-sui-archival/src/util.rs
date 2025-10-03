@@ -237,26 +237,23 @@ pub async fn fetch_metadata_blob_id(
     ))
 }
 
-/// Load checkpoint blob info records from a metadata blob stored in Walrus.
+/// Fetch and download a metadata blob from Walrus.
 ///
-/// This function fetches the metadata blob ID from the on-chain pointer,
-/// downloads the parquet file from Walrus, parses it, and returns all
-/// CheckpointBlobInfo records.
-pub async fn load_checkpoint_blob_infos_from_metadata(
+/// Returns the blob ID and blob data as bytes.
+pub async fn fetch_metadata_blob_from_walrus(
     client_config_path: impl AsRef<Path>,
     metadata_pointer_object_id: SuiObjectID,
     context: &str,
-) -> Result<Vec<crate::archival_state::proto::CheckpointBlobInfo>> {
-    use parquet::file::reader::{FileReader, SerializedFileReader};
-    use prost::Message;
+) -> Result<(BlobId, Vec<u8>)> {
     use walrus_core::encoding::Primary;
 
-    tracing::info!("loading checkpoint blob infos from metadata blob");
-
     // Fetch the blob ID from the on-chain metadata pointer.
-    let blob_id_opt =
-        fetch_metadata_blob_id(client_config_path.as_ref(), metadata_pointer_object_id, context)
-            .await?;
+    let blob_id_opt = fetch_metadata_blob_id(
+        client_config_path.as_ref(),
+        metadata_pointer_object_id,
+        context,
+    )
+    .await?;
 
     let blob_id = match blob_id_opt {
         Some(id) => {
@@ -285,9 +282,27 @@ pub async fn load_checkpoint_blob_infos_from_metadata(
     let blob_data = walrus_read_client.read_blob::<Primary>(&blob_id).await?;
     tracing::info!("downloaded {} bytes from walrus", blob_data.len());
 
+    Ok((blob_id, blob_data))
+}
+
+/// Parse a parquet file containing CheckpointBlobInfo records.
+///
+/// Returns a vector of all CheckpointBlobInfo records found in the parquet file.
+pub fn parse_checkpoint_blob_infos_from_parquet(
+    parquet_data: &[u8],
+) -> Result<Vec<crate::archival_state::proto::CheckpointBlobInfo>> {
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+    use prost::Message;
+
     // Write blob data to a temporary file for parquet parsing.
-    let temp_file = std::env::temp_dir().join(format!("metadata_blob_{}.parquet", blob_id));
-    std::fs::write(&temp_file, &blob_data)?;
+    let temp_file = std::env::temp_dir().join(format!(
+        "metadata_blob_temp_{}.parquet",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
+    std::fs::write(&temp_file, parquet_data)?;
 
     // Parse the parquet file.
     tracing::info!("parsing parquet file...");
@@ -313,7 +328,8 @@ pub async fn load_checkpoint_blob_infos_from_metadata(
             let mut values = Vec::with_capacity(num_rows);
             let mut def_levels = Vec::with_capacity(num_rows);
 
-            let (num_read, _, _) = reader.read_records(num_rows, Some(&mut def_levels), None, &mut values)?;
+            let (num_read, _, _) =
+                reader.read_records(num_rows, Some(&mut def_levels), None, &mut values)?;
 
             tracing::info!("read {} records from row group {}", num_read, i);
 
@@ -327,6 +343,32 @@ pub async fn load_checkpoint_blob_infos_from_metadata(
 
     // Clean up temporary file.
     std::fs::remove_file(&temp_file)?;
+
+    tracing::info!(
+        "parsed {} checkpoint blob info records from parquet file",
+        checkpoint_blob_infos.len()
+    );
+
+    Ok(checkpoint_blob_infos)
+}
+
+/// Load checkpoint blob info records from a metadata blob stored in Walrus.
+///
+/// This function fetches the metadata blob ID from the on-chain pointer,
+/// downloads the parquet file from Walrus, parses it, and returns all
+/// CheckpointBlobInfo records.
+pub async fn load_checkpoint_blob_infos_from_metadata(
+    client_config_path: impl AsRef<Path>,
+    metadata_pointer_object_id: SuiObjectID,
+    context: &str,
+) -> Result<Vec<crate::archival_state::proto::CheckpointBlobInfo>> {
+    tracing::info!("loading checkpoint blob infos from metadata blob");
+
+    let (_blob_id, blob_data) =
+        fetch_metadata_blob_from_walrus(client_config_path, metadata_pointer_object_id, context)
+            .await?;
+
+    let checkpoint_blob_infos = parse_checkpoint_blob_infos_from_parquet(&blob_data)?;
 
     tracing::info!(
         "loaded {} checkpoint blob info records from metadata blob",

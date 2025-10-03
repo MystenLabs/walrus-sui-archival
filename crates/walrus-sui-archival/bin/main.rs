@@ -132,7 +132,8 @@ fn main() -> Result<()> {
         }
         Commands::InspectDb { db_path, command } => {
             tracing::info!("starting database inspection...");
-            execute_inspect_db(db_path, command)?;
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(execute_inspect_db(db_path, command))?;
         }
         Commands::InspectBlob {
             path,

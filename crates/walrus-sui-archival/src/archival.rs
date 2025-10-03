@@ -59,7 +59,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     let metrics = Arc::new(Metrics::new(&registry));
 
     // Initialize the archival state with RocksDB.
-    let archival_state = std::sync::Arc::new(ArchivalState::open(&config.db_path, false)?);
+    let mut archival_state = ArchivalState::open(&config.db_path, false)?;
     tracing::info!(
         "initialized archival state with database at {:?}",
         config.db_path
@@ -100,6 +100,12 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     let walrus_client = initialize_walrus_client(client_config.clone()).await?;
     let walrus_read_client =
         Arc::new(initialize_walrus_read_client(client_config.clone(), &walrus_client).await?);
+
+    // Set walrus read client on archival state for lazy index fetching.
+    archival_state.set_walrus_read_client(walrus_read_client.clone());
+
+    let archival_state = Arc::new(archival_state);
+
     let wallet = WalletContext::new(
         client_config
             .wallet_config

@@ -20,7 +20,9 @@ use walrus_sdk::{client::WalrusNodeClient, config::ClientConfig};
 /// * `index` - Optional index to inspect a specific entry
 /// * `offset` - Optional offset to read from (used when index is not specified)
 /// * `length` - Optional length to read (used when index is not specified)
+/// * `context` - Optional context to use for Walrus client
 /// * `full` - Print full deserialized CheckpointData
+#[allow(clippy::too_many_arguments)]
 pub async fn inspect_blob(
     path: Option<PathBuf>,
     blob_id: Option<String>,
