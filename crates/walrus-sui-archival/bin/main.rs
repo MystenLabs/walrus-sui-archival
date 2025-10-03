@@ -9,6 +9,7 @@ use walrus_sui_archival::{
     archival::run_sui_archival,
     burn_blobs::burn_all_blobs,
     config::Config,
+    get_metadata_blob_id::get_metadata_blob_id,
     inspect_blob::inspect_blob,
     inspect_db::{InspectDbCommand, execute_inspect_db},
     list_blobs::list_owned_blobs,
@@ -82,6 +83,12 @@ enum Commands {
         #[arg(short, long, default_value = "config/local_client_config.yaml")]
         client_config: PathBuf,
     },
+    /// Get the blob ID from the metadata pointer object.
+    GetMetadataBlobId {
+        /// Path to configuration file.
+        #[arg(short, long, default_value = "config/testnet_local_config.yaml")]
+        config: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -141,6 +148,12 @@ fn main() -> Result<()> {
             // Create tokio runtime for async operation.
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(burn_all_blobs(client_config))?;
+        }
+        Commands::GetMetadataBlobId { config } => {
+            tracing::info!("reading metadata blob id from on-chain pointer...");
+            // Create tokio runtime for async operation.
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(get_metadata_blob_id(config))?;
         }
     }
 

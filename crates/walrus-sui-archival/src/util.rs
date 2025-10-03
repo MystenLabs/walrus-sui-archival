@@ -4,16 +4,26 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::{Context, Result};
+use serde::Deserialize;
+use sui_sdk::{types::base_types::ObjectID as SuiObjectID, wallet_context::WalletContext};
 use tokio::fs;
 use walrus_core::{BlobId, Epoch};
 use walrus_sdk::{
     ObjectID,
     client::{StoreArgs, WalrusNodeClient, responses::BlobStoreResult},
+    config::ClientConfig,
     store_optimizations::StoreOptimizations,
     sui::client::{BlobPersistence, PostStoreAction, SuiContractClient},
 };
 
 use crate::metrics::Metrics;
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct MetadataBlobPointer {
+    id: SuiObjectID,
+    blob_id: Option<Vec<u8>>,
+}
 
 /// Hidden reexports for the bin_version macro.
 pub mod _hidden {
@@ -161,4 +171,66 @@ pub async fn upload_blob_to_walrus_with_retry(
             }
         }
     }
+}
+
+/// Fetches the blob ID from the metadata pointer object on-chain.
+///
+/// Returns the BlobId if it exists, or None if the pointer is not set.
+pub async fn fetch_metadata_blob_id(
+    client_config_path: impl AsRef<Path>,
+    metadata_pointer_object_id: SuiObjectID,
+) -> Result<Option<BlobId>> {
+    // initialize wallet context.
+    let (client_config, _) =
+        ClientConfig::load_from_multi_config(client_config_path.as_ref(), Some("testnet"))?;
+    let wallet = WalletContext::new(
+        client_config
+            .wallet_config
+            .ok_or_else(|| anyhow::anyhow!("wallet config is required"))?
+            .path()
+            .ok_or_else(|| anyhow::anyhow!("wallet config path is required"))?,
+    )?;
+
+    let sui_client = wallet.get_client().await?;
+
+    // read the metadata pointer object.
+    let object_response = sui_client
+        .read_api()
+        .get_object_with_options(
+            metadata_pointer_object_id,
+            sui_sdk::rpc_types::SuiObjectDataOptions::new().with_bcs(),
+        )
+        .await?;
+
+    let object_data = object_response
+        .data
+        .ok_or_else(|| anyhow::anyhow!("metadata pointer object not found"))?;
+
+    // extract blob_id from the object.
+    if let Some(bcs_data) = object_data.bcs {
+        if let sui_sdk::rpc_types::SuiRawData::MoveObject(move_obj) = bcs_data {
+            // decode BCS to extract the Option<vector<u8>> blob_id field.
+            let pointer: MetadataBlobPointer = bcs::from_bytes(&move_obj.bcs_bytes)?;
+
+            if let Some(blob_id_bytes) = pointer.blob_id {
+                // convert Vec<u8> to BlobId.
+                if blob_id_bytes.len() == 32 {
+                    let mut array = [0u8; 32];
+                    array.copy_from_slice(&blob_id_bytes);
+                    return Ok(Some(BlobId(array)));
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "invalid blob_id length: expected 32 bytes, got {}",
+                        blob_id_bytes.len()
+                    ));
+                }
+            } else {
+                return Ok(None);
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "failed to extract blob_id from metadata pointer object"
+    ))
 }

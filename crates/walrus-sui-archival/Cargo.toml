@@ -16,6 +16,7 @@ arrow = "52.2"
 async-channel.workspace = true
 async-trait.workspace = true
 axum = "0.7"
+bcs.workspace = true
 bincode.workspace = true
 blob-bundle.workspace = true
 bytes.workspace = true
