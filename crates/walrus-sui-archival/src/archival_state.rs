@@ -7,7 +7,7 @@ use anyhow::Result;
 use bincode::Options;
 use prost::Message;
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksOptions};
-use sui_types::messages_checkpoint::CheckpointSequenceNumber;
+use sui_types::{base_types::ObjectID, messages_checkpoint::CheckpointSequenceNumber};
 use walrus_core::{BlobId, Epoch};
 
 // Include the generated protobuf code.
@@ -16,10 +16,9 @@ pub mod proto {
 }
 
 use proto::{CheckpointBlobInfo, IndexEntry};
-use walrus_sdk::ObjectID;
 
 /// Column family names.
-const CF_CHECKPOINT_BLOB_INFO: &str = "checkpoint_blob_info";
+pub const CF_CHECKPOINT_BLOB_INFO: &str = "checkpoint_blob_info";
 
 /// Current version of the CheckpointBlobInfo format.
 const CHECKPOINT_BLOB_INFO_VERSION: u32 = 1;
@@ -224,6 +223,11 @@ impl ArchivalState {
         }
 
         Ok(blobs)
+    }
+
+    /// Get the database handle for direct access.
+    pub fn get_db(&self) -> &Arc<DB> {
+        &self.db
     }
 
     /// Update the expiration epoch of an existing blob.

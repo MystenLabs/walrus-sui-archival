@@ -5,8 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Subcommand;
-use sui_types::messages_checkpoint::CheckpointSequenceNumber;
-use walrus_sdk::ObjectID;
+use sui_types::{base_types::ObjectID, messages_checkpoint::CheckpointSequenceNumber};
 
 use crate::archival_state::ArchivalState;
 

@@ -4,9 +4,9 @@
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
+use sui_types::base_types::ObjectID;
 use tokio::time;
 use walrus_sdk::{
-    ObjectID,
     client::WalrusNodeClient,
     sui::client::{ReadClient, SuiContractClient},
 };

@@ -10,6 +10,7 @@ use std::{
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use sui_types::base_types::{ObjectID, SequenceNumber};
 use walrus_core::EpochCount;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +49,9 @@ pub struct Config {
     /// Configuration for the checkpoint blob extender.
     #[serde(default)]
     pub checkpoint_blob_extender: CheckpointBlobExtenderConfig,
+
+    /// Configuration for the archival state snapshot.
+    pub archival_state_snapshot: ArchivalStateSnapshotConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,4 +255,54 @@ fn default_max_transaction_retry_duration() -> Duration {
 
 fn default_check_interval() -> Duration {
     Duration::from_secs(30 * 60)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchivalStateSnapshotConfig {
+    /// Interval between creating snapshots and uploading to Walrus.
+    #[serde(
+        default = "default_snapshot_state_to_walrus_interval",
+        with = "humantime_serde"
+    )]
+    pub snapshot_state_to_walrus_interval: Duration,
+
+    /// Directory to store temporary snapshot files.
+    #[serde(default = "default_snapshot_temp_dir")]
+    pub snapshot_temp_dir: PathBuf,
+
+    /// Package ID of the metadata contract.
+    pub metadata_package_id: ObjectID,
+
+    /// Object ID of the AdminCap capability object.
+    pub admin_cap_object_id: ObjectID,
+
+    /// Object ID of the MetadataBlobPointer shared object.
+    pub metadata_pointer_object_id: ObjectID,
+
+    /// Initial shared version of the MetadataBlobPointer shared object.
+    pub metadata_pointer_initial_shared_version: SequenceNumber,
+
+    /// Number of epochs to store in the database.
+    #[serde(default = "default_snapshot_store_epoch_length")]
+    pub store_epoch_length: EpochCount,
+
+    /// Minimum retry duration for blob upload.
+    #[serde(default = "default_min_retry_duration", with = "humantime_serde")]
+    pub min_retry_duration: Duration,
+
+    /// Maximum retry duration for blob upload.
+    #[serde(default = "default_max_retry_duration", with = "humantime_serde")]
+    pub max_retry_duration: Duration,
+}
+
+fn default_snapshot_state_to_walrus_interval() -> Duration {
+    Duration::from_secs(3600) // 1 hour.
+}
+
+fn default_snapshot_store_epoch_length() -> EpochCount {
+    2
+}
+
+fn default_snapshot_temp_dir() -> PathBuf {
+    ["./", "archival_snapshots"].iter().collect()
 }

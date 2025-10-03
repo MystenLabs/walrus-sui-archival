@@ -1,8 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#![recursion_limit = "256"]
+
 pub mod archival;
 pub mod archival_state;
+pub mod archival_state_snapshot_creator;
 pub mod burn_blobs;
 pub mod checkpoint_blob_extender;
 pub mod checkpoint_blob_publisher;

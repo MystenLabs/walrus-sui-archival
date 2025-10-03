@@ -4,12 +4,14 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
+use sui_sdk::wallet_context::WalletContext;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{select, sync::mpsc};
 use walrus_sdk::{client::WalrusNodeClient, config::ClientConfig, sui::client::SuiContractClient};
 
 use crate::{
     archival_state::ArchivalState,
+    archival_state_snapshot_creator::ArchivalStateSnapshotCreator,
     checkpoint_blob_extender::CheckpointBlobExtender,
     checkpoint_blob_publisher::{self, BlobBuildRequest},
     checkpoint_downloader,
@@ -129,6 +131,32 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     );
     let blob_extender_handle = tokio::spawn(async move { blob_extender.start().await });
 
+    // Start the archival state snapshot creator if configured.
+    let snapshot_creator_handle = {
+        tracing::info!("starting archival state snapshot creator");
+
+        let (client_config, _) =
+            ClientConfig::load_from_multi_config(config.client_config_path, Some("testnet"))?;
+        let wallet = WalletContext::new(
+            client_config
+                .wallet_config
+                .expect("wallet config is required")
+                .path()
+                .expect("wallet config path is required"),
+        )?;
+
+        let snapshot_creator = ArchivalStateSnapshotCreator::new(
+            archival_state.clone(),
+            walrus_client.clone(),
+            wallet,
+            config.archival_state_snapshot.clone(),
+            metrics.clone(),
+        )
+        .await?;
+
+        tokio::spawn(async move { snapshot_creator.run().await })
+    };
+
     select! {
         checkpoint_downloading_driver_result = checkpoint_downloading_driver_handle => {
             tracing::info!("checkpoint downloading driver stopped: {:?}", checkpoint_downloading_driver_result);
@@ -163,6 +191,13 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
             if let Err(e) = blob_extender_result {
                 tracing::error!("checkpoint blob extender failed: {}", e);
                 return Err(anyhow::anyhow!("checkpoint blob extender failed: {}", e));
+            }
+        }
+        snapshot_creator_result = snapshot_creator_handle => {
+            tracing::info!("archival state snapshot creator stopped: {:?}", snapshot_creator_result);
+            if let Err(e) = snapshot_creator_result {
+                tracing::error!("archival state snapshot creator failed: {}", e);
+                return Err(anyhow::anyhow!("archival state snapshot creator failed: {}", e));
             }
         }
     }

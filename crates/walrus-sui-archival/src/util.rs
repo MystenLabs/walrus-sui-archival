@@ -1,6 +1,20 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::{path::Path, time::Duration};
+
+use anyhow::{Context, Result};
+use tokio::fs;
+use walrus_core::{BlobId, Epoch};
+use walrus_sdk::{
+    ObjectID,
+    client::{StoreArgs, WalrusNodeClient, responses::BlobStoreResult},
+    store_optimizations::StoreOptimizations,
+    sui::client::{BlobPersistence, PostStoreAction, SuiContractClient},
+};
+
+use crate::metrics::Metrics;
+
 /// Hidden reexports for the bin_version macro.
 pub mod _hidden {
     pub use const_str::concat;
@@ -56,4 +70,95 @@ macro_rules! git_revision {
             }
         };
     };
+}
+
+/// Uploads a blob file to Walrus with exponential backoff retry logic.
+///
+/// Returns tuple of (blob_id, object_id, end_epoch) on success.
+pub async fn upload_blob_to_walrus_with_retry(
+    walrus_client: &WalrusNodeClient<SuiContractClient>,
+    blob_file_path: &Path,
+    min_retry_duration: Duration,
+    max_retry_duration: Duration,
+    store_epoch_length: u32,
+    burn_blob: bool,
+    metrics: &Metrics,
+) -> Result<(BlobId, ObjectID, Epoch)> {
+    let blob = fs::read(blob_file_path).await.context("read blob file")?;
+
+    let mut store_args = StoreArgs::default_with_epochs(store_epoch_length);
+    store_args.persistence = BlobPersistence::Permanent;
+
+    // TODO(zhewu): check if this is necessary. Currently, we turn off the optimization
+    // because we have to have a blob object owned by us so that we can extend it.
+    store_args.store_optimizations = StoreOptimizations::none();
+
+    if burn_blob {
+        store_args.post_store = PostStoreAction::Burn;
+    }
+
+    // Infinite retry with exponential backoff.
+    let mut retry_delay = min_retry_duration;
+    let max_retry_delay = max_retry_duration;
+
+    loop {
+        match walrus_client
+            .reserve_and_store_blobs_retry_committees(&[blob.as_slice()], &[], &store_args)
+            .await
+        {
+            Ok(results) => {
+                if let Some(blob_store_result) = results.first() {
+                    // Check if the blob was successfully stored.
+                    if blob_store_result.is_not_stored() {
+                        // Track upload failures with not_stored status.
+                        metrics.blobs_uploaded_not_stored.inc();
+
+                        tracing::error!(
+                            "blob upload failed with is_not_stored status, retrying in {:?}",
+                            retry_delay
+                        );
+                        tokio::time::sleep(retry_delay).await;
+                        // Exponential backoff.
+                        retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
+                        continue;
+                    }
+
+                    // Track successful uploads.
+                    metrics.blobs_uploaded_success.inc();
+
+                    let (blob_id, object_id, end_epoch) = match blob_store_result {
+                        BlobStoreResult::NewlyCreated { blob_object, .. } => (
+                            blob_object.blob_id,
+                            blob_object.id,
+                            blob_object.storage.end_epoch,
+                        ),
+                        _ => {
+                            // At this point, we should only have the NewlyCreated result.
+                            panic!("unexpected blob store result: {:?}", blob_store_result);
+                        }
+                    };
+
+                    // Successfully stored.
+                    return Ok((blob_id, object_id, end_epoch));
+                } else {
+                    tracing::error!(
+                        "blob upload returned empty results, retrying in {:?}",
+                        retry_delay
+                    );
+                    tokio::time::sleep(retry_delay).await;
+                    // Exponential backoff.
+                    retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
+                }
+            }
+            Err(e) => {
+                // Track upload failures.
+                metrics.blobs_uploaded_failed.inc();
+
+                tracing::error!("blob upload failed: {}, retrying in {:?}", e, retry_delay);
+                tokio::time::sleep(retry_delay).await;
+                // Exponential backoff.
+                retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
+            }
+        }
+    }
 }

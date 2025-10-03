@@ -12,17 +12,20 @@ path = "bin/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+arrow = "52.2"
 async-channel.workspace = true
 async-trait.workspace = true
 axum = "0.7"
 bincode.workspace = true
 blob-bundle.workspace = true
 bytes.workspace = true
+chrono = "=0.4.39"
 clap.workspace = true
 const-str = "0.5"
 git-version = "0.3.9"
 humantime-serde.workspace = true
 mysten-metrics.workspace = true
+parquet = "52.2"
 prometheus = "0.13.4"
 prost.workspace = true
 prost-types.workspace = true
@@ -31,6 +34,7 @@ rocksdb.workspace = true
 serde.workspace = true
 serde_json = "1.0.145"
 serde_yaml.workspace = true
+sui-sdk.workspace = true
 sui-storage.workspace = true
 sui-types.workspace = true
 telemetry-subscribers.workspace = true
