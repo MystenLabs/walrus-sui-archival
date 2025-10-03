@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use walrus_sui_archival::{
     archival::run_sui_archival,
     burn_blobs::burn_all_blobs,
+    clear_metadata_blob_id::clear_metadata_blob_id,
     config::Config,
     get_metadata_blob_id::get_metadata_blob_id,
     inspect_blob::inspect_blob,
@@ -89,6 +90,12 @@ enum Commands {
         #[arg(short, long, default_value = "config/testnet_local_config.yaml")]
         config: PathBuf,
     },
+    /// Clear the blob ID from the metadata pointer object.
+    ClearMetadataBlobId {
+        /// Path to configuration file.
+        #[arg(short, long, default_value = "config/testnet_local_config.yaml")]
+        config: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -154,6 +161,12 @@ fn main() -> Result<()> {
             // Create tokio runtime for async operation.
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(get_metadata_blob_id(config))?;
+        }
+        Commands::ClearMetadataBlobId { config } => {
+            tracing::info!("clearing metadata blob id from on-chain pointer...");
+            // Create tokio runtime for async operation.
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(clear_metadata_blob_id(config))?;
         }
     }
 
