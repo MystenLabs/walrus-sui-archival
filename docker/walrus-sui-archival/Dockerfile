@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y ca-certificates curl
 ARG PROFILE=release
 WORKDIR "/tmp/walrus-sui-archival"
 COPY --from=builder /tmp/walrus-sui-archival/target/release/walrus-sui-archival /opt/walrus/bin/walrus-sui-archival
+COPY --from=builder /tmp/walrus-sui-archival/resources/walrus_image.png /opt/walrus/resources/walrus_image.png
 
 ARG BUILD_DATE
 ARG GIT_REVISION

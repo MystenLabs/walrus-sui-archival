@@ -156,15 +156,17 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         config.checkpoint_downloader.clone(),
         metrics.clone(),
     );
-    let (checkpoint_receiver, checkpoint_downloading_driver_handle) =
+    let (checkpoint_receiver, downloader_pause_tx, checkpoint_downloading_driver_handle) =
         downloader.start(initial_checkpoint).await?;
 
     // Start the checkpoint monitor with the receiver.
-    let monitor = checkpoint_monitor::CheckpointMonitor::new(
+    let mut monitor = checkpoint_monitor::CheckpointMonitor::new(
         config.checkpoint_monitor.clone(),
         blob_publisher_tx,
         metrics.clone(),
     );
+    // Wire the backpressure channel from monitor to downloader.
+    monitor.set_downloader_pause_channel(downloader_pause_tx);
     let monitor_handle = monitor.start(initial_checkpoint, checkpoint_receiver);
 
     // Start the REST API server.

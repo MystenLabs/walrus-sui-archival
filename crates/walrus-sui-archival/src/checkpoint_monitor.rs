@@ -14,6 +14,11 @@ use crate::{
     metrics::Metrics,
 };
 
+/// Threshold for number of pending checkpoints before pausing the downloader.
+const BACKPRESSURE_PAUSE_THRESHOLD: usize = 500;
+/// Threshold for number of pending checkpoints to resume the downloader.
+const BACKPRESSURE_RESUME_THRESHOLD: usize = 100;
+
 /// Criteria for when to build a new blob.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlobBuildTrigger {
@@ -115,6 +120,10 @@ pub struct CheckpointMonitor {
     last_stall_warning: tokio::time::Instant,
     /// Channel to send blob build requests to CheckpointBlobPublisher.
     blob_publisher_tx: mpsc::Sender<BlobBuildRequest>,
+    /// Channel to send backpressure signals to CheckpointDownloader.
+    downloader_pause_tx: Option<mpsc::Sender<bool>>,
+    /// Whether the downloader is currently paused.
+    is_downloader_paused: bool,
     metrics: Arc<Metrics>,
 }
 
@@ -132,8 +141,14 @@ impl CheckpointMonitor {
             last_updated_checkpoint_number: tokio::time::Instant::now(),
             last_stall_warning: tokio::time::Instant::now(),
             blob_publisher_tx,
+            downloader_pause_tx: None,
+            is_downloader_paused: false,
             metrics,
         }
+    }
+
+    pub fn set_downloader_pause_channel(&mut self, pause_tx: mpsc::Sender<bool>) {
+        self.downloader_pause_tx = Some(pause_tx);
     }
 
     /// Start monitoring checkpoints from the receiver.
@@ -174,6 +189,9 @@ impl CheckpointMonitor {
                         break;
                     }
                 }
+
+                // Check if we should resume the downloader after clearing pending buffer.
+                self.apply_backpressure().await;
             } else if checkpoint_info.checkpoint_number > self.next_checkpoint_number {
                 // This checkpoint is ahead, buffer it.
                 tracing::debug!(
@@ -183,6 +201,9 @@ impl CheckpointMonitor {
                 );
                 self.pending_checkpoints
                     .insert(checkpoint_info.checkpoint_number, checkpoint_info);
+
+                // Apply backpressure if too many pending checkpoints.
+                self.apply_backpressure().await;
 
                 // Check for potential holes - if we have too many pending, there might be a problem.
                 if self.pending_checkpoints.len() > 100 {
@@ -207,8 +228,6 @@ impl CheckpointMonitor {
                 let should_warn = self.last_stall_warning.elapsed() > Duration::from_secs(60);
 
                 // TODO: consider send another requests to workers to download the checkpoint again.
-                // TODO: we need to send backpressure to the checkpoint downloader to stop
-                // downloading new checkpoints until we catch up.
 
                 if should_warn {
                     tracing::warn!(
@@ -337,6 +356,37 @@ impl CheckpointMonitor {
         }
 
         Ok(())
+    }
+
+    /// Apply backpressure to the checkpoint downloader based on pending buffer size.
+    async fn apply_backpressure(&mut self) {
+        let pending_count = self.pending_checkpoints.len();
+
+        if let Some(ref pause_tx) = self.downloader_pause_tx {
+            if !self.is_downloader_paused && pending_count >= BACKPRESSURE_PAUSE_THRESHOLD {
+                // Pause the downloader.
+                tracing::info!(
+                    "applying backpressure: pausing checkpoint downloader with {} pending checkpoints",
+                    pending_count
+                );
+                if let Err(e) = pause_tx.send(true).await {
+                    tracing::warn!("failed to send pause signal to downloader: {}", e);
+                } else {
+                    self.is_downloader_paused = true;
+                }
+            } else if self.is_downloader_paused && pending_count <= BACKPRESSURE_RESUME_THRESHOLD {
+                // Resume the downloader.
+                tracing::info!(
+                    "releasing backpressure: resuming checkpoint downloader with {} pending checkpoints",
+                    pending_count
+                );
+                if let Err(e) = pause_tx.send(false).await {
+                    tracing::warn!("failed to send resume signal to downloader: {}", e);
+                } else {
+                    self.is_downloader_paused = false;
+                }
+            }
+        }
     }
 }
 

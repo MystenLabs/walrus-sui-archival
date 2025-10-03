@@ -274,7 +274,11 @@ impl CheckpointDownloader {
     pub async fn start(
         mut self,
         initial_checkpoint: CheckpointSequenceNumber,
-    ) -> Result<(sync::mpsc::Receiver<CheckpointInfo>, task::JoinHandle<()>)> {
+    ) -> Result<(
+        sync::mpsc::Receiver<CheckpointInfo>,
+        sync::mpsc::Sender<bool>,
+        task::JoinHandle<()>,
+    )> {
         tracing::info!(
             "starting checkpoint downloader from checkpoint {} with {} workers",
             initial_checkpoint,
@@ -289,6 +293,8 @@ impl CheckpointDownloader {
 
         let (download_tx, download_rx) = async_channel::bounded::<CheckpointSequenceNumber>(100);
         let (result_tx, result_rx) = sync::mpsc::channel::<CheckpointInfo>(100);
+        // Create a channel for backpressure control (pause/resume).
+        let (pause_tx, pause_rx) = sync::mpsc::channel::<bool>(10);
 
         for worker_id in 0..self.num_workers {
             let worker_rx = download_rx.clone();
@@ -314,24 +320,50 @@ impl CheckpointDownloader {
         // Start the driver task in the background.
         let driver_handle = tokio::spawn(async move {
             if let Err(e) = self
-                .download_checkpoint_driver(download_tx, initial_checkpoint)
+                .download_checkpoint_driver(download_tx, pause_rx, initial_checkpoint)
                 .await
             {
                 tracing::error!("checkpoint driver failed: {}", e);
             }
         });
 
-        // Return the receiver for the CheckpointMonitor to consume.
-        Ok((result_rx, driver_handle))
+        // Return the receiver for the CheckpointMonitor to consume and the pause sender.
+        Ok((result_rx, pause_tx, driver_handle))
     }
 
     async fn download_checkpoint_driver(
         &self,
         download_tx: async_channel::Sender<CheckpointSequenceNumber>,
+        mut pause_rx: sync::mpsc::Receiver<bool>,
         initial_checkpoint: CheckpointSequenceNumber,
     ) -> Result<()> {
         let mut current_checkpoint = initial_checkpoint;
+        let mut is_paused = false;
+
         loop {
+            // Check for pause/resume signals.
+            while let Ok(should_pause) = pause_rx.try_recv() {
+                if should_pause && !is_paused {
+                    tracing::info!(
+                        "checkpoint downloader paused at checkpoint {} due to backpressure",
+                        current_checkpoint
+                    );
+                    is_paused = true;
+                } else if !should_pause && is_paused {
+                    tracing::info!(
+                        "checkpoint downloader resumed at checkpoint {}",
+                        current_checkpoint
+                    );
+                    is_paused = false;
+                }
+            }
+
+            // If paused, wait before checking again.
+            if is_paused {
+                time::sleep(time::Duration::from_millis(100)).await;
+                continue;
+            }
+
             if let Err(e) = download_tx.send(current_checkpoint).await {
                 tracing::debug!(
                     "failed to send checkpoint number {}: {}",
@@ -659,7 +691,7 @@ mod tests {
         let downloader = CheckpointDownloader::new(config, create_test_metrics());
 
         // Start downloader (it will stop after checkpoint 5 based on the receiver logic).
-        let (_result_rx, driver_handle) = downloader
+        let (_result_rx, _pause_tx, driver_handle) = downloader
             .start(0)
             .await
             .expect("should be able to start downloader");
@@ -800,7 +832,7 @@ mod tests {
         let downloader = CheckpointDownloader::new(config, create_test_metrics());
 
         // Start downloader.
-        let (_result_rx, driver_handle) = downloader
+        let (_result_rx, _pause_tx, driver_handle) = downloader
             .start(0)
             .await
             .expect("should be able to start downloader");

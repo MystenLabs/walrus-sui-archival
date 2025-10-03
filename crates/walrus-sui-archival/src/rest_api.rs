@@ -194,7 +194,7 @@ async fn health_check() -> StatusCode {
 
 /// Handler for serving the walrus image.
 async fn serve_walrus_image() -> impl IntoResponse {
-    let image_path = std::path::Path::new("resources/walrus_image.png");
+    let image_path = std::path::Path::new("/opt/walrus/resources/walrus_image.png");
     match tokio::fs::read(image_path).await {
         Ok(contents) => Response::builder()
             .status(StatusCode::OK)
