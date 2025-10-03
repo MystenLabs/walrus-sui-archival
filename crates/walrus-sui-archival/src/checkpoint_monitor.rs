@@ -186,7 +186,7 @@ impl CheckpointMonitor {
 
                 // Check for potential holes - if we have too many pending, there might be a problem.
                 if self.pending_checkpoints.len() > 100 {
-                    tracing::warn!(
+                    tracing::debug!(
                         "detected potential hole: large number of pending checkpoints: {}, waiting for checkpoint {}",
                         self.pending_checkpoints.len(),
                         self.next_checkpoint_number

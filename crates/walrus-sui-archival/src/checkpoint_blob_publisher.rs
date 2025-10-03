@@ -7,12 +7,12 @@ use anyhow::Result;
 use blob_bundle::{BlobBundleBuildResult, BlobBundleBuilder};
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{fs, sync::mpsc};
-use walrus_sdk::{client::WalrusNodeClient, sui::client::SuiContractClient};
 
 use crate::{
     archival_state::ArchivalState,
     config::CheckpointBlobPublisherConfig,
     metrics::Metrics,
+    sui_interactive_client::SuiInteractiveClient,
     util::upload_blob_to_walrus_with_retry,
 };
 
@@ -30,7 +30,7 @@ pub struct BlobBuildRequest {
 /// A long-running service that builds blob files from checkpoint ranges.
 pub struct CheckpointBlobPublisher {
     archival_state: Arc<ArchivalState>,
-    walrus_client: Arc<WalrusNodeClient<SuiContractClient>>,
+    sui_interactive_client: SuiInteractiveClient,
     n_shards: NonZeroU16,
     config: CheckpointBlobPublisherConfig,
     downloaded_checkpoint_dir: PathBuf,
@@ -40,15 +40,22 @@ pub struct CheckpointBlobPublisher {
 impl CheckpointBlobPublisher {
     pub async fn new(
         archival_state: Arc<ArchivalState>,
-        walrus_client: Arc<WalrusNodeClient<SuiContractClient>>,
+        sui_interactive_client: SuiInteractiveClient,
         config: CheckpointBlobPublisherConfig,
         downloaded_checkpoint_dir: PathBuf,
         metrics: Arc<Metrics>,
     ) -> Result<Self> {
-        let n_shards = walrus_client.get_committees().await?.n_shards();
+        let n_shards = sui_interactive_client
+            .with_walrus_client_async(|client| {
+                Box::pin(async move {
+                    let committees = client.get_committees().await?;
+                    Ok(committees.n_shards())
+                })
+            })
+            .await?;
         Ok(Self {
             archival_state,
-            walrus_client,
+            sui_interactive_client,
             n_shards,
             config,
             downloaded_checkpoint_dir,
@@ -185,16 +192,29 @@ impl CheckpointBlobPublisher {
         // Track the latency of uploading blobs.
         let upload_timer = self.metrics.blob_upload_latency_seconds.start_timer();
 
-        let (blob_id, object_id, end_epoch) = upload_blob_to_walrus_with_retry(
-            &self.walrus_client,
-            &result.file_path,
-            self.config.min_retry_duration,
-            self.config.max_retry_duration,
-            self.config.store_epoch_length,
-            false,
-            &self.metrics,
-        )
-        .await?;
+        let blob_file_path = result.file_path.clone();
+        let min_retry_duration = self.config.min_retry_duration;
+        let max_retry_duration = self.config.max_retry_duration;
+        let store_epoch_length = self.config.store_epoch_length;
+        let metrics = self.metrics.clone();
+
+        let (blob_id, object_id, end_epoch) = self
+            .sui_interactive_client
+            .with_walrus_client_async(|client| {
+                Box::pin(async move {
+                    upload_blob_to_walrus_with_retry(
+                        client,
+                        &blob_file_path,
+                        min_retry_duration,
+                        max_retry_duration,
+                        store_epoch_length,
+                        false,
+                        &metrics,
+                    )
+                    .await
+                })
+            })
+            .await?;
 
         upload_timer.observe_duration();
 

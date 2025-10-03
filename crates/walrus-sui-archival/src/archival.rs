@@ -7,7 +7,12 @@ use anyhow::Result;
 use sui_sdk::wallet_context::WalletContext;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{select, sync::mpsc};
-use walrus_sdk::{client::WalrusNodeClient, config::ClientConfig, sui::client::SuiContractClient};
+use walrus_sdk::{
+    SuiReadClient,
+    client::WalrusNodeClient,
+    config::ClientConfig,
+    sui::client::SuiContractClient,
+};
 
 use crate::{
     archival_state::ArchivalState,
@@ -19,6 +24,7 @@ use crate::{
     config::Config,
     metrics::Metrics,
     rest_api::RestApiServer,
+    sui_interactive_client::SuiInteractiveClient,
 };
 
 pub fn run_sui_archival(config: Config, version: &'static str) -> Result<()> {
@@ -59,8 +65,21 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         config.db_path
     );
 
+    let (client_config, _) =
+        ClientConfig::load_from_multi_config(config.client_config_path, Some("testnet"))?;
+
     // Initialize walrus client.
-    let walrus_client = Arc::new(initialize_walrus_client(config.clone()).await?);
+    let walrus_client = initialize_walrus_client(client_config.clone()).await?;
+    let walrus_read_client =
+        Arc::new(initialize_walrus_read_client(client_config.clone(), &walrus_client).await?);
+    let wallet = WalletContext::new(
+        client_config
+            .wallet_config
+            .expect("wallet config is required")
+            .path()
+            .expect("wallet config path is required"),
+    )?;
+    let sui_interactive_client = SuiInteractiveClient::new(walrus_client, wallet);
 
     // TODO(zhe): remove testing initial checkpoint.
     let initial_checkpoint = archival_state
@@ -86,7 +105,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     // Start the checkpoint blob publisher.
     let blob_publisher = checkpoint_blob_publisher::CheckpointBlobPublisher::new(
         archival_state.clone(),
-        walrus_client.clone(),
+        sui_interactive_client.clone(),
         config.checkpoint_blob_publisher.clone(),
         config
             .checkpoint_downloader
@@ -118,14 +137,14 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     let rest_api_server = RestApiServer::new(
         config.rest_api_address,
         archival_state.clone(),
-        walrus_client.clone(),
+        walrus_read_client.clone(),
     );
     let rest_api_handle = tokio::spawn(async move { rest_api_server.start().await });
 
     // Start the checkpoint blob extender.
     let blob_extender = CheckpointBlobExtender::new(
         archival_state.clone(),
-        walrus_client.clone(),
+        sui_interactive_client.clone(),
         config.checkpoint_blob_extender.clone(),
         metrics.clone(),
     );
@@ -135,20 +154,9 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     let snapshot_creator_handle = {
         tracing::info!("starting archival state snapshot creator");
 
-        let (client_config, _) =
-            ClientConfig::load_from_multi_config(config.client_config_path, Some("testnet"))?;
-        let wallet = WalletContext::new(
-            client_config
-                .wallet_config
-                .expect("wallet config is required")
-                .path()
-                .expect("wallet config path is required"),
-        )?;
-
         let snapshot_creator = ArchivalStateSnapshotCreator::new(
             archival_state.clone(),
-            walrus_client.clone(),
-            wallet,
+            sui_interactive_client.clone(),
             config.archival_state_snapshot.clone(),
             metrics.clone(),
         )
@@ -205,15 +213,25 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     Ok(())
 }
 
-async fn initialize_walrus_client(config: Config) -> Result<WalrusNodeClient<SuiContractClient>> {
-    let (client_config, _) =
-        ClientConfig::load_from_multi_config(config.client_config_path, Some("testnet"))?;
+async fn initialize_walrus_client(
+    client_config: ClientConfig,
+) -> Result<WalrusNodeClient<SuiContractClient>> {
     let sui_client = client_config
         .new_contract_client_with_wallet_in_config(None)
         .await?;
     let walrus_client =
         WalrusNodeClient::new_contract_client_with_refresher(client_config, sui_client).await?;
     Ok(walrus_client)
+}
+
+async fn initialize_walrus_read_client(
+    client_config: ClientConfig,
+    walrus_client: &WalrusNodeClient<SuiContractClient>,
+) -> Result<WalrusNodeClient<SuiReadClient>> {
+    let read_client = walrus_client.sui_client().read_client().clone();
+    let walrus_read_client =
+        WalrusNodeClient::new_read_client_with_refresher(client_config, read_client).await?;
+    Ok(walrus_read_client)
 }
 
 async fn cleanup_orphaned_downloaded_checkpoints_and_uploaded_blobs(

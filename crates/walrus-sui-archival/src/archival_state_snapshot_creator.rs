@@ -1,7 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::Result;
 use arrow::{
@@ -12,29 +16,26 @@ use arrow::{
 use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
 use prost::Message;
 use rocksdb::IteratorMode;
-use sui_sdk::{SuiClient, wallet_context::WalletContext};
 use sui_types::{
     Identifier,
-    base_types::{ObjectID, SequenceNumber, SuiAddress},
+    base_types::SuiAddress,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     transaction::{ObjectArg, TransactionData, TransactionKind},
 };
 use tokio::time;
 use walrus_core::BlobId;
-use walrus_sdk::{client::WalrusNodeClient, sui::client::SuiContractClient};
 
 use crate::{
     archival_state::{ArchivalState, CF_CHECKPOINT_BLOB_INFO, proto::CheckpointBlobInfo},
     config::ArchivalStateSnapshotConfig,
     metrics::Metrics,
+    sui_interactive_client::SuiInteractiveClient,
     util::upload_blob_to_walrus_with_retry,
 };
 
 pub struct ArchivalStateSnapshotCreator {
     archival_state: Arc<ArchivalState>,
-    walrus_client: Arc<WalrusNodeClient<SuiContractClient>>,
-    wallet: WalletContext,
-    sui_client: SuiClient,
+    sui_interactive_client: SuiInteractiveClient,
     active_address: SuiAddress,
     config: ArchivalStateSnapshotConfig,
     metrics: Arc<Metrics>,
@@ -43,18 +44,16 @@ pub struct ArchivalStateSnapshotCreator {
 impl ArchivalStateSnapshotCreator {
     pub async fn new(
         archival_state: Arc<ArchivalState>,
-        walrus_client: Arc<WalrusNodeClient<SuiContractClient>>,
-        mut wallet: WalletContext,
+        sui_interactive_client: SuiInteractiveClient,
         config: ArchivalStateSnapshotConfig,
         metrics: Arc<Metrics>,
     ) -> Result<Self> {
-        let sui_client = wallet.get_client().await?;
-        let active_address = wallet.active_address()?;
+        let active_address = sui_interactive_client
+            .with_wallet_mut(|wallet| wallet.active_address())
+            .await?;
         Ok(Self {
             archival_state,
-            walrus_client,
-            wallet,
-            sui_client,
+            sui_interactive_client,
             active_address,
             config,
             metrics,
@@ -106,13 +105,104 @@ impl ArchivalStateSnapshotCreator {
         let blob_id = self.upload_to_walrus(&snapshot_file).await?;
 
         // update on-chain metadata pointer if configured.
+        let package_id = self.config.metadata_package_id;
+        let pointer_id = self.config.metadata_pointer_object_id;
+        let pointer_initial_shared_version = self.config.metadata_pointer_initial_shared_version;
+        let active_address = self.active_address;
+        let admin_cap_id = self.config.admin_cap_object_id;
+
         let result = self
-            .update_metadata_pointer(
-                &self.config.metadata_package_id,
-                &self.config.metadata_pointer_object_id,
-                self.config.metadata_pointer_initial_shared_version,
-                blob_id,
-            )
+            .sui_interactive_client
+            .with_wallet_mut_async(|wallet| {
+                Box::pin(async move {
+                    let sui_client = wallet.get_client().await?;
+
+                    tracing::info!("updating on-chain metadata pointer");
+
+                    // fetch admin cap object to get version and digest.
+                    let admin_cap_obj = sui_client
+                        .read_api()
+                        .get_object_with_options(
+                            admin_cap_id,
+                            sui_sdk::rpc_types::SuiObjectDataOptions::default(),
+                        )
+                        .await?;
+
+                    let admin_cap_ref = admin_cap_obj
+                        .object_ref_if_exists()
+                        .expect("admin cap object must exist");
+
+                    // convert blob_id to 32-byte vector.
+                    let blob_id_bytes = blob_id.0.to_vec();
+
+                    // build programmable transaction.
+                    let mut ptb = ProgrammableTransactionBuilder::new();
+
+                    // create arguments for the function call.
+                    let admin_cap_arg = ptb.obj(ObjectArg::ImmOrOwnedObject(admin_cap_ref))?;
+                    let pointer_id_arg = ptb.obj(ObjectArg::SharedObject {
+                        id: pointer_id,
+                        initial_shared_version: pointer_initial_shared_version,
+                        mutable: true,
+                    })?;
+                    let blob_id_arg = ptb.pure(blob_id_bytes)?;
+
+                    // call update_metadata_blob_pointer function.
+                    ptb.programmable_move_call(
+                        package_id,
+                        Identifier::new("metadata")?,
+                        Identifier::new("update_metadata_blob_pointer")?,
+                        vec![],
+                        vec![admin_cap_arg, pointer_id_arg, blob_id_arg],
+                    );
+
+                    let pt = ptb.finish();
+
+                    tracing::info!(
+                        "executing metadata pointer update transaction - package: {}, blob_id: {}",
+                        package_id,
+                        blob_id
+                    );
+
+                    // get gas payment object.
+                    let coins = sui_client
+                        .coin_read_api()
+                        .get_coins(active_address, None, None, None)
+                        .await?;
+
+                    if coins.data.is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "no gas coins available for address {}",
+                            active_address
+                        ));
+                    }
+
+                    let gas_coin = &coins.data[0];
+
+                    // create transaction data.
+                    let gas_budget = 10_000_000; // 0.01 SUI.
+                    let gas_price = sui_client.read_api().get_reference_gas_price().await?;
+
+                    let tx_data = TransactionData::new(
+                        TransactionKind::ProgrammableTransaction(pt),
+                        active_address,
+                        gas_coin.object_ref(),
+                        gas_budget,
+                        gas_price,
+                    );
+
+                    let signed_tx = wallet.sign_transaction(&tx_data).await;
+                    let response = wallet.execute_transaction_may_fail(signed_tx).await?;
+
+                    tracing::info!(
+                        "successfully updated metadata pointer for blob_id: {}, tx digest: {:?}",
+                        blob_id,
+                        response.digest
+                    );
+
+                    Ok(())
+                })
+            })
             .await;
 
         // Ignore the error if the onchain update fails. We can always retry in the next snapshot.
@@ -209,125 +299,39 @@ impl ArchivalStateSnapshotCreator {
         Ok(())
     }
 
-    async fn upload_to_walrus(&self, file_path: &PathBuf) -> Result<BlobId> {
+    async fn upload_to_walrus(&self, file_path: &Path) -> Result<BlobId> {
         tracing::info!("uploading snapshot to walrus");
 
         let upload_timer = self.metrics.blob_upload_latency_seconds.start_timer();
 
-        let (blob_id, _object_id, _end_epoch) = upload_blob_to_walrus_with_retry(
-            &self.walrus_client,
-            file_path,
-            self.config.min_retry_duration,
-            self.config.max_retry_duration,
-            self.config.store_epoch_length,
-            true,
-            &self.metrics,
-        )
-        .await?;
+        let blob_file_path = file_path.to_path_buf();
+        let min_retry_duration = self.config.min_retry_duration;
+        let max_retry_duration = self.config.max_retry_duration;
+        let store_epoch_length = self.config.store_epoch_length;
+        let metrics = self.metrics.clone();
+
+        let (blob_id, _object_id, _end_epoch) = self
+            .sui_interactive_client
+            .with_walrus_client_async(|client| {
+                Box::pin(async move {
+                    upload_blob_to_walrus_with_retry(
+                        client,
+                        &blob_file_path,
+                        min_retry_duration,
+                        max_retry_duration,
+                        store_epoch_length,
+                        true,
+                        &metrics,
+                    )
+                    .await
+                })
+            })
+            .await?;
 
         upload_timer.observe_duration();
 
         tracing::info!("snapshot uploaded to walrus with blob_id: {}", blob_id);
 
         Ok(blob_id)
-    }
-
-    async fn update_metadata_pointer(
-        &self,
-        package_id: &ObjectID,
-        pointer_id: &ObjectID,
-        pointer_initial_shared_version: SequenceNumber,
-        blob_id: BlobId,
-    ) -> Result<()> {
-        tracing::info!("updating on-chain metadata pointer");
-
-        // get admin cap from config.
-        let admin_cap_id = &self.config.admin_cap_object_id;
-
-        // fetch admin cap object to get version and digest.
-        let admin_cap_obj = self
-            .sui_client
-            .read_api()
-            .get_object_with_options(
-                admin_cap_id.clone(),
-                sui_sdk::rpc_types::SuiObjectDataOptions::default(),
-            )
-            .await?;
-
-        let admin_cap_ref = admin_cap_obj
-            .object_ref_if_exists()
-            .expect("admin cap object must exist");
-
-        // convert blob_id to 32-byte vector.
-        let blob_id_bytes = blob_id.0.to_vec();
-
-        // build programmable transaction.
-        let mut ptb = ProgrammableTransactionBuilder::new();
-
-        // create arguments for the function call.
-        let admin_cap_arg = ptb.obj(ObjectArg::ImmOrOwnedObject(admin_cap_ref))?;
-        let pointer_id_arg = ptb.obj(ObjectArg::SharedObject {
-            id: pointer_id.clone(),
-            initial_shared_version: pointer_initial_shared_version,
-            mutable: true,
-        })?;
-        let blob_id_arg = ptb.pure(blob_id_bytes)?;
-
-        // call create_metadata_blob_pointer function.
-        ptb.programmable_move_call(
-            (*package_id).into(),
-            Identifier::new("metadata")?,
-            Identifier::new("update_metadata_blob_pointer")?,
-            vec![],
-            vec![admin_cap_arg, pointer_id_arg, blob_id_arg],
-        );
-
-        let pt = ptb.finish();
-
-        tracing::info!(
-            "executing metadata pointer creation transaction - package: {}, blob_id: {}, admin_cap: {}",
-            package_id,
-            blob_id,
-            admin_cap_id
-        );
-
-        // get gas payment object.
-        let coins = self
-            .sui_client
-            .coin_read_api()
-            .get_coins(self.active_address, None, None, None)
-            .await?;
-
-        if coins.data.is_empty() {
-            return Err(anyhow::anyhow!(
-                "no gas coins available for address {}",
-                self.active_address
-            ));
-        }
-
-        let gas_coin = &coins.data[0];
-
-        // create transaction data.
-        let gas_budget = 10_000_000; // 0.01 SUI.
-        let gas_price = self.sui_client.read_api().get_reference_gas_price().await?;
-
-        let tx_data = TransactionData::new(
-            TransactionKind::ProgrammableTransaction(pt),
-            self.active_address,
-            gas_coin.object_ref(),
-            gas_budget,
-            gas_price,
-        );
-
-        let signed_tx = self.wallet.sign_transaction(&tx_data).await;
-        let response = self.wallet.execute_transaction_may_fail(signed_tx).await?;
-
-        tracing::info!(
-            "successfully created metadata pointer for blob_id: {}, tx digest: {:?}",
-            blob_id,
-            response.digest
-        );
-
-        Ok(())
     }
 }

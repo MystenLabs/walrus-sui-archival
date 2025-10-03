@@ -18,7 +18,7 @@ use sui_types::{
     messages_checkpoint::CheckpointSequenceNumber,
 };
 use walrus_core::{BlobId, encoding::Primary};
-use walrus_sdk::{ObjectID, client::WalrusNodeClient, sui::client::SuiContractClient};
+use walrus_sdk::{ObjectID, SuiReadClient, client::WalrusNodeClient};
 
 use crate::archival_state::ArchivalState;
 
@@ -26,7 +26,7 @@ use crate::archival_state::ArchivalState;
 pub struct RestApiServer {
     address: SocketAddr,
     archival_state: Arc<ArchivalState>,
-    walrus_client: Arc<WalrusNodeClient<SuiContractClient>>,
+    walrus_client: Arc<WalrusNodeClient<SuiReadClient>>,
 }
 
 impl RestApiServer {
@@ -34,7 +34,7 @@ impl RestApiServer {
     pub fn new(
         address: SocketAddr,
         archival_state: Arc<ArchivalState>,
-        walrus_client: Arc<WalrusNodeClient<SuiContractClient>>,
+        walrus_client: Arc<WalrusNodeClient<SuiReadClient>>,
     ) -> Self {
         Self {
             address,
@@ -73,7 +73,7 @@ impl RestApiServer {
 #[derive(Clone)]
 struct AppState {
     archival_state: Arc<ArchivalState>,
-    walrus_client: Arc<WalrusNodeClient<SuiContractClient>>,
+    walrus_client: Arc<WalrusNodeClient<SuiReadClient>>,
 }
 
 /// Handler for listing all blobs.

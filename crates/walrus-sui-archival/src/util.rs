@@ -207,26 +207,26 @@ pub async fn fetch_metadata_blob_id(
         .ok_or_else(|| anyhow::anyhow!("metadata pointer object not found"))?;
 
     // extract blob_id from the object.
-    if let Some(bcs_data) = object_data.bcs {
-        if let sui_sdk::rpc_types::SuiRawData::MoveObject(move_obj) = bcs_data {
-            // decode BCS to extract the Option<vector<u8>> blob_id field.
-            let pointer: MetadataBlobPointer = bcs::from_bytes(&move_obj.bcs_bytes)?;
+    if let Some(bcs_data) = object_data.bcs
+        && let sui_sdk::rpc_types::SuiRawData::MoveObject(move_obj) = bcs_data
+    {
+        // decode BCS to extract the Option<vector<u8>> blob_id field.
+        let pointer: MetadataBlobPointer = bcs::from_bytes(&move_obj.bcs_bytes)?;
 
-            if let Some(blob_id_bytes) = pointer.blob_id {
-                // convert Vec<u8> to BlobId.
-                if blob_id_bytes.len() == 32 {
-                    let mut array = [0u8; 32];
-                    array.copy_from_slice(&blob_id_bytes);
-                    return Ok(Some(BlobId(array)));
-                } else {
-                    return Err(anyhow::anyhow!(
-                        "invalid blob_id length: expected 32 bytes, got {}",
-                        blob_id_bytes.len()
-                    ));
-                }
+        if let Some(blob_id_bytes) = pointer.blob_id {
+            // convert Vec<u8> to BlobId.
+            if blob_id_bytes.len() == 32 {
+                let mut array = [0u8; 32];
+                array.copy_from_slice(&blob_id_bytes);
+                return Ok(Some(BlobId(array)));
             } else {
-                return Ok(None);
+                return Err(anyhow::anyhow!(
+                    "invalid blob_id length: expected 32 bytes, got {}",
+                    blob_id_bytes.len()
+                ));
             }
+        } else {
+            return Ok(None);
         }
     }
 

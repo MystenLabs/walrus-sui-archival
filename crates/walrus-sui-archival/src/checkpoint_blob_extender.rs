@@ -6,21 +6,19 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use sui_types::base_types::ObjectID;
 use tokio::time;
-use walrus_sdk::{
-    client::WalrusNodeClient,
-    sui::client::{ReadClient, SuiContractClient},
-};
+use walrus_sdk::sui::client::ReadClient;
 
 use crate::{
     archival_state::ArchivalState,
     config::CheckpointBlobExtenderConfig,
     metrics::Metrics,
+    sui_interactive_client::SuiInteractiveClient,
 };
 
 /// Service that periodically checks and extends blob expiration epochs.
 pub struct CheckpointBlobExtender {
     archival_state: Arc<ArchivalState>,
-    walrus_client: Arc<WalrusNodeClient<SuiContractClient>>,
+    sui_interactive_client: SuiInteractiveClient,
     config: CheckpointBlobExtenderConfig,
     metrics: Arc<Metrics>,
 }
@@ -28,13 +26,13 @@ pub struct CheckpointBlobExtender {
 impl CheckpointBlobExtender {
     pub fn new(
         archival_state: Arc<ArchivalState>,
-        walrus_client: Arc<WalrusNodeClient<SuiContractClient>>,
+        sui_interactive_client: SuiInteractiveClient,
         config: CheckpointBlobExtenderConfig,
         metrics: Arc<Metrics>,
     ) -> Self {
         Self {
             archival_state,
-            walrus_client,
+            sui_interactive_client,
             config,
             metrics,
         }
@@ -61,7 +59,15 @@ impl CheckpointBlobExtender {
         tracing::info!("checking blobs for expiration");
 
         // Get current Walrus epoch.
-        let current_epoch = self.walrus_client.get_committees().await?.epoch();
+        let current_epoch = self
+            .sui_interactive_client
+            .with_walrus_client_async(|client| {
+                Box::pin(async move {
+                    let committees = client.get_committees().await?;
+                    Ok(committees.epoch())
+                })
+            })
+            .await?;
         tracing::info!("current walrus epoch: {}", current_epoch);
 
         // Get all blobs from the archival state.
@@ -117,12 +123,20 @@ impl CheckpointBlobExtender {
             let max_retry_delay = self.config.max_transaction_retry_duration;
 
             let blob = loop {
-                match self
-                    .walrus_client
-                    .sui_client()
-                    .get_blob_by_object_id(&object_id)
-                    .await
-                {
+                let result = self
+                    .sui_interactive_client
+                    .with_walrus_client_async(|client| {
+                        Box::pin(async move {
+                            client
+                                .sui_client()
+                                .get_blob_by_object_id(&object_id)
+                                .await
+                                .map_err(|e| anyhow!("failed to get blob: {}", e))
+                        })
+                    })
+                    .await;
+
+                match result {
                     Ok(blob) => {
                         tracing::info!(
                             "successfully retrieved extended blob {} with new end_epoch: {}",
@@ -181,12 +195,21 @@ impl CheckpointBlobExtender {
                 self.config.extend_epoch_length
             );
 
-            match self
-                .walrus_client
-                .sui_client()
-                .extend_blob(object_id, self.config.extend_epoch_length)
-                .await
-            {
+            let extend_epoch_length = self.config.extend_epoch_length;
+            let result = self
+                .sui_interactive_client
+                .with_walrus_client_async(|client| {
+                    Box::pin(async move {
+                        client
+                            .sui_client()
+                            .extend_blob(object_id, extend_epoch_length)
+                            .await
+                            .map_err(|e| anyhow!("failed to extend blob: {}", e))
+                    })
+                })
+                .await;
+
+            match result {
                 Ok(_) => {
                     tracing::info!("successfully extended blob {}", object_id);
                     // Increment the success counter.

@@ -19,6 +19,7 @@ pub mod inspect_db;
 pub mod list_blobs;
 pub mod metrics;
 pub mod rest_api;
+pub mod sui_interactive_client;
 pub mod util;
 
 // Re-export the hidden module for macros.
