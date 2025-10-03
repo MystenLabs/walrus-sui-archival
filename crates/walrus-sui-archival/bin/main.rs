@@ -10,6 +10,7 @@ use walrus_sui_archival::{
     burn_blobs::burn_all_blobs,
     clear_metadata_blob_id::clear_metadata_blob_id,
     config::Config,
+    dump_metadata_blob::dump_metadata_blob,
     get_metadata_blob_id::get_metadata_blob_id,
     inspect_blob::inspect_blob,
     inspect_db::{InspectDbCommand, execute_inspect_db},
@@ -96,6 +97,12 @@ enum Commands {
         #[arg(short, long, default_value = "config/testnet_local_config.yaml")]
         config: PathBuf,
     },
+    /// Dump the content of the metadata blob.
+    DumpMetadataBlob {
+        /// Path to configuration file.
+        #[arg(short, long, default_value = "config/testnet_local_config.yaml")]
+        config: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -167,6 +174,12 @@ fn main() -> Result<()> {
             // Create tokio runtime for async operation.
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(clear_metadata_blob_id(config))?;
+        }
+        Commands::DumpMetadataBlob { config } => {
+            tracing::info!("dumping metadata blob content...");
+            // Create tokio runtime for async operation.
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(dump_metadata_blob(config))?;
         }
     }
 

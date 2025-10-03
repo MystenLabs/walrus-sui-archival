@@ -10,6 +10,7 @@ use tokio::fs;
 use walrus_core::{BlobId, Epoch};
 use walrus_sdk::{
     ObjectID,
+    SuiReadClient,
     client::{StoreArgs, WalrusNodeClient, responses::BlobStoreResult},
     config::ClientConfig,
     store_optimizations::StoreOptimizations,
@@ -233,4 +234,25 @@ pub async fn fetch_metadata_blob_id(
     Err(anyhow::anyhow!(
         "failed to extract blob_id from metadata pointer object"
     ))
+}
+
+pub async fn initialize_walrus_client(
+    client_config: ClientConfig,
+) -> Result<WalrusNodeClient<SuiContractClient>> {
+    let sui_client = client_config
+        .new_contract_client_with_wallet_in_config(None)
+        .await?;
+    let walrus_client =
+        WalrusNodeClient::new_contract_client_with_refresher(client_config, sui_client).await?;
+    Ok(walrus_client)
+}
+
+pub async fn initialize_walrus_read_client(
+    client_config: ClientConfig,
+    walrus_client: &WalrusNodeClient<SuiContractClient>,
+) -> Result<WalrusNodeClient<SuiReadClient>> {
+    let read_client = walrus_client.sui_client().read_client().clone();
+    let walrus_read_client =
+        WalrusNodeClient::new_read_client_with_refresher(client_config, read_client).await?;
+    Ok(walrus_read_client)
 }

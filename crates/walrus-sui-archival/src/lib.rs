@@ -13,6 +13,7 @@ pub mod checkpoint_downloader;
 pub mod checkpoint_monitor;
 pub mod clear_metadata_blob_id;
 pub mod config;
+pub mod dump_metadata_blob;
 pub mod get_metadata_blob_id;
 pub mod inspect_blob;
 pub mod inspect_db;
