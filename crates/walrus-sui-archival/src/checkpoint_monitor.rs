@@ -206,6 +206,8 @@ impl CheckpointMonitor {
             if self.last_updated_checkpoint_number.elapsed() > Duration::from_secs(60) {
                 let should_warn = self.last_stall_warning.elapsed() > Duration::from_secs(60);
 
+                // TODO: consider send another requests to workers to download the checkpoint again.
+
                 if should_warn {
                     tracing::warn!(
                         "checkpoint stalled at {}, last updated at {:?}, latest downloaded checkpoint {}",

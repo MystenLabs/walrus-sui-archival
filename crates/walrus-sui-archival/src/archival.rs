@@ -118,7 +118,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     // TODO(zhe): remove testing initial checkpoint.
     let initial_checkpoint = archival_state
         .get_latest_stored_checkpoint()?
-        .unwrap_or(CheckpointSequenceNumber::from(239999999u64))
+        .unwrap_or(CheckpointSequenceNumber::from(244999999u64))
         + 1;
 
     // Cleanup all the old downloaded checkpoints before initial_checkpoint.
@@ -172,6 +172,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         config.rest_api_address,
         archival_state.clone(),
         walrus_read_client.clone(),
+        Some(config.archival_state_snapshot.clone()),
     );
     let rest_api_handle = tokio::spawn(async move { rest_api_server.start().await });
 
