@@ -93,8 +93,10 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         }
     }
 
-    let (client_config, _) =
-        ClientConfig::load_from_multi_config(config.client_config_path, Some(&config.context))?;
+    let (client_config, _) = ClientConfig::load_from_multi_config(
+        config.client_config_path.clone(),
+        Some(&config.context),
+    )?;
 
     // Initialize walrus client.
     let walrus_client = initialize_walrus_client(client_config.clone()).await?;
@@ -175,6 +177,8 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         archival_state.clone(),
         walrus_read_client.clone(),
         Some(config.archival_state_snapshot.clone()),
+        config.client_config_path.clone(),
+        config.context.clone(),
     );
     let rest_api_handle = tokio::spawn(async move { rest_api_server.start().await });
 

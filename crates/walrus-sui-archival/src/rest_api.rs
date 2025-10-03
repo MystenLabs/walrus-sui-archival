@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use axum::{
@@ -21,7 +21,7 @@ use sui_types::{
 use walrus_core::{BlobId, encoding::Primary};
 use walrus_sdk::{ObjectID, SuiReadClient, client::WalrusNodeClient};
 
-use crate::{archival_state::ArchivalState, config::ArchivalStateSnapshotConfig};
+use crate::{archival_state::ArchivalState, config::ArchivalStateSnapshotConfig, util};
 
 /// REST API server for the archival system.
 pub struct RestApiServer {
@@ -29,6 +29,8 @@ pub struct RestApiServer {
     archival_state: Arc<ArchivalState>,
     walrus_client: Arc<WalrusNodeClient<SuiReadClient>>,
     snapshot_config: Option<ArchivalStateSnapshotConfig>,
+    client_config_path: PathBuf,
+    context: String,
 }
 
 impl RestApiServer {
@@ -38,12 +40,16 @@ impl RestApiServer {
         archival_state: Arc<ArchivalState>,
         walrus_client: Arc<WalrusNodeClient<SuiReadClient>>,
         snapshot_config: Option<ArchivalStateSnapshotConfig>,
+        client_config_path: PathBuf,
+        context: String,
     ) -> Self {
         Self {
             address,
             archival_state,
             walrus_client,
             snapshot_config,
+            client_config_path,
+            context,
         }
     }
 
@@ -53,6 +59,8 @@ impl RestApiServer {
             archival_state: self.archival_state,
             walrus_client: self.walrus_client,
             snapshot_config: self.snapshot_config,
+            client_config_path: self.client_config_path,
+            context: self.context,
         };
 
         let app = Router::new()
@@ -82,6 +90,8 @@ struct AppState {
     archival_state: Arc<ArchivalState>,
     walrus_client: Arc<WalrusNodeClient<SuiReadClient>>,
     snapshot_config: Option<ArchivalStateSnapshotConfig>,
+    client_config_path: PathBuf,
+    context: String,
 }
 
 /// Handler for listing all blobs.
@@ -245,12 +255,25 @@ async fn home_page(State(app_state): State<AppState>) -> Result<Html<String>, St
         earliest_checkpoint = 0;
     }
 
-    let metadata_info = app_state.snapshot_config.as_ref().map(|config| {
-        (
+    // Fetch metadata blob ID if snapshot config is available.
+    let metadata_info = if let Some(config) = app_state.snapshot_config.as_ref() {
+        let blob_id = util::fetch_metadata_blob_id(
+            &app_state.client_config_path,
+            config.metadata_pointer_object_id,
+            &app_state.context,
+        )
+        .await
+        .ok()
+        .flatten();
+
+        Some((
             config.metadata_pointer_object_id,
             config.metadata_package_id,
-        )
-    });
+            blob_id,
+        ))
+    } else {
+        None
+    };
 
     let html = build_home_page(
         blob_count,
@@ -475,6 +498,9 @@ fn build_checkpoint_form(
             <div class="checkbox-container">
                 <input type="checkbox" id="show_content" name="show_content" value="true" {}>
                 <label for="show_content">Show checkpoint data content</label>
+                <div style="margin-left: 25px; margin-top: 5px; font-size: 0.9em; color: #666;">
+                    <em>Note: This option is for testing purposes only and will be removed later. The proper way to read individual checkpoints is to query the Walrus blob directly.</em>
+                </div>
             </div>
             <button type="submit">Lookup Checkpoint</button>
         </form>
@@ -583,20 +609,28 @@ fn build_home_page(
     earliest_checkpoint: u64,
     latest_checkpoint: u64,
     total_size: u64,
-    metadata_info: Option<(ObjectID, ObjectID)>,
+    metadata_info: Option<(ObjectID, ObjectID, Option<BlobId>)>,
 ) -> String {
     let size_gb = total_size as f64 / (1024.0 * 1024.0 * 1024.0);
 
-    let (metadata_section, _metadata_stats) = if let Some((pointer_id, package_id)) = metadata_info
-    {
-        (
-            format!(
-                r#"
+    let (metadata_section, _metadata_stats) =
+        if let Some((pointer_id, package_id, blob_id_opt)) = metadata_info
+        {
+            let blob_id_display = if let Some(blob_id) = blob_id_opt {
+                format!("<code>{}</code>", blob_id)
+            } else {
+                "<em style=\"color: #999;\">Not set</em>".to_string()
+            };
+
+            (
+                format!(
+                    r#"
         <div class="metadata-section">
             <h2>📋 Metadata Tracking</h2>
             <div class="metadata-info">
                 <p><strong>On-Chain Metadata Pointer:</strong> <code>{}</code></p>
                 <p><strong>Metadata Package ID:</strong> <code>{}</code></p>
+                <p><strong>Current Metadata Blob ID:</strong> {}</p>
                 <p class="metadata-description">
                     The archival system maintains an on-chain metadata blob that contains a snapshot
                     of all checkpoint blob information. This enables disaster recovery and quick
@@ -605,13 +639,13 @@ fn build_home_page(
             </div>
         </div>
 "#,
-                pointer_id, package_id
-            ),
-            String::new(), // Can add metadata stats here if needed
-        )
-    } else {
-        (String::new(), String::new())
-    };
+                    pointer_id, package_id, blob_id_display
+                ),
+                String::new(), // Can add metadata stats here if needed
+            )
+        } else {
+            (String::new(), String::new())
+        };
 
     format!(
         r#"
