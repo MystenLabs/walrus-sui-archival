@@ -69,6 +69,7 @@ impl ArchivalStateSnapshotCreator {
             interval.tick().await;
 
             if let Err(e) = self.create_and_upload_snapshot().await {
+                self.metrics.snapshots_created_failed.inc();
                 tracing::error!("failed to create and upload snapshot: {}", e);
             }
         }
@@ -76,6 +77,8 @@ impl ArchivalStateSnapshotCreator {
 
     async fn create_and_upload_snapshot(&self) -> Result<()> {
         tracing::info!("creating archival state snapshot");
+
+        let creation_timer = self.metrics.snapshot_creation_latency_seconds.start_timer();
 
         // ensure snapshot directory exists.
         fs::create_dir_all(&self.config.snapshot_temp_dir)?;
@@ -99,10 +102,15 @@ impl ArchivalStateSnapshotCreator {
         ));
 
         // create parquet file from rocksdb data.
-        self.create_parquet_file(&snapshot_file)?;
+        let records_count = self.create_parquet_file(&snapshot_file)?;
+        self.metrics.snapshot_records_total.set(records_count as i64);
+
+        creation_timer.observe_duration();
 
         // upload to walrus.
+        let upload_timer = self.metrics.snapshot_upload_latency_seconds.start_timer();
         let blob_id = self.upload_to_walrus(&snapshot_file).await?;
+        upload_timer.observe_duration();
 
         // update on-chain metadata pointer if configured.
         let package_id = self.config.metadata_package_id;
@@ -205,16 +213,23 @@ impl ArchivalStateSnapshotCreator {
             })
             .await;
 
-        // Ignore the error if the onchain update fails. We can always retry in the next snapshot.
-        // TODO(zhe): add metrics to track the number of failed onchain updates.
-        // TODO(zhe): eventually we need to get an alert on this.
-        if let Err(e) = result {
-            tracing::error!("failed to update on-chain metadata pointer: {}", e);
+        // Track metadata update result.
+        match result {
+            Ok(_) => {
+                self.metrics.metadata_updates_success.inc();
+                tracing::info!("successfully updated on-chain metadata pointer");
+            }
+            Err(e) => {
+                self.metrics.metadata_updates_failed.inc();
+                tracing::error!("failed to update on-chain metadata pointer: {}", e);
+                // Continue even if metadata update fails - we can retry in the next snapshot.
+            }
         }
 
         // clean up temporary file.
         fs::remove_file(&snapshot_file)?;
 
+        self.metrics.snapshots_created_success.inc();
         tracing::info!(
             "snapshot created and uploaded successfully with blob_id: {}",
             blob_id
@@ -223,7 +238,7 @@ impl ArchivalStateSnapshotCreator {
         Ok(())
     }
 
-    fn create_parquet_file(&self, file_path: &PathBuf) -> Result<()> {
+    fn create_parquet_file(&self, file_path: &PathBuf) -> Result<usize> {
         tracing::info!("creating parquet file from rocksdb data");
 
         // define schema for parquet file.
@@ -253,18 +268,18 @@ impl ArchivalStateSnapshotCreator {
 
         // collect data from this column family.
         let mut values = Vec::new();
+        let mut total_records = 0;
 
         let iter = db.iterator_cf(&cf_handle, IteratorMode::Start);
         for item in iter {
             let (_key, value) = item?;
             let mut checkpoint_blob_info = CheckpointBlobInfo::decode(value.as_ref())?;
 
-            // TODO(zhe): add metrics to track the number of rows written.
-
             // Remove index entries to reduce the size of the snapshot. The index entries are stored
             // in checkpoint blob and can be reconstructed from the blob.
             checkpoint_blob_info.index_entries.clear();
             values.push(checkpoint_blob_info.encode_to_vec());
+            total_records += 1;
 
             // write batch when we have enough records.
             if values.len() >= 1000 {
@@ -279,9 +294,9 @@ impl ArchivalStateSnapshotCreator {
         }
 
         writer.close()?;
-        tracing::info!("parquet file created successfully");
+        tracing::info!("parquet file created successfully with {} records", total_records);
 
-        Ok(())
+        Ok(total_records)
     }
 
     fn write_batch_to_parquet(

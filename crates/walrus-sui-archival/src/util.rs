@@ -180,10 +180,11 @@ pub async fn upload_blob_to_walrus_with_retry(
 pub async fn fetch_metadata_blob_id(
     client_config_path: impl AsRef<Path>,
     metadata_pointer_object_id: SuiObjectID,
+    context: &str,
 ) -> Result<Option<BlobId>> {
     // initialize wallet context.
     let (client_config, _) =
-        ClientConfig::load_from_multi_config(client_config_path.as_ref(), Some("testnet"))?;
+        ClientConfig::load_from_multi_config(client_config_path.as_ref(), Some(context))?;
     let wallet = WalletContext::new(
         client_config
             .wallet_config

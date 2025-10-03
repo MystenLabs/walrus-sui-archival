@@ -26,7 +26,8 @@ pub async fn dump_metadata_blob(config_path: impl AsRef<Path>) -> Result<()> {
     let pointer_id = config.archival_state_snapshot.metadata_pointer_object_id;
 
     // Fetch the blob ID from the on-chain metadata pointer.
-    let blob_id_opt = fetch_metadata_blob_id(&config.client_config_path, pointer_id).await?;
+    let blob_id_opt =
+        fetch_metadata_blob_id(&config.client_config_path, pointer_id, &config.context).await?;
 
     let blob_id = match blob_id_opt {
         Some(id) => {
@@ -42,7 +43,7 @@ pub async fn dump_metadata_blob(config_path: impl AsRef<Path>) -> Result<()> {
     // Initialize Walrus client to fetch the blob.
     let (client_config, _) = walrus_sdk::config::ClientConfig::load_from_multi_config(
         &config.client_config_path,
-        Some("testnet"),
+        Some(&config.context),
     )?;
     let sui_client = client_config
         .new_contract_client_with_wallet_in_config(None)

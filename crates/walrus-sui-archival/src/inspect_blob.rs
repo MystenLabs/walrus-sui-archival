@@ -28,6 +28,7 @@ pub async fn inspect_blob(
     index: Option<usize>,
     offset: Option<u64>,
     length: Option<u64>,
+    context: Option<&str>,
     full: bool,
 ) -> Result<()> {
     // Get the blob data either from file or Walrus.
@@ -49,7 +50,7 @@ pub async fn inspect_blob(
             let blob_id = BlobId::from_str(&blob_id_str).context("failed to parse blob ID")?;
 
             // Fetch the blob from Walrus.
-            fetch_blob_from_walrus(blob_id, client_config_path).await?
+            fetch_blob_from_walrus(blob_id, client_config_path, context).await?
         }
         (Some(_), Some(_)) => {
             return Err(anyhow::anyhow!("cannot specify both path and blob ID"));
@@ -256,11 +257,14 @@ fn inspect_by_range(reader: &BlobBundleReader, offset: u64, length: u64, full: b
 }
 
 /// Fetch a blob from Walrus by its ID.
-async fn fetch_blob_from_walrus(blob_id: BlobId, client_config_path: PathBuf) -> Result<Bytes> {
+async fn fetch_blob_from_walrus(
+    blob_id: BlobId,
+    client_config_path: PathBuf,
+    context: Option<&str>,
+) -> Result<Bytes> {
     // Load the client configuration.
-    let (client_config, _) =
-        ClientConfig::load_from_multi_config(&client_config_path, Some("testnet"))
-            .context("failed to load client config")?;
+    let (client_config, _) = ClientConfig::load_from_multi_config(&client_config_path, context)
+        .context("failed to load client config")?;
 
     // Create the Sui client.
     let sui_client = client_config

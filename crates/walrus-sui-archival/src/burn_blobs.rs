@@ -11,13 +11,13 @@ use walrus_sdk::{
 
 /// Burns all blobs owned by the wallet in the client config.
 /// This is a development tool for cleaning up test blobs.
-pub async fn burn_all_blobs(client_config: PathBuf) -> Result<()> {
+pub async fn burn_all_blobs(client_config: PathBuf, context: &str) -> Result<()> {
     tracing::warn!(
         "starting burn all blobs operation - THIS WILL DELETE ALL BLOBS OWNED BY YOUR WALLET!"
     );
 
     // Load the client configuration.
-    let (client_config, _) = ClientConfig::load_from_multi_config(&client_config, Some("testnet"))
+    let (client_config, _) = ClientConfig::load_from_multi_config(&client_config, Some(context))
         .context("failed to load client config")?;
 
     // Create the Sui client with wallet.

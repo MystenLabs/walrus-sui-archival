@@ -17,7 +17,7 @@ use crate::config::Config;
 pub async fn clear_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()> {
     let config = Config::from_file(config_path)?;
     let (client_config, _) =
-        ClientConfig::load_from_multi_config(config.client_config_path, Some("testnet"))?;
+        ClientConfig::load_from_multi_config(config.client_config_path, Some(&config.context))?;
     let mut wallet = WalletContext::new(
         client_config
             .wallet_config

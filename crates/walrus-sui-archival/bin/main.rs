@@ -68,6 +68,9 @@ enum Commands {
         /// Optional length to read (used when index is not specified).
         #[arg(short = 'l', long)]
         length: Option<u64>,
+        /// Context to use for the client config.
+        #[arg(short, long, default_value = "testnet")]
+        context: Option<String>,
         /// Print full deserialized CheckpointData (verbose output).
         #[arg(short = 'f', long)]
         full: bool,
@@ -77,6 +80,9 @@ enum Commands {
         /// Path to client configuration file.
         #[arg(short, long, default_value = "config/local_client_config.yaml")]
         client_config: PathBuf,
+        /// Context to use for the client config.
+        #[arg(short, long, default_value = "testnet")]
+        context: String,
     },
     /// [DEV TOOL] Burn all blobs owned by the wallet (hidden from help).
     #[command(hide = true)]
@@ -84,6 +90,9 @@ enum Commands {
         /// Path to client configuration file.
         #[arg(short, long, default_value = "config/local_client_config.yaml")]
         client_config: PathBuf,
+        /// Context to use for the client config.
+        #[arg(short, long, default_value = "testnet")]
+        context: String,
     },
     /// Get the blob ID from the metadata pointer object.
     GetMetadataBlobId {
@@ -132,6 +141,7 @@ fn main() -> Result<()> {
             index,
             offset,
             length,
+            context,
             full,
         } => {
             match (&path, &blob_id) {
@@ -148,20 +158,27 @@ fn main() -> Result<()> {
                 index,
                 offset,
                 length,
+                context.as_deref(),
                 full,
             ))?;
         }
-        Commands::ListOwnedBlobs { client_config } => {
+        Commands::ListOwnedBlobs {
+            client_config,
+            context,
+        } => {
             tracing::info!("starting list owned blobs command...");
             // Create tokio runtime for async operation.
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(list_owned_blobs(client_config))?;
+            runtime.block_on(list_owned_blobs(client_config, &context))?;
         }
-        Commands::BurnAllBlobs { client_config } => {
+        Commands::BurnAllBlobs {
+            client_config,
+            context,
+        } => {
             tracing::warn!("starting burn all blobs command (dev tool)...");
             // Create tokio runtime for async operation.
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(burn_all_blobs(client_config))?;
+            runtime.block_on(burn_all_blobs(client_config, &context))?;
         }
         Commands::GetMetadataBlobId { config } => {
             tracing::info!("reading metadata blob id from on-chain pointer...");

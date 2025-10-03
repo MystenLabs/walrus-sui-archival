@@ -15,6 +15,9 @@ use walrus_core::EpochCount;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Context to use for the client config.
+    pub context: String,
+
     /// Path to the client config file.
     #[serde(default = "default_client_config_path")]
     pub client_config_path: PathBuf,

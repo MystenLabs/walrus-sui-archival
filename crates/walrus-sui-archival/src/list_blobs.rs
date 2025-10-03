@@ -10,11 +10,11 @@ use walrus_sdk::{
 };
 
 /// Lists all blobs owned by the wallet in the client config.
-pub async fn list_owned_blobs(client_config: PathBuf) -> Result<()> {
+pub async fn list_owned_blobs(client_config: PathBuf, context: &str) -> Result<()> {
     tracing::info!("listing all blobs owned by wallet...");
 
     // Load the client configuration.
-    let (client_config, _) = ClientConfig::load_from_multi_config(&client_config, Some("testnet"))
+    let (client_config, _) = ClientConfig::load_from_multi_config(&client_config, Some(context))
         .context("failed to load client config")?;
 
     // Create the Sui client with wallet.

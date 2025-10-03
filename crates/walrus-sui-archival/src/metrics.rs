@@ -52,6 +52,22 @@ pub struct Metrics {
     pub blob_extensions_succeeded: IntCounter,
     /// Total blob extensions failed.
     pub blob_extensions_failed: IntCounter,
+
+    // Archival state snapshot metrics.
+    /// Snapshot creation latency histogram.
+    pub snapshot_creation_latency_seconds: Histogram,
+    /// Snapshot upload latency histogram.
+    pub snapshot_upload_latency_seconds: Histogram,
+    /// Total number of records in the latest snapshot.
+    pub snapshot_records_total: IntGauge,
+    /// Total snapshots created successfully.
+    pub snapshots_created_success: IntCounter,
+    /// Total snapshots creation failed.
+    pub snapshots_created_failed: IntCounter,
+    /// Total on-chain metadata updates succeeded.
+    pub metadata_updates_success: IntCounter,
+    /// Total on-chain metadata updates failed.
+    pub metadata_updates_failed: IntCounter,
 }
 
 impl Metrics {
@@ -167,6 +183,49 @@ impl Metrics {
             IntCounter::new("blob_extensions_failed", "Total blob extensions failed")
                 .expect("metrics defined at compile time must be valid");
 
+        // Archival state snapshot metrics.
+        let snapshot_creation_latency_seconds = Histogram::with_opts(HistogramOpts::new(
+            "snapshot_creation_latency_seconds",
+            "Snapshot creation latency in seconds",
+        ))
+        .expect("metrics defined at compile time must be valid");
+
+        let snapshot_upload_latency_seconds = Histogram::with_opts(HistogramOpts::new(
+            "snapshot_upload_latency_seconds",
+            "Snapshot upload latency in seconds",
+        ))
+        .expect("metrics defined at compile time must be valid");
+
+        let snapshot_records_total = IntGauge::new(
+            "snapshot_records_total",
+            "Total number of records in the latest snapshot",
+        )
+        .expect("metrics defined at compile time must be valid");
+
+        let snapshots_created_success = IntCounter::new(
+            "snapshots_created_success",
+            "Total snapshots created successfully",
+        )
+        .expect("metrics defined at compile time must be valid");
+
+        let snapshots_created_failed = IntCounter::new(
+            "snapshots_created_failed",
+            "Total snapshots creation failed",
+        )
+        .expect("metrics defined at compile time must be valid");
+
+        let metadata_updates_success = IntCounter::new(
+            "metadata_updates_success",
+            "Total on-chain metadata updates succeeded",
+        )
+        .expect("metrics defined at compile time must be valid");
+
+        let metadata_updates_failed = IntCounter::new(
+            "metadata_updates_failed",
+            "Total on-chain metadata updates failed",
+        )
+        .expect("metrics defined at compile time must be valid");
+
         // Register all metrics.
         registry
             .register(Box::new(total_downloaded_checkpoints.clone()))
@@ -228,6 +287,27 @@ impl Metrics {
         registry
             .register(Box::new(blob_extensions_failed.clone()))
             .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(snapshot_creation_latency_seconds.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(snapshot_upload_latency_seconds.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(snapshot_records_total.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(snapshots_created_success.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(snapshots_created_failed.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(metadata_updates_success.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(metadata_updates_failed.clone()))
+            .expect("metrics defined at compile time must be valid");
 
         Self {
             total_downloaded_checkpoints,
@@ -250,6 +330,13 @@ impl Metrics {
             blob_extensions_attempted,
             blob_extensions_succeeded,
             blob_extensions_failed,
+            snapshot_creation_latency_seconds,
+            snapshot_upload_latency_seconds,
+            snapshot_records_total,
+            snapshots_created_success,
+            snapshots_created_failed,
+            metadata_updates_success,
+            metadata_updates_failed,
         }
     }
 }

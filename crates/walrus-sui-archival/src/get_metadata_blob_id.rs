@@ -14,7 +14,8 @@ pub async fn get_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()> {
 
     println!("metadata pointer object ID: {}", pointer_id);
 
-    let blob_id_opt = fetch_metadata_blob_id(&config.client_config_path, pointer_id).await?;
+    let blob_id_opt =
+        fetch_metadata_blob_id(&config.client_config_path, pointer_id, &config.context).await?;
 
     if let Some(blob_id) = blob_id_opt {
         println!("blob ID: {}", blob_id);

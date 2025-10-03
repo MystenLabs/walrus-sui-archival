@@ -1,4 +1,5 @@
 # Configuration for walrus-sui-archival.
+context: testnet
 client_config_path: /opt/walrus/config/testnet_client_config.yaml
 db_path: /opt/walrus/data/db
 thread_pool_size: 16
