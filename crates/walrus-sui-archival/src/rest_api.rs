@@ -614,8 +614,7 @@ fn build_home_page(
     let size_gb = total_size as f64 / (1024.0 * 1024.0 * 1024.0);
 
     let (metadata_section, _metadata_stats) =
-        if let Some((pointer_id, package_id, blob_id_opt)) = metadata_info
-        {
+        if let Some((pointer_id, package_id, blob_id_opt)) = metadata_info {
             let blob_id_display = if let Some(blob_id) = blob_id_opt {
                 format!("<code>{}</code>", blob_id)
             } else {
