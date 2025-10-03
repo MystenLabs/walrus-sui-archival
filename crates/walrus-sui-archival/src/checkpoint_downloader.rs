@@ -175,7 +175,7 @@ impl CheckpointDownloadWorker {
                 }
                 Err(e) => {
                     retry_count += 1;
-                    tracing::debug!(
+                    tracing::warn!(
                         checkpoint_number,
                         retry_count,
                         wait_duration_ms = wait_duration.as_millis(),

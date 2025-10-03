@@ -207,6 +207,8 @@ impl CheckpointMonitor {
                 let should_warn = self.last_stall_warning.elapsed() > Duration::from_secs(60);
 
                 // TODO: consider send another requests to workers to download the checkpoint again.
+                // TODO: we need to send backpressure to the checkpoint downloader to stop
+                // downloading new checkpoints until we catch up.
 
                 if should_warn {
                     tracing::warn!(
