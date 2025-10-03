@@ -230,7 +230,7 @@ async fn home_page(State(app_state): State<AppState>) -> Result<Html<String>, St
     let mut earliest_checkpoint = u64::MAX;
 
     for blob in &total_blobs {
-        let checkpoint_count = (blob.end_checkpoint - blob.start_checkpoint + 1) as u64;
+        let checkpoint_count = blob.end_checkpoint - blob.start_checkpoint + 1;
         total_checkpoints += checkpoint_count;
 
         if blob.start_checkpoint < earliest_checkpoint {
