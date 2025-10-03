@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y cmake clang
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
+COPY resources resources
 
 RUN cargo build --profile $PROFILE --bin walrus-sui-archival
 
