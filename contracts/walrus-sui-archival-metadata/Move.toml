@@ -3,7 +3,7 @@ name = "walrus_sui_archival_metadata"
 version = "0.0.1"
 
 [dependencies]
-Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet-v1.56.1" }
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet-v1.58.1" }
 
 [addresses]
 walrus_sui_archival_metadata = "0x0"
