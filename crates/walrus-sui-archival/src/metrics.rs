@@ -1,10 +1,16 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
+
 use prometheus::{Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, Opts, Registry};
+use sui_indexer_alt_framework::metrics::IndexerMetrics;
 
 /// Metrics for the walrus-sui-archival service.
 pub struct Metrics {
+    // Indexer metrics for injection service.
+    pub indexer_metrics: Arc<IndexerMetrics>,
+
     // Checkpoint downloader metrics.
     /// Total number of checkpoints downloaded.
     pub total_downloaded_checkpoints: IntCounter,
@@ -73,6 +79,9 @@ pub struct Metrics {
 impl Metrics {
     /// Create and register metrics with the provided registry.
     pub fn new(registry: &Registry) -> Self {
+        // Indexer metrics for injection service.
+        let indexer_metrics = IndexerMetrics::new(None, registry);
+
         // Checkpoint downloader metrics.
         let total_downloaded_checkpoints = IntCounter::new(
             "total_downloaded_checkpoints",
@@ -310,6 +319,7 @@ impl Metrics {
             .expect("metrics defined at compile time must be valid");
 
         Self {
+            indexer_metrics,
             total_downloaded_checkpoints,
             latest_processed_checkpoint,
             active_download_workers,

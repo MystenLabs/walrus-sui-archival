@@ -38,16 +38,38 @@ pub async fn burn_all_blobs(client_config: PathBuf, context: &str) -> Result<()>
         return Ok(());
     }
 
-    tracing::info!("found {} blobs to burn", owned_blobs.len());
+    let total_blobs = owned_blobs.len();
+    tracing::info!("found {} blobs to burn", total_blobs);
 
-    // Burn the blob objects.
+    // Burn the blob objects in batches of 100.
     let object_ids = owned_blobs.iter().map(|blob| blob.id).collect::<Vec<_>>();
-    let burn_blobs_result = sui_client.burn_blobs(&object_ids).await;
-    tracing::info!(
-        "burn blobs result: {:?}, burned count: {}",
-        burn_blobs_result,
-        owned_blobs.len(),
-    );
+    const BATCH_SIZE: usize = 100;
+    let mut burned_count = 0;
+
+    for (batch_index, chunk) in object_ids.chunks(BATCH_SIZE).enumerate() {
+        let batch_num = batch_index + 1;
+        let chunk_size = chunk.len();
+
+        tracing::info!(
+            "burning batch {}/{} ({} blobs)...",
+            batch_num,
+            (total_blobs + BATCH_SIZE - 1) / BATCH_SIZE,
+            chunk_size
+        );
+
+        let burn_blobs_result = sui_client.burn_blobs(chunk).await;
+        burned_count += chunk_size;
+
+        tracing::info!(
+            "batch {} result: {:?}, progress: {}/{}",
+            batch_num,
+            burn_blobs_result,
+            burned_count,
+            total_blobs
+        );
+    }
+
+    tracing::info!("completed burning {} blobs", burned_count);
 
     Ok(())
 }

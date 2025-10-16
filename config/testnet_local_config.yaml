@@ -4,9 +4,18 @@ client_config_path: ./config/local_client_config.yaml
 thread_pool_size: 8
 rest_api_address: "0.0.0.0:9185"
 metrics_address: "0.0.0.0:9184"
+# checkpoint_downloader:
+#   type: bucket
+#   bucket_base_url: "https://checkpoints.testnet.sui.io"
+#   downloaded_checkpoint_dir: "downloaded_checkpoint_dir"
 checkpoint_downloader:
-  bucket_base_url: "https://checkpoints.testnet.sui.io"
+  type: injection_service
+  remote_store_url: "https://checkpoints.testnet.sui.io"
   downloaded_checkpoint_dir: "downloaded_checkpoint_dir"
+  ingestion_config:
+    checkpoint_buffer_size: 200
+    ingest_concurrency: 50
+    retry_interval_ms: 1000
 checkpoint_blob_publisher:
   store_epoch_length: 2
 checkpoint_blob_extender:

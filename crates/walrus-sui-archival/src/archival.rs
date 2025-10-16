@@ -21,7 +21,8 @@ use crate::{
     checkpoint_blob_publisher::{self, BlobBuildRequest},
     checkpoint_downloader,
     checkpoint_monitor,
-    config::Config,
+    config::{CheckpointDownloaderType, Config},
+    injection_service_checkpoint_downloader,
     metrics::Metrics,
     rest_api::RestApiServer,
     sui_interactive_client::SuiInteractiveClient,
@@ -128,7 +129,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         initial_checkpoint,
         config
             .checkpoint_downloader
-            .downloaded_checkpoint_dir
+            .downloaded_checkpoint_dir()
             .clone(),
     )
     .await?;
@@ -145,7 +146,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         config.checkpoint_blob_publisher.clone(),
         config
             .checkpoint_downloader
-            .downloaded_checkpoint_dir
+            .downloaded_checkpoint_dir()
             .clone(),
         metrics.clone(),
     )
@@ -153,13 +154,25 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     let blob_publisher_handle =
         tokio::spawn(async move { blob_publisher.start(blob_publisher_rx).await });
 
-    // Start the checkpoint downloader and get the receiver.
-    let downloader = checkpoint_downloader::CheckpointDownloader::new(
-        config.checkpoint_downloader.clone(),
-        metrics.clone(),
-    );
+    // Start the checkpoint downloader based on the configured type.
     let (checkpoint_receiver, downloader_pause_tx, checkpoint_downloading_driver_handle) =
-        downloader.start(initial_checkpoint).await?;
+        match &config.checkpoint_downloader {
+            CheckpointDownloaderType::Bucket(downloader_config) => {
+                let downloader = checkpoint_downloader::CheckpointDownloader::new(
+                    downloader_config.clone(),
+                    metrics.clone(),
+                );
+                downloader.start(initial_checkpoint).await?
+            }
+            CheckpointDownloaderType::InjectionService(downloader_config) => {
+                let downloader =
+                    injection_service_checkpoint_downloader::InjectionServiceCheckpointDownloader::new(
+                        downloader_config.clone(),
+                        metrics.clone(),
+                    );
+                downloader.start(initial_checkpoint).await?
+            }
+        };
 
     // Start the checkpoint monitor with the receiver.
     let mut monitor = checkpoint_monitor::CheckpointMonitor::new(

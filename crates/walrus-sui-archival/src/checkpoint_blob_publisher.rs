@@ -9,11 +9,8 @@ use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{fs, sync::mpsc};
 
 use crate::{
-    archival_state::ArchivalState,
-    config::CheckpointBlobPublisherConfig,
-    metrics::Metrics,
-    sui_interactive_client::SuiInteractiveClient,
-    util::upload_blob_to_walrus_with_retry,
+    archival_state::ArchivalState, config::CheckpointBlobPublisherConfig, metrics::Metrics,
+    sui_interactive_client::SuiInteractiveClient, util::upload_blob_to_walrus_with_retry,
 };
 
 /// Message sent from CheckpointMonitor to CheckpointBlobPublisher.

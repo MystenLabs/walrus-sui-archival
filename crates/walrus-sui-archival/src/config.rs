@@ -9,7 +9,9 @@ use std::{
 };
 
 use anyhow::Result;
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
+use sui_indexer_alt_framework::ingestion::{ClientArgs, IngestionConfig};
 use sui_types::base_types::{ObjectID, SequenceNumber};
 use walrus_core::EpochCount;
 
@@ -31,7 +33,7 @@ pub struct Config {
     pub thread_pool_size: usize,
 
     /// Configuration for the checkpoint downloader.
-    pub checkpoint_downloader: CheckpointDownloaderConfig,
+    pub checkpoint_downloader: CheckpointDownloaderType,
 
     /// Configuration for the checkpoint monitor.
     #[serde(default)]
@@ -58,6 +60,25 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CheckpointDownloaderType {
+    /// Use the original checkpoint downloader that downloads from a bucket URL.
+    Bucket(CheckpointDownloaderConfig),
+    /// Use the injection service checkpoint downloader.
+    InjectionService(InjectionServiceCheckpointDownloaderConfig),
+}
+
+impl CheckpointDownloaderType {
+    /// Get the downloaded checkpoint directory from the config.
+    pub fn downloaded_checkpoint_dir(&self) -> &PathBuf {
+        match self {
+            CheckpointDownloaderType::Bucket(config) => &config.downloaded_checkpoint_dir,
+            CheckpointDownloaderType::InjectionService(config) => &config.downloaded_checkpoint_dir,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointDownloaderConfig {
     /// Base URL for the S3 bucket containing checkpoints.
     pub bucket_base_url: String,
@@ -77,6 +98,37 @@ pub struct CheckpointDownloaderConfig {
     /// Maximum wait time for download retry.
     #[serde(default = "default_max_download_retry_wait", with = "humantime_serde")]
     pub max_download_retry_wait: Duration,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InjectionServiceCheckpointDownloaderConfig {
+    /// Number of worker threads for processing checkpoints.
+    #[serde(default = "default_num_workers")]
+    pub num_workers: usize,
+
+    /// Directory to store downloaded checkpoint data.
+    #[serde(default = "default_downloaded_checkpoint_dir")]
+    pub downloaded_checkpoint_dir: PathBuf,
+
+    /// Remote Store to fetch checkpoints from.
+    pub remote_store_url: Url,
+
+    /// Configuration for the ingestion service.
+    #[serde(default)]
+    pub ingestion_config: IngestionConfig,
+}
+
+impl InjectionServiceCheckpointDownloaderConfig {
+    /// Convert this config into ClientArgs for the ingestion service.
+    pub fn to_client_args(&self) -> ClientArgs {
+        ClientArgs {
+            remote_store_url: Some(self.remote_store_url.clone()),
+            local_ingestion_path: None,
+            rpc_api_url: None,
+            rpc_username: None,
+            rpc_password: None,
+        }
+    }
 }
 
 impl Config {

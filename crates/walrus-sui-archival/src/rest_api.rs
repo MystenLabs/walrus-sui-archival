@@ -15,8 +15,7 @@ use axum::{
 use serde::Deserialize;
 use sui_storage::blob::Blob;
 use sui_types::{
-    full_checkpoint_content::CheckpointData,
-    messages_checkpoint::CheckpointSequenceNumber,
+    full_checkpoint_content::CheckpointData, messages_checkpoint::CheckpointSequenceNumber,
 };
 use walrus_core::{BlobId, encoding::Primary};
 use walrus_sdk::{ObjectID, SuiReadClient, client::WalrusNodeClient};

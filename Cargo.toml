@@ -27,12 +27,14 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 rocksdb = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
-sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.58.1" } 
+sui-indexer-alt-framework = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.58.1" }
+sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.58.1" }
 sui-storage = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.58.1" }
 sui-types = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.58.1" }
 telemetry-subscribers = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.58.1" }
 thiserror = "2.0.16"
 tokio = { version = "1.40", features = ["full"] }
+tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walrus-core = { git = "https://github.com/MystenLabs/walrus.git", tag = "testnet-v1.35.0" }
