@@ -155,24 +155,30 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         tokio::spawn(async move { blob_publisher.start(blob_publisher_rx).await });
 
     // Start the checkpoint downloader based on the configured type.
-    let (checkpoint_receiver, downloader_pause_tx, checkpoint_downloading_driver_handle) =
-        match &config.checkpoint_downloader {
-            CheckpointDownloaderType::Bucket(downloader_config) => {
-                let downloader = checkpoint_downloader::CheckpointDownloader::new(
+    let (
+        checkpoint_receiver,
+        downloader_pause_tx,
+        watermark_tx,
+        checkpoint_downloading_driver_handle,
+    ) = match &config.checkpoint_downloader {
+        CheckpointDownloaderType::Bucket(downloader_config) => {
+            let downloader = checkpoint_downloader::CheckpointDownloader::new(
+                downloader_config.clone(),
+                metrics.clone(),
+            );
+            let (receiver, pause_tx, handle) = downloader.start(initial_checkpoint).await?;
+            (receiver, Some(pause_tx), None, handle)
+        }
+        CheckpointDownloaderType::InjectionService(downloader_config) => {
+            let downloader =
+                injection_service_checkpoint_downloader::InjectionServiceCheckpointDownloader::new(
                     downloader_config.clone(),
                     metrics.clone(),
                 );
-                downloader.start(initial_checkpoint).await?
-            }
-            CheckpointDownloaderType::InjectionService(downloader_config) => {
-                let downloader =
-                    injection_service_checkpoint_downloader::InjectionServiceCheckpointDownloader::new(
-                        downloader_config.clone(),
-                        metrics.clone(),
-                    );
-                downloader.start(initial_checkpoint).await?
-            }
-        };
+            let (receiver, watermark_tx, handle) = downloader.start(initial_checkpoint).await?;
+            (receiver, None, Some(watermark_tx), handle)
+        }
+    };
 
     // Start the checkpoint monitor with the receiver.
     let mut monitor = checkpoint_monitor::CheckpointMonitor::new(
@@ -181,7 +187,13 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         metrics.clone(),
     );
     // Wire the backpressure channel from monitor to downloader.
-    monitor.set_downloader_pause_channel(downloader_pause_tx);
+    if let Some(downloader_pause_tx) = downloader_pause_tx {
+        monitor.set_downloader_pause_channel(downloader_pause_tx);
+    }
+    // Wire the watermark channel from monitor to ingestion service.
+    if let Some(watermark_tx) = watermark_tx {
+        monitor.set_watermark_channel(watermark_tx);
+    }
     let monitor_handle = monitor.start(initial_checkpoint, checkpoint_receiver);
 
     // Start the REST API server.

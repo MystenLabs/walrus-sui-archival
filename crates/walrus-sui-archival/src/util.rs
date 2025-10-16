@@ -9,7 +9,8 @@ use sui_sdk::{types::base_types::ObjectID as SuiObjectID, wallet_context::Wallet
 use tokio::fs;
 use walrus_core::{BlobId, Epoch};
 use walrus_sdk::{
-    ObjectID, SuiReadClient,
+    ObjectID,
+    SuiReadClient,
     client::{StoreArgs, WalrusNodeClient, responses::BlobStoreResult},
     config::ClientConfig,
     store_optimizations::StoreOptimizations,

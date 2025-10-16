@@ -8,8 +8,10 @@ use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::sync::mpsc;
 
 use crate::{
-    checkpoint_blob_publisher::BlobBuildRequest, checkpoint_downloader::CheckpointInfo,
-    config::CheckpointMonitorConfig, metrics::Metrics,
+    checkpoint_blob_publisher::BlobBuildRequest,
+    checkpoint_downloader::CheckpointInfo,
+    config::CheckpointMonitorConfig,
+    metrics::Metrics,
 };
 
 /// Threshold for number of pending checkpoints before pausing the downloader.
@@ -118,10 +120,20 @@ pub struct CheckpointMonitor {
     last_stall_warning: tokio::time::Instant,
     /// Channel to send blob build requests to CheckpointBlobPublisher.
     blob_publisher_tx: mpsc::Sender<BlobBuildRequest>,
+    /// Two ways of doing backpressure:
+    /// 1. Pause the downloader.
+    /// 2. Send watermark updates to IngestionService.
+    ///
     /// Channel to send backpressure signals to CheckpointDownloader.
     downloader_pause_tx: Option<mpsc::Sender<bool>>,
     /// Whether the downloader is currently paused.
     is_downloader_paused: bool,
+    /// Channel to send watermark updates to IngestionService.
+    watermark_tx: Option<mpsc::UnboundedSender<(&'static str, CheckpointSequenceNumber)>>,
+    /// Atomic value to track watermark for periodic updates.
+    watermark_checkpoint: Option<Arc<std::sync::atomic::AtomicU64>>,
+    /// Handle for the watermark update task.
+    watermark_task_handle: Option<tokio::task::JoinHandle<()>>,
     metrics: Arc<Metrics>,
 }
 
@@ -141,12 +153,22 @@ impl CheckpointMonitor {
             blob_publisher_tx,
             downloader_pause_tx: None,
             is_downloader_paused: false,
+            watermark_tx: None,
+            watermark_checkpoint: None,
+            watermark_task_handle: None,
             metrics,
         }
     }
 
     pub fn set_downloader_pause_channel(&mut self, pause_tx: mpsc::Sender<bool>) {
         self.downloader_pause_tx = Some(pause_tx);
+    }
+
+    pub fn set_watermark_channel(
+        &mut self,
+        watermark_tx: mpsc::UnboundedSender<(&'static str, CheckpointSequenceNumber)>,
+    ) {
+        self.watermark_tx = Some(watermark_tx);
     }
 
     /// Start monitoring checkpoints from the receiver.
@@ -162,6 +184,30 @@ impl CheckpointMonitor {
 
         self.next_checkpoint_number = initial_checkpoint;
         self.last_updated_checkpoint_number = tokio::time::Instant::now();
+
+        // Spawn periodic task to send watermark updates if watermark channel is set.
+        if let Some(watermark_tx) = self.watermark_tx.take() {
+            // Create the watermark checkpoint atomic value.
+            let watermark_checkpoint =
+                Arc::new(std::sync::atomic::AtomicU64::new(initial_checkpoint));
+            let watermark_checkpoint_clone = watermark_checkpoint.clone();
+
+            let task = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(1));
+                loop {
+                    interval.tick().await;
+                    let checkpoint_num =
+                        watermark_checkpoint_clone.load(std::sync::atomic::Ordering::Relaxed);
+                    if let Err(e) = watermark_tx.send(("checkpoint_monitor", checkpoint_num)) {
+                        tracing::debug!("failed to send watermark: {}", e);
+                        break;
+                    }
+                }
+            });
+
+            self.watermark_checkpoint = Some(watermark_checkpoint);
+            self.watermark_task_handle = Some(task);
+        }
 
         while let Some(checkpoint_info) = result_rx.recv().await {
             tracing::debug!(
@@ -249,11 +295,22 @@ impl CheckpointMonitor {
                 self.pending_checkpoints.len(),
                 self.next_checkpoint_number
             );
+
+            // Abort watermark task if it exists.
+            if let Some(task) = self.watermark_task_handle.take() {
+                task.abort();
+            }
+
             return Err(anyhow!(
                 "checkpoint sequence incomplete: missing checkpoint {} with {} pending",
                 self.next_checkpoint_number,
                 self.pending_checkpoints.len()
             ));
+        }
+
+        // Abort watermark task if it exists.
+        if let Some(task) = self.watermark_task_handle.take() {
+            task.abort();
         }
 
         tracing::info!("checkpoint monitor stopped");
@@ -358,6 +415,13 @@ impl CheckpointMonitor {
 
     /// Apply backpressure to the checkpoint downloader based on pending buffer size.
     async fn apply_backpressure(&mut self) {
+        // Send watermark update if watermark channel is set.
+        if let Some(watermark_tx) = self.watermark_tx.take() {
+            if let Err(e) = watermark_tx.send(("checkpoint_monitor", self.next_checkpoint_number)) {
+                tracing::warn!("failed to send watermark update: {}", e);
+            }
+        }
+
         let pending_count = self.pending_checkpoints.len();
 
         if let Some(ref pause_tx) = self.downloader_pause_tx {

@@ -8,7 +8,8 @@ use async_channel::Receiver;
 use reqwest::Url;
 use sui_storage::blob::Blob;
 use sui_types::{
-    full_checkpoint_content::CheckpointData, messages_checkpoint::CheckpointSequenceNumber,
+    full_checkpoint_content::CheckpointData,
+    messages_checkpoint::CheckpointSequenceNumber,
 };
 use tokio::{fs, sync, task, time};
 

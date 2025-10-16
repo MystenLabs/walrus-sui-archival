@@ -11,7 +11,7 @@ use sui_types::{
     full_checkpoint_content::CheckpointData,
     messages_checkpoint::CheckpointSequenceNumber,
 };
-use tokio::{fs, select, sync, task, time};
+use tokio::{fs, select, sync, task};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -224,7 +224,7 @@ impl InjectionServiceCheckpointDownloader {
         initial_checkpoint: CheckpointSequenceNumber,
     ) -> Result<(
         sync::mpsc::Receiver<CheckpointInfo>,
-        sync::mpsc::Sender<bool>,
+        sync::mpsc::UnboundedSender<(&'static str, CheckpointSequenceNumber)>,
         task::JoinHandle<()>,
     )> {
         tracing::info!(
@@ -249,13 +249,11 @@ impl InjectionServiceCheckpointDownloader {
         )?;
 
         // Subscribe to the ingestion service.
-        let (checkpoint_rx, _watermark_tx) = ingestion_service.subscribe();
+        let (checkpoint_rx, watermark_tx) = ingestion_service.subscribe();
 
         // Create channels for worker communication.
         let (download_tx, download_rx) = async_channel::bounded::<Arc<CheckpointData>>(100);
         let (result_tx, result_rx) = sync::mpsc::channel::<CheckpointInfo>(100);
-        // Create a channel for backpressure control (pause/resume).
-        let (pause_tx, pause_rx) = sync::mpsc::channel::<bool>(10);
 
         // Start the ingestion service.
         let (regulator_handle, broadcaster_handle) =
@@ -283,7 +281,7 @@ impl InjectionServiceCheckpointDownloader {
 
         // Start the driver task to forward checkpoints from ingestion service to workers.
         let driver_handle = tokio::spawn(async move {
-            if let Err(e) = Self::checkpoint_driver(checkpoint_rx, download_tx, pause_rx).await {
+            if let Err(e) = Self::checkpoint_driver(checkpoint_rx, download_tx).await {
                 tracing::error!("checkpoint driver failed: {}", e);
             }
         });
@@ -313,37 +311,15 @@ impl InjectionServiceCheckpointDownloader {
             }
         });
 
-        // Return the receiver for the CheckpointMonitor to consume and the pause sender.
-        Ok((result_rx, pause_tx, joined_handle))
+        // Return the receiver for the CheckpointMonitor to consume, watermark sender, and the join handle.
+        Ok((result_rx, watermark_tx, joined_handle))
     }
 
     async fn checkpoint_driver(
         mut checkpoint_rx: sync::mpsc::Receiver<Arc<CheckpointData>>,
         download_tx: async_channel::Sender<Arc<CheckpointData>>,
-        mut pause_rx: sync::mpsc::Receiver<bool>,
     ) -> Result<()> {
-        let mut is_paused = false;
-
         loop {
-            // Check for pause/resume signals.
-            while let Ok(should_pause) = pause_rx.try_recv() {
-                if should_pause && !is_paused {
-                    tracing::info!(
-                        "injection service checkpoint downloader paused due to backpressure"
-                    );
-                    is_paused = true;
-                } else if !should_pause && is_paused {
-                    tracing::info!("injection service checkpoint downloader resumed");
-                    is_paused = false;
-                }
-            }
-
-            // If paused, wait before checking again.
-            if is_paused {
-                time::sleep(time::Duration::from_millis(100)).await;
-                continue;
-            }
-
             // Receive checkpoint from ingestion service.
             match checkpoint_rx.recv().await {
                 Some(checkpoint_data) => {

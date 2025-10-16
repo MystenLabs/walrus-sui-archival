@@ -9,7 +9,9 @@ use tokio::time;
 use walrus_sdk::sui::client::ReadClient;
 
 use crate::{
-    archival_state::ArchivalState, config::CheckpointBlobExtenderConfig, metrics::Metrics,
+    archival_state::ArchivalState,
+    config::CheckpointBlobExtenderConfig,
+    metrics::Metrics,
     sui_interactive_client::SuiInteractiveClient,
 };
 
