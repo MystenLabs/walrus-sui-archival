@@ -415,11 +415,11 @@ impl CheckpointMonitor {
 
     /// Apply backpressure to the checkpoint downloader based on pending buffer size.
     async fn apply_backpressure(&mut self) {
-        // Send watermark update if watermark channel is set.
-        if let Some(watermark_tx) = self.watermark_tx.take() {
-            if let Err(e) = watermark_tx.send(("checkpoint_monitor", self.next_checkpoint_number)) {
-                tracing::warn!("failed to send watermark update: {}", e);
-            }
+        if let Some(ref watermark_checkpoint) = self.watermark_checkpoint {
+            watermark_checkpoint.store(
+                self.next_checkpoint_number,
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
 
         let pending_count = self.pending_checkpoints.len();
