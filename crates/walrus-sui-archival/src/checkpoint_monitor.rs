@@ -198,6 +198,7 @@ impl CheckpointMonitor {
                     interval.tick().await;
                     let checkpoint_num =
                         watermark_checkpoint_clone.load(std::sync::atomic::Ordering::Relaxed);
+                    tracing::info!("sending watermark: {}", checkpoint_num);
                     if let Err(e) = watermark_tx.send(("checkpoint_monitor", checkpoint_num)) {
                         tracing::debug!("failed to send watermark: {}", e);
                         break;
