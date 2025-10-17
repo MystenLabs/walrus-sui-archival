@@ -251,6 +251,9 @@ impl InjectionServiceCheckpointDownloader {
         // Subscribe to the ingestion service.
         let (checkpoint_rx, watermark_tx) = ingestion_service.subscribe();
 
+        // Set initial watermark prevent downloading too many checkpoints at beginning.
+        watermark_tx.send(("checkpoint_monitor", initial_checkpoint))?;
+
         // Create channels for worker communication.
         let (download_tx, download_rx) = async_channel::bounded::<Arc<CheckpointData>>(100);
         let (result_tx, result_rx) = sync::mpsc::channel::<CheckpointInfo>(100);
