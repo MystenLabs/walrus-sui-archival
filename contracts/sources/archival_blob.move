@@ -24,6 +24,15 @@ module walrus_sui_archival_metadata::archival_blob {
         blob: Blob,
     }
 
+    /// Initialize the module, creating and sharing the ArchivalBlobFund.
+    fun init(ctx: &mut TxContext) {
+        let archival_blob_fund = ArchivalBlobFund {
+            id: object::new(ctx),
+            balance: balance::zero(),
+        };
+        transfer::share_object(archival_blob_fund);
+    }
+
     /// Create a new ArchivalBlobFund and share it.
     public fun create(
         _admin_cap: &AdminCap,
@@ -117,9 +126,19 @@ module walrus_sui_archival_metadata::archival_blob {
         &shared_blob.blob
     }
 
+    public fun blob_expiration_epoch(shared_blob: &SharedBlob): u32 {
+        use walrus::blob;
+        blob::end_epoch(&shared_blob.blob)
+    }
+
     /// Get the current balance of the fund.
     public fun get_balance(archival_blob_fund: &ArchivalBlobFund): u64 {
         balance::value(&archival_blob_fund.balance)
+    }
+
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx);
     }
 
     #[test_only]

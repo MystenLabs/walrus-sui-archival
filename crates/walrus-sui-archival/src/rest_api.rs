@@ -23,6 +23,26 @@ use walrus_sdk::{ObjectID, SuiReadClient, client::WalrusNodeClient};
 
 use crate::{archival_state::ArchivalState, config::ArchivalStateSnapshotConfig, util};
 
+/// Format size in bytes to human-readable format.
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
+
+    if bytes >= TB {
+        format!("{:.2} TB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
 /// REST API server for the archival system.
 pub struct RestApiServer {
     address: SocketAddr,
@@ -142,8 +162,9 @@ async fn list_all_blobs(State(app_state): State<AppState>) -> Result<Html<String
         html.push_str("<th>End Checkpoint</th>\n");
         html.push_str("<th>End of Epoch</th>\n");
         html.push_str("<th>Expiry Epoch</th>\n");
+        html.push_str("<th>Shared Blob</th>\n");
         html.push_str("<th>Entries</th>\n");
-        html.push_str("<th>Size (bytes)</th>\n");
+        html.push_str("<th>Size</th>\n");
         html.push_str("</tr>\n");
 
         let mut total_entries = 0;
@@ -168,8 +189,12 @@ async fn list_all_blobs(State(app_state): State<AppState>) -> Result<Html<String
                 if blob_info.end_of_epoch { "Yes" } else { "No" }
             ));
             html.push_str(&format!("<td>{}</td>\n", blob_info.blob_expiration_epoch));
+            html.push_str(&format!(
+                "<td>{}</td>\n",
+                if blob_info.is_shared_blob { "Yes" } else { "No" }
+            ));
             html.push_str(&format!("<td>{}</td>\n", entries_count));
-            html.push_str(&format!("<td>{}</td>\n", blob_size));
+            html.push_str(&format!("<td>{}</td>\n", format_size(blob_size)));
             html.push_str("</tr>\n");
         }
 
@@ -184,9 +209,8 @@ async fn list_all_blobs(State(app_state): State<AppState>) -> Result<Html<String
             total_entries
         ));
         html.push_str(&format!(
-            "<p>Total data size: {} bytes ({:.2} GB)</p>\n",
-            total_size,
-            total_size as f64 / (1024.0 * 1024.0 * 1024.0)
+            "<p>Total data size: {}</p>\n",
+            format_size(total_size)
         ));
         html.push_str("</div>\n");
     }

@@ -14,6 +14,15 @@ module walrus_sui_archival_metadata::archival_metadata {
         blob_id: Option<vector<u8>>,
     }
 
+    /// Initialize the module, creating and sharing the metadata blob pointer.
+    fun init(ctx: &mut TxContext) {
+        let metadata_pointer = MetadataBlobPointer {
+            id: object::new(ctx),
+            blob_id: option::none(),
+        };
+        transfer::share_object(metadata_pointer);
+    }
+
     /// Create and share the metadata blob pointer.
     public fun create_metadata_pointer(_admin_cap: &AdminCap, ctx: &mut TxContext) {
         let metadata_pointer = MetadataBlobPointer {
@@ -49,5 +58,10 @@ module walrus_sui_archival_metadata::archival_metadata {
 
     public fun get_blob_id(metadata_pointer: &MetadataBlobPointer): &Option<vector<u8>> {
         &metadata_pointer.blob_id
+    }
+
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx);
     }
 }

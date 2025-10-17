@@ -18,15 +18,16 @@ checkpoint_downloader:
     retry_interval_ms: 1000
 checkpoint_blob_publisher:
   store_epoch_length: 2
+  create_shared_blobs: true
 checkpoint_blob_extender:
   check_interval: 60s
   extend_epoch_length: 2
 archival_state_snapshot:
   snapshot_state_to_walrus_interval: 600s
   #snapshot_temp_dir:
-  contract_package_id: 0x32b66df04eb2deb6151b41e2f682457ae5288372997ce04f883a22aa50418416
+  contract_package_id: 0x10bcbfab608a7d6d7a9079d40ccbd632bf945e83662de5ed402720c6a9c18651
   wal_token_package_id: 0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a
-  admin_cap_object_id: 0xcc32bca08130042b3a76ab174b66e030eff2238f7dd95306bc102aed94d84d44
-  metadata_pointer_object_id: 0x3a191d073cd9226bf1743570910b67d3b87bb3610c2231ed0f2ecba3242635bd
-  metadata_pointer_initial_shared_version: 599254701
+  admin_cap_object_id: 0xa3aa6c66bacff0163bea57c8399aae5e6cc2727a5fdd090c2ceb52b0a92fd285
+  metadata_pointer_object_id: 0x2c4947288f84586b2881c6820322b1f90cb7ab32a6cbf4524ce66b801e2488a1
+  metadata_pointer_initial_shared_version: 599718273
   store_epoch_length: 2

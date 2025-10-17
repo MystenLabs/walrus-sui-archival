@@ -139,36 +139,44 @@ impl CheckpointBlobExtender {
                 continue;
             }
 
-            // Get the updated blob object to get the new expiration epoch with infinite retry.
+            // Get the updated blob expiration epoch with infinite retry.
             let mut retry_delay = self.config.min_transaction_retry_duration;
             let max_retry_delay = self.config.max_transaction_retry_duration;
 
-            let blob = loop {
-                let result = self
-                    .sui_interactive_client
-                    .with_walrus_client_async(|client| {
-                        Box::pin(async move {
-                            client
-                                .sui_client()
-                                .get_blob_by_object_id(&object_id)
-                                .await
-                                .map_err(|e| anyhow!("failed to get blob: {}", e))
+            let new_end_epoch = loop {
+                let result = if is_shared_blob {
+                    // For shared blobs, call blob_expiration_epoch Move function.
+                    self.get_shared_blob_expiration_epoch(object_id).await
+                } else {
+                    // For regular blobs, use the Walrus SDK method.
+                    self.sui_interactive_client
+                        .with_walrus_client_async(|client| {
+                            Box::pin(async move {
+                                let blob = client
+                                    .sui_client()
+                                    .get_blob_by_object_id(&object_id)
+                                    .await
+                                    .map_err(|e| anyhow!("failed to get blob: {}", e))?;
+                                Ok(blob.blob.storage.end_epoch)
+                            })
                         })
-                    })
-                    .await;
+                        .await
+                };
 
                 match result {
-                    Ok(blob) => {
+                    Ok(end_epoch) => {
                         tracing::info!(
-                            "successfully retrieved extended blob {} with new end_epoch: {}",
+                            "successfully retrieved extended {} blob {} with new end_epoch: {}",
+                            if is_shared_blob { "shared" } else { "regular" },
                             object_id,
-                            blob.blob.storage.end_epoch
+                            end_epoch
                         );
-                        break blob;
+                        break end_epoch;
                     }
                     Err(e) => {
                         tracing::error!(
-                            "failed to get blob {} after extension: {}, retrying in {:?}",
+                            "failed to get {} blob {} expiration epoch: {}, retrying in {:?}",
+                            if is_shared_blob { "shared" } else { "regular" },
                             object_id,
                             e,
                             retry_delay
@@ -188,7 +196,7 @@ impl CheckpointBlobExtender {
                 start_checkpoint,
                 &blob_id,
                 &object_id,
-                blob.blob.storage.end_epoch,
+                new_end_epoch,
             ) {
                 tracing::error!(
                     "failed to update archival state for blob {}: {}",
@@ -259,6 +267,98 @@ impl CheckpointBlobExtender {
                         .extend_blob(object_id, extend_epoch_length)
                         .await
                         .map_err(|e| anyhow!("failed to extend blob: {}", e))
+                })
+            })
+            .await
+    }
+
+    /// Get the expiration epoch of a shared blob by calling the Move function.
+    async fn get_shared_blob_expiration_epoch(&self, shared_blob_id: ObjectID) -> Result<u32> {
+        let package_id = self.contract_package_id;
+
+        self.sui_interactive_client
+            .with_wallet_mut_async(|wallet| {
+                Box::pin(async move {
+                    let sui_client = wallet.get_client().await?;
+
+                    // Fetch shared blob object to get initial shared version.
+                    let shared_blob_obj = sui_client
+                        .read_api()
+                        .get_object_with_options(
+                            shared_blob_id,
+                            sui_sdk::rpc_types::SuiObjectDataOptions::new().with_owner(),
+                        )
+                        .await?;
+
+                    let shared_blob_data = shared_blob_obj
+                        .data
+                        .ok_or_else(|| anyhow!("shared blob object data not found"))?;
+
+                    let shared_blob_initial_shared_version = match shared_blob_data.owner {
+                        Some(Owner::Shared {
+                            initial_shared_version,
+                        }) => initial_shared_version,
+                        _ => return Err(anyhow!("shared blob object is not a shared object")),
+                    };
+
+                    // Build PTB to call blob_expiration_epoch.
+                    let mut ptb = ProgrammableTransactionBuilder::new();
+                    let shared_blob_arg = ptb.obj(ObjectArg::SharedObject {
+                        id: shared_blob_id,
+                        initial_shared_version: shared_blob_initial_shared_version,
+                        mutable: false,
+                    })?;
+
+                    // Call blob_expiration_epoch function.
+                    ptb.programmable_move_call(
+                        package_id,
+                        Identifier::new("archival_blob")?,
+                        Identifier::new("blob_expiration_epoch")?,
+                        vec![],
+                        vec![shared_blob_arg],
+                    );
+
+                    let pt = ptb.finish();
+
+                    // Use dev_inspect to call the function without executing a transaction.
+                    let tx_kind = TransactionKind::ProgrammableTransaction(pt);
+
+                    let response = sui_client
+                        .read_api()
+                        .dev_inspect_transaction_block(
+                            wallet.active_address()?,
+                            tx_kind,
+                            None,
+                            None,
+                            None,
+                        )
+                        .await?;
+
+                    // Extract the return value from the response.
+                    let return_values = response
+                        .results
+                        .ok_or_else(|| anyhow!("no results from dev_inspect"))?;
+
+                    if return_values.is_empty() {
+                        return Err(anyhow!("no return values from blob_expiration_epoch call"));
+                    }
+
+                    let return_value = &return_values[0].return_values;
+                    if return_value.is_empty() {
+                        return Err(anyhow!(
+                            "empty return value from blob_expiration_epoch call"
+                        ));
+                    }
+
+                    // Parse the u32 return value (4 bytes in little endian).
+                    let bytes = &return_value[0].0;
+                    if bytes.len() != 4 {
+                        return Err(anyhow!("unexpected return value length: {}", bytes.len()));
+                    }
+
+                    let end_epoch = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+
+                    Ok(end_epoch)
                 })
             })
             .await

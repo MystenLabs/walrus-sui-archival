@@ -4,10 +4,8 @@ version = "0.0.1"
 
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet-v1.58.1" }
-Walrus = { git = "https://github.com/MystenLabs/walrus.git", subdir = "contracts/walrus", rev = "testnet-v1.35.0" }
-WAL = { git = "https://github.com/MystenLabs/walrus.git", subdir = "contracts/wal", rev = "testnet-v1.35.0" }
+Walrus = { git = "https://github.com/MystenLabs/walrus.git", subdir = "testnet-contracts/walrus", rev = "testnet-v1.35.0" }
+WAL = { git = "https://github.com/MystenLabs/walrus.git", subdir = "testnet-contracts/wal", rev = "testnet-v1.35.0" }
 
 [addresses]
 walrus_sui_archival_metadata = "0x0"
-Walrus = "0xd84704c17fc870b8764832c535aa6b11f21a95cd6f5bb38a9b07d2cf42220c66"
-WAL = "0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a"
