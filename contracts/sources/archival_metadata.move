@@ -1,39 +1,26 @@
-module walrus_sui_archival_metadata::metadata {
+module walrus_sui_archival_metadata::archival_metadata {
     use std::vector;
     use std::option::{Self, Option};
-    use sui::tx_context::{Self, TxContext};
+    use sui::tx_context::TxContext;
     use sui::object::{Self, UID};
     use sui::transfer;
+    use walrus_sui_archival_metadata::admin::AdminCap;
 
     // Error codes.
     const EInvalidBlobIdLength: u64 = 0;
-
-    struct AdminCap has key, store {
-        id: UID,
-    }
 
     struct MetadataBlobPointer has key {
         id: UID,
         blob_id: Option<vector<u8>>,
     }
 
-    fun init(ctx: &mut TxContext) {
-        let admin_cap = AdminCap {
-            id: object::new(ctx),
-        };
-        transfer::transfer(admin_cap, tx_context::sender(ctx));
-
-        // create metadata blob pointer.
+    /// Create and share the metadata blob pointer.
+    public fun create_metadata_pointer(_admin_cap: &AdminCap, ctx: &mut TxContext) {
         let metadata_pointer = MetadataBlobPointer {
             id: object::new(ctx),
             blob_id: option::none(),
         };
         transfer::share_object(metadata_pointer);
-    }
-
-    #[test_only]
-    public fun init_for_testing(ctx: &mut TxContext) {
-        init(ctx);
     }
 
     public fun update_metadata_blob_pointer(

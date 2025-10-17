@@ -160,7 +160,7 @@ impl ArchivalStateSnapshotCreator {
                     // call update_metadata_blob_pointer function.
                     ptb.programmable_move_call(
                         package_id,
-                        Identifier::new("metadata")?,
+                        Identifier::new("archival_metadata")?,
                         Identifier::new("update_metadata_blob_pointer")?,
                         vec![],
                         vec![admin_cap_arg, pointer_id_arg, blob_id_arg],

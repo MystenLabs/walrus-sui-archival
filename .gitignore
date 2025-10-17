@@ -20,7 +20,7 @@ Thumbs.db
 *.log
 
 # Contract build dir
-contracts/walrus-sui-archival-metadata/build/
+contracts/build/
 
 # CLAUDE
 CLAUDE.md

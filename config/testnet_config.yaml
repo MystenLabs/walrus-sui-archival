@@ -13,11 +13,11 @@ metrics_address: "0.0.0.0:9184"
 checkpoint_downloader:
   type: injection_service
   remote_store_url: "https://checkpoints.testnet.sui.io"
-  num_workers: 14
-  downloaded_checkpoint_dir: "downloaded_checkpoint_dir"
+  num_workers: 20
+  downloaded_checkpoint_dir: /opt/walrus/data/downloaded_checkpoints
   ingestion_config:
-    checkpoint_buffer_size: 5000
-    ingest_concurrency: 50
+    checkpoint_buffer_size: 1000
+    ingest_concurrency: 20
     retry_interval_ms: 1000
 checkpoint_monitor:
   max_accumulation_duration: 1h

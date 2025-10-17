@@ -63,7 +63,7 @@ pub async fn clear_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()>
     // call clear_metadata_blob_pointer function.
     ptb.programmable_move_call(
         package_id,
-        Identifier::new("metadata")?,
+        Identifier::new("archival_metadata")?,
         Identifier::new("clear_metadata_blob_pointer")?,
         vec![],
         vec![admin_cap_arg, pointer_id_arg],
