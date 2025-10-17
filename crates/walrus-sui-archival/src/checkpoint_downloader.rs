@@ -85,18 +85,19 @@ impl CheckpointDownloadWorker {
                 checkpoint_number
             );
 
-            // If the checkpoint file already exists, skip it.
-            let checkpoint_file = self
-                .config
-                .downloaded_checkpoint_dir
-                .join(format!("{checkpoint_number}"));
-            if checkpoint_file.exists() {
-                tracing::info!(
-                    "worker {} skipping checkpoint {}, file already exists",
-                    self.worker_id,
-                    checkpoint_number
-                );
-            }
+            // TODO: fix this bug:
+            // // If the checkpoint file already exists, skip it.
+            // let checkpoint_file = self
+            //     .config
+            //     .downloaded_checkpoint_dir
+            //     .join(format!("{checkpoint_number}"));
+            // if checkpoint_file.exists() {
+            //     tracing::info!(
+            //         "worker {} skipping checkpoint {}, file already exists",
+            //         self.worker_id,
+            //         checkpoint_number
+            //     );
+            // }
 
             match self.download_checkpoint(checkpoint_number).await {
                 Ok(checkpoint_info) => {
