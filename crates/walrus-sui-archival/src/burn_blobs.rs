@@ -53,7 +53,7 @@ pub async fn burn_all_blobs(client_config: PathBuf, context: &str) -> Result<()>
         tracing::info!(
             "burning batch {}/{} ({} blobs)...",
             batch_num,
-            (total_blobs + BATCH_SIZE - 1) / BATCH_SIZE,
+            total_blobs.div_ceil(BATCH_SIZE),
             chunk_size
         );
 
