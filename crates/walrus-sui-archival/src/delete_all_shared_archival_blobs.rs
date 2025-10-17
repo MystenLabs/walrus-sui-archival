@@ -71,21 +71,20 @@ pub async fn delete_all_shared_archival_blobs(config_path: impl AsRef<Path>) -> 
     let package_id = config.archival_state_snapshot.contract_package_id;
     let admin_cap_id = config.archival_state_snapshot.admin_cap_object_id;
 
-    // Fetch admin cap object to get version and digest.
-    let admin_cap_obj = sui_client
-        .read_api()
-        .get_object_with_options(
-            admin_cap_id,
-            sui_sdk::rpc_types::SuiObjectDataOptions::default(),
-        )
-        .await?;
-
-    let admin_cap_ref = admin_cap_obj
-        .object_ref_if_exists()
-        .ok_or_else(|| anyhow::anyhow!("admin cap object not found"))?;
-
     // Delete each shared blob.
     for (index, shared_blob_id) in shared_blob_ids.iter().enumerate() {
+        // Fetch admin cap object to get version and digest.
+        let admin_cap_obj = sui_client
+            .read_api()
+            .get_object_with_options(
+                admin_cap_id,
+                sui_sdk::rpc_types::SuiObjectDataOptions::default(),
+            )
+            .await?;
+        let admin_cap_ref = admin_cap_obj
+            .object_ref_if_exists()
+            .ok_or_else(|| anyhow::anyhow!("admin cap object not found"))?;
+
         tracing::info!(
             "deleting shared blob {} of {}: {}",
             index + 1,
@@ -93,25 +92,55 @@ pub async fn delete_all_shared_archival_blobs(config_path: impl AsRef<Path>) -> 
             shared_blob_id
         );
 
-        // Fetch shared blob object to get version and digest.
-        let shared_blob_obj = sui_client
+        // Fetch shared blob object to get initial shared version.
+        let shared_blob_obj_result = sui_client
             .read_api()
             .get_object_with_options(
                 *shared_blob_id,
-                sui_sdk::rpc_types::SuiObjectDataOptions::default(),
+                sui_sdk::rpc_types::SuiObjectDataOptions::new().with_owner(),
             )
-            .await?;
+            .await;
 
-        let shared_blob_ref = shared_blob_obj
-            .object_ref_if_exists()
-            .ok_or_else(|| anyhow::anyhow!("shared blob object not found: {}", shared_blob_id))?;
+        if let Err(e) = shared_blob_obj_result {
+            tracing::error!("failed to get shared blob object: {}", e);
+            continue;
+        }
+
+        let shared_blob_obj = shared_blob_obj_result.unwrap();
+
+        let shared_blob_data_result = shared_blob_obj.data.ok_or_else(|| {
+            anyhow::anyhow!("shared blob object data not found: {}", shared_blob_id)
+        });
+
+        if let Err(e) = shared_blob_data_result {
+            tracing::error!("failed to get shared blob object data: {}", e);
+            continue;
+        }
+
+        let shared_blob_data = shared_blob_data_result.unwrap();
+
+        let shared_blob_initial_shared_version = match shared_blob_data.owner {
+            Some(sui_types::object::Owner::Shared {
+                initial_shared_version,
+            }) => initial_shared_version,
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "shared blob object is not a shared object: {}",
+                    shared_blob_id
+                ));
+            }
+        };
 
         // Build programmable transaction.
         let mut ptb = ProgrammableTransactionBuilder::new();
 
         // Create arguments for the function call.
         let admin_cap_arg = ptb.obj(ObjectArg::ImmOrOwnedObject(admin_cap_ref))?;
-        let shared_blob_arg = ptb.obj(ObjectArg::ImmOrOwnedObject(shared_blob_ref))?;
+        let shared_blob_arg = ptb.obj(ObjectArg::SharedObject {
+            id: *shared_blob_id,
+            initial_shared_version: shared_blob_initial_shared_version,
+            mutable: true,
+        })?;
 
         // Call delete_shared_blob function.
         ptb.programmable_move_call(

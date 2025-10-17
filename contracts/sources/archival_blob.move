@@ -19,7 +19,7 @@ module walrus_sui_archival_metadata::archival_blob {
     }
 
     /// A wrapper around Blob that can be funded from the ArchivalBlobFund and extended.
-    struct SharedBlob has key {
+    struct SharedBlob has key, store {
         id: UID,
         blob: Blob,
     }
@@ -110,7 +110,7 @@ module walrus_sui_archival_metadata::archival_blob {
 
     /// Delete a SharedBlob, burning the wrapped Blob.
     /// This is an admin-only operation.
-    public fun delete_shared_blob(
+    entry fun delete_shared_blob(
         _admin_cap: &AdminCap,
         shared_blob: SharedBlob,
     ) {

@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use sui_types::{
@@ -57,14 +57,23 @@ impl CheckpointBlobExtender {
     pub async fn start(self) -> Result<()> {
         tracing::info!("starting checkpoint blob extender service");
 
-        let mut interval = time::interval(self.config.check_interval);
+        let mut extend_interval = time::interval(self.config.check_interval);
+        let mut sync_interval = time::interval(Duration::from_secs(60));
 
         loop {
-            interval.tick().await;
-
-            if let Err(e) = self.check_and_extend_blobs().await {
-                tracing::error!("failed to check and extend blobs: {}", e);
-                // Continue running despite errors.
+            tokio::select! {
+                _ = extend_interval.tick() => {
+                    if let Err(e) = self.check_and_extend_blobs().await {
+                        tracing::error!("failed to check and extend blobs: {}", e);
+                        // Continue running despite errors.
+                    }
+                }
+                _ = sync_interval.tick() => {
+                    if let Err(e) = self.sync_all_blob_expiration_epochs().await {
+                        tracing::error!("failed to sync blob expiration epochs: {}", e);
+                        // Continue running despite errors.
+                    }
+                }
             }
         }
     }
@@ -139,57 +148,9 @@ impl CheckpointBlobExtender {
                 continue;
             }
 
-            // Get the updated blob expiration epoch with infinite retry.
-            let mut retry_delay = self.config.min_transaction_retry_duration;
-            let max_retry_delay = self.config.max_transaction_retry_duration;
-
-            let new_end_epoch = loop {
-                let result = if is_shared_blob {
-                    // For shared blobs, call blob_expiration_epoch Move function.
-                    self.get_shared_blob_expiration_epoch(object_id).await
-                } else {
-                    // For regular blobs, use the Walrus SDK method.
-                    self.sui_interactive_client
-                        .with_walrus_client_async(|client| {
-                            Box::pin(async move {
-                                let blob = client
-                                    .sui_client()
-                                    .get_blob_by_object_id(&object_id)
-                                    .await
-                                    .map_err(|e| anyhow!("failed to get blob: {}", e))?;
-                                Ok(blob.blob.storage.end_epoch)
-                            })
-                        })
-                        .await
-                };
-
-                match result {
-                    Ok(end_epoch) => {
-                        tracing::info!(
-                            "successfully retrieved extended {} blob {} with new end_epoch: {}",
-                            if is_shared_blob { "shared" } else { "regular" },
-                            object_id,
-                            end_epoch
-                        );
-                        break end_epoch;
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "failed to get {} blob {} expiration epoch: {}, retrying in {:?}",
-                            if is_shared_blob { "shared" } else { "regular" },
-                            object_id,
-                            e,
-                            retry_delay
-                        );
-
-                        // Sleep before retrying.
-                        tokio::time::sleep(retry_delay).await;
-
-                        // Exponential backoff.
-                        retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
-                    }
-                }
-            };
+            let new_end_epoch = self
+                .get_blob_expiration_epoch(object_id, is_shared_blob)
+                .await;
 
             // Update the archival state with the new expiration epoch.
             if let Err(e) = self.archival_state.update_blob_expiration_epoch(
@@ -207,6 +168,135 @@ impl CheckpointBlobExtender {
         }
 
         Ok(())
+    }
+
+    /// Periodically sync all blob expiration epochs from on-chain state.
+    async fn sync_all_blob_expiration_epochs(&self) -> Result<()> {
+        tracing::info!("syncing blob expiration epochs from on-chain state");
+
+        // Get all blobs from the archival state.
+        let blobs = self.archival_state.list_all_blobs()?;
+        tracing::info!("found {} blobs to sync", blobs.len());
+
+        let mut synced_count = 0;
+        let mut error_count = 0;
+
+        for blob_info in blobs {
+            // Parse the object ID.
+            let object_id = match ObjectID::from_bytes(&blob_info.object_id) {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("failed to parse object ID: {}", e);
+                    error_count += 1;
+                    continue;
+                }
+            };
+
+            // Parse the blob ID.
+            let blob_id_str = String::from_utf8_lossy(&blob_info.blob_id).to_string();
+            let blob_id: walrus_core::BlobId = match blob_id_str.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("failed to parse blob ID: {}", e);
+                    error_count += 1;
+                    continue;
+                }
+            };
+
+            let on_chain_end_epoch = self
+                .get_blob_expiration_epoch(object_id, blob_info.is_shared_blob)
+                .await;
+
+            // Compare with stored epoch.
+            if on_chain_end_epoch != blob_info.blob_expiration_epoch {
+                tracing::info!(
+                    "blob {} (checkpoint {}) expiration epoch mismatch: db={}, on-chain={}, updating db",
+                    blob_id,
+                    blob_info.start_checkpoint,
+                    blob_info.blob_expiration_epoch,
+                    on_chain_end_epoch
+                );
+
+                // Update the database.
+                if let Err(e) = self.archival_state.update_blob_expiration_epoch(
+                    blob_info.start_checkpoint,
+                    &blob_id,
+                    &object_id,
+                    on_chain_end_epoch,
+                ) {
+                    tracing::error!(
+                        "failed to update blob expiration epoch in db for blob {}: {}",
+                        object_id,
+                        e
+                    );
+                    error_count += 1;
+                } else {
+                    synced_count += 1;
+                }
+            }
+        }
+
+        tracing::info!(
+            "blob expiration epoch sync completed: {} updated, {} errors",
+            synced_count,
+            error_count
+        );
+
+        Ok(())
+    }
+
+    /// Get the updated blob expiration epoch with infinite retry.
+    async fn get_blob_expiration_epoch(&self, object_id: ObjectID, is_shared_blob: bool) -> u32 {
+        // Get the updated blob expiration epoch with infinite retry.
+        let mut retry_delay = self.config.min_transaction_retry_duration;
+        let max_retry_delay = self.config.max_transaction_retry_duration;
+        loop {
+            let result = if is_shared_blob {
+                // For shared blobs, call blob_expiration_epoch Move function.
+                self.get_shared_blob_expiration_epoch(object_id).await
+            } else {
+                // For regular blobs, use the Walrus SDK method.
+                self.sui_interactive_client
+                    .with_walrus_client_async(|client| {
+                        Box::pin(async move {
+                            let blob = client
+                                .sui_client()
+                                .get_blob_by_object_id(&object_id)
+                                .await
+                                .map_err(|e| anyhow!("failed to get blob: {}", e))?;
+                            Ok(blob.blob.storage.end_epoch)
+                        })
+                    })
+                    .await
+            };
+
+            match result {
+                Ok(end_epoch) => {
+                    tracing::info!(
+                        "successfully retrieved extended {} blob {} with new end_epoch: {}",
+                        if is_shared_blob { "shared" } else { "regular" },
+                        object_id,
+                        end_epoch
+                    );
+                    break end_epoch;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "failed to get {} blob {} expiration epoch: {}, retrying in {:?}",
+                        if is_shared_blob { "shared" } else { "regular" },
+                        object_id,
+                        e,
+                        retry_delay
+                    );
+
+                    // Sleep before retrying.
+                    tokio::time::sleep(retry_delay).await;
+
+                    // Exponential backoff.
+                    retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
+                }
+            }
+        }
     }
 
     /// Extend a single blob with retry logic.

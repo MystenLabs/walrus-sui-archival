@@ -65,7 +65,7 @@ module walrus_sui_archival_metadata::archival_blob_tests {
         ts::end(scenario_val);
     }
 
-    // Note: Testing extend_shared_blob requires a Walrus System object and SharedBlob object,
+    // Note: Testing extend_shared_blob and delete_shared_blob requires a Walrus System object and SharedBlob object,
     // which cannot be easily mocked in unit tests. Integration tests would be needed
-    // to fully test the extend_shared_blob functionality.
+    // to fully test these functionalities.
 }

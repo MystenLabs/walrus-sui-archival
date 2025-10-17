@@ -191,7 +191,11 @@ async fn list_all_blobs(State(app_state): State<AppState>) -> Result<Html<String
             html.push_str(&format!("<td>{}</td>\n", blob_info.blob_expiration_epoch));
             html.push_str(&format!(
                 "<td>{}</td>\n",
-                if blob_info.is_shared_blob { "Yes" } else { "No" }
+                if blob_info.is_shared_blob {
+                    "Yes"
+                } else {
+                    "No"
+                }
             ));
             html.push_str(&format!("<td>{}</td>\n", entries_count));
             html.push_str(&format!("<td>{}</td>\n", format_size(blob_size)));
