@@ -30,7 +30,7 @@ pub async fn clear_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()>
 
     tracing::info!("clearing metadata blob id for pointer object");
 
-    let package_id = config.archival_state_snapshot.metadata_package_id;
+    let package_id = config.archival_state_snapshot.contract_package_id;
     let pointer_id = config.archival_state_snapshot.metadata_pointer_object_id;
     let admin_cap_id = config.archival_state_snapshot.admin_cap_object_id;
 
@@ -94,7 +94,7 @@ pub async fn clear_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()>
     let gas_coin = &coins.data[0];
 
     // create transaction data.
-    let gas_budget = 10_000_000; // 0.01 SUI.
+    let gas_budget = 100_000_000; // 0.1 SUI.
     let gas_price = sui_client.read_api().get_reference_gas_price().await?;
 
     let tx_data = TransactionData::new(

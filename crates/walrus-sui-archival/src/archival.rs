@@ -149,6 +149,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
             .downloaded_checkpoint_dir()
             .clone(),
         metrics.clone(),
+        config.archival_state_snapshot.contract_package_id,
     )
     .await?;
     let blob_publisher_handle =

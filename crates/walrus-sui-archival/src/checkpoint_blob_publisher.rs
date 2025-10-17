@@ -5,7 +5,13 @@ use std::{num::NonZeroU16, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use blob_bundle::{BlobBundleBuildResult, BlobBundleBuilder};
-use sui_types::messages_checkpoint::CheckpointSequenceNumber;
+use sui_types::{
+    Identifier,
+    base_types::ObjectID,
+    messages_checkpoint::CheckpointSequenceNumber,
+    programmable_transaction_builder::ProgrammableTransactionBuilder,
+    transaction::{ObjectArg, TransactionData, TransactionKind},
+};
 use tokio::{fs, sync::mpsc};
 
 use crate::{
@@ -35,6 +41,7 @@ pub struct CheckpointBlobPublisher {
     config: CheckpointBlobPublisherConfig,
     downloaded_checkpoint_dir: PathBuf,
     metrics: Arc<Metrics>,
+    contract_package_id: ObjectID,
 }
 
 impl CheckpointBlobPublisher {
@@ -44,6 +51,7 @@ impl CheckpointBlobPublisher {
         config: CheckpointBlobPublisherConfig,
         downloaded_checkpoint_dir: PathBuf,
         metrics: Arc<Metrics>,
+        contract_package_id: ObjectID,
     ) -> Result<Self> {
         let n_shards = sui_interactive_client
             .with_walrus_client_async(|client| {
@@ -60,6 +68,7 @@ impl CheckpointBlobPublisher {
             config,
             downloaded_checkpoint_dir,
             metrics,
+            contract_package_id,
         })
     }
 
@@ -224,14 +233,140 @@ impl CheckpointBlobPublisher {
             tracing::debug!("  {} -> offset: {}, length: {} bytes", id, offset, length);
         }
 
+        // Optionally create a shared blob if configured.
+        let (final_object_id, is_shared_blob) = if self.config.create_shared_blobs {
+            tracing::info!("creating shared blob for blob_id: {}", blob_id);
+
+            let shared_blob_id = self
+                .sui_interactive_client
+                .with_wallet_mut_async(|wallet| {
+                    let package_id = self.contract_package_id;
+                    let blob_object_id = object_id;
+
+                    Box::pin(async move {
+                        let sui_client = wallet.get_client().await?;
+                        let active_address = wallet.active_address()?;
+
+                        // Fetch blob object to get version and digest.
+                        let blob_obj = sui_client
+                            .read_api()
+                            .get_object_with_options(
+                                blob_object_id,
+                                sui_sdk::rpc_types::SuiObjectDataOptions::default(),
+                            )
+                            .await?;
+
+                        let blob_ref = blob_obj
+                            .object_ref_if_exists()
+                            .ok_or_else(|| anyhow::anyhow!("blob object not found"))?;
+
+                        // Build programmable transaction.
+                        let mut ptb = ProgrammableTransactionBuilder::new();
+
+                        // Create argument for the blob object.
+                        let blob_arg = ptb.obj(ObjectArg::ImmOrOwnedObject(blob_ref))?;
+
+                        // Call create_shared_blob function.
+                        ptb.programmable_move_call(
+                            package_id,
+                            Identifier::new("archival_blob")?,
+                            Identifier::new("create_shared_blob")?,
+                            vec![],
+                            vec![blob_arg],
+                        );
+
+                        let pt = ptb.finish();
+
+                        tracing::info!(
+                            "executing create_shared_blob transaction - package: {}, blob: {}",
+                            package_id,
+                            blob_object_id
+                        );
+
+                        // Get gas payment object.
+                        let coins = sui_client
+                            .coin_read_api()
+                            .get_coins(active_address, None, None, None)
+                            .await?;
+
+                        if coins.data.is_empty() {
+                            return Err(anyhow::anyhow!(
+                                "no gas coins available for address {}",
+                                active_address
+                            ));
+                        }
+
+                        let gas_coin = &coins.data[0];
+
+                        // Create transaction data.
+                        let gas_budget = 100_000_000; // 0.1 SUI.
+                        let gas_price = sui_client.read_api().get_reference_gas_price().await?;
+
+                        let tx_data = TransactionData::new(
+                            TransactionKind::ProgrammableTransaction(pt),
+                            active_address,
+                            gas_coin.object_ref(),
+                            gas_budget,
+                            gas_price,
+                        );
+
+                        let signed_tx = wallet.sign_transaction(&tx_data).await;
+                        let response = wallet.execute_transaction_may_fail(signed_tx).await?;
+
+                        // Extract the SharedBlob object ID from object changes.
+                        let object_changes = response.object_changes.as_ref().ok_or_else(|| {
+                            anyhow::anyhow!("transaction object changes not found")
+                        })?;
+
+                        // Find the created SharedBlob object by type.
+                        let shared_blob_id = object_changes
+                            .iter()
+                            .find_map(|change| {
+                                if let sui_sdk::rpc_types::ObjectChange::Created {
+                                    object_id,
+                                    object_type,
+                                    ..
+                                } = change
+                                {
+                                    // Check if the object type ends with "::archival_blob::SharedBlob".
+                                    if object_type
+                                        .to_string()
+                                        .ends_with("::archival_blob::SharedBlob")
+                                    {
+                                        return Some(*object_id);
+                                    }
+                                }
+                                None
+                            })
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("failed to find SharedBlob in created objects")
+                            })?;
+
+                        tracing::info!(
+                            "successfully created shared blob, tx digest: {:?}, shared_blob_id: {}",
+                            response.digest,
+                            shared_blob_id
+                        );
+
+                        Ok(shared_blob_id)
+                    })
+                })
+                .await?;
+
+            (shared_blob_id, true)
+        } else {
+            (object_id, false)
+        };
+
         self.archival_state.create_new_checkpoint_blob(
             request.start_checkpoint,
             request.end_checkpoint,
             &result.index_map,
             blob_id,
-            object_id,
+            final_object_id,
             end_epoch,
             request.end_of_epoch,
+            is_shared_blob,
         )?;
         Ok(())
     }

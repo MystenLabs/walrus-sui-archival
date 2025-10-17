@@ -89,6 +89,7 @@ impl ArchivalState {
         object_id: ObjectID,
         blob_expiration_epoch: Epoch,
         end_of_epoch: bool,
+        is_shared_blob: bool,
     ) -> Result<()> {
         if self.read_only {
             return Err(anyhow::anyhow!(
@@ -121,6 +122,7 @@ impl ArchivalState {
             end_of_epoch,
             blob_expiration_epoch,
             index_entries,
+            is_shared_blob,
         };
 
         // Serialize to protobuf bytes.
@@ -553,6 +555,7 @@ mod tests {
             ObjectID::random(),
             epoch,
             false,
+            false,
         );
         assert!(result.is_ok(), "Should successfully create checkpoint blob");
 
@@ -618,6 +621,7 @@ mod tests {
                     ObjectID::random(),
                     epoch,
                     *end_of_epoch,
+                    false,
                 )
                 .expect("Failed to create blob");
         }
@@ -670,6 +674,7 @@ mod tests {
                 ObjectID::random(),
                 epoch,
                 false,
+                false,
             )
             .expect("Failed to create blob");
 
@@ -689,6 +694,7 @@ mod tests {
                 ObjectID::random(),
                 epoch,
                 false,
+                false,
             )
             .expect("Failed to create blob");
 
@@ -707,6 +713,7 @@ mod tests {
                 blob_id,
                 ObjectID::random(),
                 epoch,
+                false,
                 false,
             )
             .expect("Failed to create blob");
@@ -734,6 +741,7 @@ mod tests {
                 ObjectID::random(),
                 epoch,
                 false,
+                false,
             )
             .expect("Failed to create blob");
 
@@ -748,6 +756,7 @@ mod tests {
                 blob_id,
                 ObjectID::random(),
                 epoch,
+                false,
                 false,
             )
             .expect("Failed to create blob");
@@ -784,6 +793,7 @@ mod tests {
                 blob_id,
                 ObjectID::random(),
                 epoch,
+                false,
                 false,
             )
             .expect("Failed to create blob");
@@ -829,6 +839,7 @@ mod tests {
                 ObjectID::random(),
                 epoch,
                 false,
+                false,
             )
             .expect("Failed to create blob");
 
@@ -864,6 +875,7 @@ mod tests {
                     ObjectID::random(),
                     epoch,
                     false,
+                    false,
                 )
                 .expect("Failed to create blob");
         }
@@ -891,6 +903,7 @@ mod tests {
             blob_id,
             ObjectID::random(),
             epoch,
+            false,
             false,
         );
 
@@ -924,6 +937,7 @@ mod tests {
                 blob_id,
                 object_id,
                 initial_epoch,
+                false,
                 false,
             )
             .expect("Failed to create blob");
@@ -981,6 +995,7 @@ mod tests {
                 object_id,
                 epoch,
                 false,
+                false,
             )
             .expect("Failed to create blob");
 
@@ -1020,6 +1035,7 @@ mod tests {
                 blob_id,
                 object_id,
                 epoch,
+                false,
                 false,
             )
             .expect("Failed to create blob");
@@ -1071,7 +1087,7 @@ mod tests {
 
             state
                 .create_new_checkpoint_blob(
-                    100u64, 199u64, &index_map, blob_id, object_id, epoch, false,
+                    100u64, 199u64, &index_map, blob_id, object_id, epoch, false, false,
                 )
                 .expect("Failed to create blob");
         }
@@ -1111,7 +1127,7 @@ mod tests {
             let (index_map, blob_id, _) = create_test_blob_info(*start, *end, blob_id_str);
             state
                 .create_new_checkpoint_blob(
-                    *start, *end, &index_map, blob_id, *object_id, *epoch, false,
+                    *start, *end, &index_map, blob_id, *object_id, *epoch, false, false,
                 )
                 .expect("Failed to create blob");
         }

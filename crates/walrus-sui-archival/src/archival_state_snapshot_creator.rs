@@ -115,7 +115,7 @@ impl ArchivalStateSnapshotCreator {
         upload_timer.observe_duration();
 
         // update on-chain metadata pointer if configured.
-        let package_id = self.config.metadata_package_id;
+        let package_id = self.config.contract_package_id;
         let pointer_id = self.config.metadata_pointer_object_id;
         let pointer_initial_shared_version = self.config.metadata_pointer_initial_shared_version;
         let active_address = self.active_address;
@@ -190,7 +190,7 @@ impl ArchivalStateSnapshotCreator {
                     let gas_coin = &coins.data[0];
 
                     // create transaction data.
-                    let gas_budget = 10_000_000; // 0.01 SUI.
+                    let gas_budget = 100_000_000; // 0.1 SUI.
                     let gas_price = sui_client.read_api().get_reference_gas_price().await?;
 
                     let tx_data = TransactionData::new(
@@ -398,6 +398,7 @@ mod tests {
                         length: 2048,
                     },
                 ],
+                is_shared_blob: false,
             },
             proto::CheckpointBlobInfo {
                 version: 1,
@@ -412,6 +413,7 @@ mod tests {
                     offset: 0,
                     length: 512,
                 }],
+                is_shared_blob: false,
             },
             proto::CheckpointBlobInfo {
                 version: 1,
@@ -422,6 +424,7 @@ mod tests {
                 blob_expiration_epoch: 3000,
                 object_id: vec![3u8; 32],
                 index_entries: vec![],
+                is_shared_blob: false,
             },
         ];
 

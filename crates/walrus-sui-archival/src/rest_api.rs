@@ -268,7 +268,7 @@ async fn home_page(State(app_state): State<AppState>) -> Result<Html<String>, St
 
         Some((
             config.metadata_pointer_object_id,
-            config.metadata_package_id,
+            config.contract_package_id,
             blob_id,
         ))
     } else {

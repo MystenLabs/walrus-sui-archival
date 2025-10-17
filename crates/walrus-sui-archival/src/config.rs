@@ -223,6 +223,12 @@ pub struct CheckpointBlobPublisherConfig {
     /// Maximum retry duration for blob upload.
     #[serde(default = "default_max_retry_duration", with = "humantime_serde")]
     pub max_retry_duration: Duration,
+
+    /// Whether to create shared blobs for all checkpoint blobs.
+    /// If true, after a blob is created, it will be wrapped in a SharedBlob.
+    /// Default: false.
+    #[serde(default = "default_create_shared_blobs")]
+    pub create_shared_blobs: bool,
 }
 
 impl Default for CheckpointBlobPublisherConfig {
@@ -232,6 +238,7 @@ impl Default for CheckpointBlobPublisherConfig {
             store_epoch_length: default_store_epoch_length(),
             min_retry_duration: default_min_retry_duration(),
             max_retry_duration: default_max_retry_duration(),
+            create_shared_blobs: default_create_shared_blobs(),
         }
     }
 }
@@ -250,6 +257,10 @@ fn default_min_retry_duration() -> Duration {
 
 fn default_max_retry_duration() -> Duration {
     Duration::from_secs(300)
+}
+
+fn default_create_shared_blobs() -> bool {
+    false
 }
 
 fn default_rest_api_address() -> SocketAddr {
@@ -325,8 +336,8 @@ pub struct ArchivalStateSnapshotConfig {
     #[serde(default = "default_snapshot_temp_dir")]
     pub snapshot_temp_dir: PathBuf,
 
-    /// Package ID of the metadata contract.
-    pub metadata_package_id: ObjectID,
+    /// Package ID of the contract (contains both metadata and archival_blob modules).
+    pub contract_package_id: ObjectID,
 
     /// Object ID of the AdminCap capability object.
     pub admin_cap_object_id: ObjectID,
