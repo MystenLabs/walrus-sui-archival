@@ -10,6 +10,7 @@ use walrus_sui_archival::{
     burn_blobs::burn_all_blobs,
     clear_metadata_blob_id::clear_metadata_blob_id,
     config::Config,
+    delete_all_shared_archival_blobs::delete_all_shared_archival_blobs,
     dump_metadata_blob::dump_metadata_blob,
     get_metadata_blob_id::get_metadata_blob_id,
     inspect_blob::inspect_blob,
@@ -112,6 +113,12 @@ enum Commands {
         #[arg(short, long, default_value = "config/testnet_local_config.yaml")]
         config: PathBuf,
     },
+    /// Delete all shared archival blobs from the database.
+    DeleteAllSharedArchivalBlobs {
+        /// Path to configuration file.
+        #[arg(short, long, default_value = "config/testnet_local_config.yaml")]
+        config: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -198,6 +205,12 @@ fn main() -> Result<()> {
             // Create tokio runtime for async operation.
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(dump_metadata_blob(config))?;
+        }
+        Commands::DeleteAllSharedArchivalBlobs { config } => {
+            tracing::info!("deleting all shared archival blobs...");
+            // Create tokio runtime for async operation.
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(delete_all_shared_archival_blobs(config))?;
         }
     }
 
