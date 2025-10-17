@@ -209,11 +209,15 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     let rest_api_handle = tokio::spawn(async move { rest_api_server.start().await });
 
     // Start the checkpoint blob extender.
+    let system_object_id = client_config.contract_config.system_object;
     let blob_extender = CheckpointBlobExtender::new(
         archival_state.clone(),
         sui_interactive_client.clone(),
         config.checkpoint_blob_extender.clone(),
         metrics.clone(),
+        config.archival_state_snapshot.contract_package_id,
+        system_object_id,
+        config.archival_state_snapshot.wal_token_package_id,
     );
     let blob_extender_handle = tokio::spawn(async move { blob_extender.start().await });
 

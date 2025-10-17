@@ -339,6 +339,9 @@ pub struct ArchivalStateSnapshotConfig {
     /// Package ID of the contract (contains both metadata and archival_blob modules).
     pub contract_package_id: ObjectID,
 
+    /// Package ID of the WAL token.
+    pub wal_token_package_id: ObjectID,
+
     /// Object ID of the AdminCap capability object.
     pub admin_cap_object_id: ObjectID,
 
