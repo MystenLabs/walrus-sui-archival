@@ -15,9 +15,9 @@ use crate::{
 };
 
 /// Threshold for number of pending checkpoints before pausing the downloader.
-const BACKPRESSURE_PAUSE_THRESHOLD: usize = 500;
+const BACKPRESSURE_PAUSE_THRESHOLD: usize = 2000;
 /// Threshold for number of pending checkpoints to resume the downloader.
-const BACKPRESSURE_RESUME_THRESHOLD: usize = 100;
+const BACKPRESSURE_RESUME_THRESHOLD: usize = 500;
 
 /// Criteria for when to build a new blob.
 #[derive(Debug, Clone, PartialEq)]
