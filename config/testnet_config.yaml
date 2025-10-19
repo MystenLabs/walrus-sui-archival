@@ -25,6 +25,7 @@ checkpoint_monitor:
 checkpoint_blob_publisher:
   store_epoch_length: 2
   checkpoint_blobs_dir: /opt/walrus/data/checkpoint_blobs
+  create_shared_blobs: true
 checkpoint_blob_extender:
   check_interval: 3600s
   extend_epoch_length: 2

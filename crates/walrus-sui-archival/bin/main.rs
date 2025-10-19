@@ -12,6 +12,7 @@ use walrus_sui_archival::{
     config::Config,
     delete_all_shared_archival_blobs::delete_all_shared_archival_blobs,
     dump_metadata_blob::dump_metadata_blob,
+    extend_shared_blob::extend_shared_blob,
     get_metadata_blob_id::get_metadata_blob_id,
     inspect_blob::inspect_blob,
     inspect_db::{InspectDbCommand, execute_inspect_db},
@@ -119,6 +120,18 @@ enum Commands {
         #[arg(short, long, default_value = "config/testnet_local_config.yaml")]
         config: PathBuf,
     },
+    /// Extend a shared blob's storage period using the caller's own WAL tokens.
+    ExtendSharedBlob {
+        /// Path to configuration file.
+        #[arg(short, long, default_value = "config/testnet_local_config.yaml")]
+        config: PathBuf,
+        /// Object ID of the shared blob to extend.
+        #[arg(short, long)]
+        shared_blob_id: String,
+        /// Number of epochs to extend.
+        #[arg(short, long)]
+        epochs: u32,
+    },
 }
 
 fn main() -> Result<()> {
@@ -211,6 +224,24 @@ fn main() -> Result<()> {
             // Create tokio runtime for async operation.
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(delete_all_shared_archival_blobs(config))?;
+        }
+        Commands::ExtendSharedBlob {
+            config,
+            shared_blob_id,
+            epochs,
+        } => {
+            tracing::info!(
+                "extending shared blob {} by {} epochs...",
+                shared_blob_id,
+                epochs
+            );
+            // Parse the object ID.
+            let shared_blob_id = shared_blob_id.parse().map_err(|e| {
+                anyhow::anyhow!("failed to parse shared blob object ID: {}", e)
+            })?;
+            // Create tokio runtime for async operation.
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(extend_shared_blob(config, shared_blob_id, epochs))?;
         }
     }
 
