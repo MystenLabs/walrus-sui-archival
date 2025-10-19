@@ -42,6 +42,7 @@ pub struct CheckpointBlobPublisher {
     downloaded_checkpoint_dir: PathBuf,
     metrics: Arc<Metrics>,
     contract_package_id: ObjectID,
+    admin_cap_object_id: ObjectID,
 }
 
 impl CheckpointBlobPublisher {
@@ -52,6 +53,7 @@ impl CheckpointBlobPublisher {
         downloaded_checkpoint_dir: PathBuf,
         metrics: Arc<Metrics>,
         contract_package_id: ObjectID,
+        admin_cap_object_id: ObjectID,
     ) -> Result<Self> {
         let n_shards = sui_interactive_client
             .with_walrus_client_async(|client| {
@@ -69,6 +71,7 @@ impl CheckpointBlobPublisher {
             downloaded_checkpoint_dir,
             metrics,
             contract_package_id,
+            admin_cap_object_id,
         })
     }
 
@@ -241,11 +244,25 @@ impl CheckpointBlobPublisher {
                 .sui_interactive_client
                 .with_wallet_mut_async(|wallet| {
                     let package_id = self.contract_package_id;
+                    let admin_cap_object_id = self.admin_cap_object_id;
                     let blob_object_id = object_id;
 
                     Box::pin(async move {
                         let sui_client = wallet.get_client().await?;
                         let active_address = wallet.active_address()?;
+
+                        // Fetch AdminCap object to get version and digest.
+                        let admin_cap_obj = sui_client
+                            .read_api()
+                            .get_object_with_options(
+                                admin_cap_object_id,
+                                sui_sdk::rpc_types::SuiObjectDataOptions::default(),
+                            )
+                            .await?;
+
+                        let admin_cap_ref = admin_cap_obj
+                            .object_ref_if_exists()
+                            .ok_or_else(|| anyhow::anyhow!("admin cap object not found"))?;
 
                         // Fetch blob object to get version and digest.
                         let blob_obj = sui_client
@@ -263,7 +280,8 @@ impl CheckpointBlobPublisher {
                         // Build programmable transaction.
                         let mut ptb = ProgrammableTransactionBuilder::new();
 
-                        // Create argument for the blob object.
+                        // Create arguments for the function call.
+                        let admin_cap_arg = ptb.obj(ObjectArg::ImmOrOwnedObject(admin_cap_ref))?;
                         let blob_arg = ptb.obj(ObjectArg::ImmOrOwnedObject(blob_ref))?;
 
                         // Call create_shared_blob function.
@@ -272,7 +290,7 @@ impl CheckpointBlobPublisher {
                             Identifier::new("archival_blob")?,
                             Identifier::new("create_shared_blob")?,
                             vec![],
-                            vec![blob_arg],
+                            vec![admin_cap_arg, blob_arg],
                         );
 
                         let pt = ptb.finish();

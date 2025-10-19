@@ -107,7 +107,7 @@ impl InjectionServiceCheckpointDownloadWorker {
             // }
 
             match self
-                .write_checkpoint_to_disk(checkpoint_number, checkpoint_data.clone())
+                .write_checkpoint_to_disk(checkpoint_number, checkpoint_data)
                 .await
             {
                 Ok(checkpoint_info) => {
@@ -150,6 +150,9 @@ impl InjectionServiceCheckpointDownloadWorker {
             timestamp_ms: checkpoint_data.checkpoint_summary.timestamp_ms,
             checkpoint_byte_size: bytes.len(),
         };
+
+        // Drop checkpoint data to free memory.
+        drop(checkpoint_data);
 
         // Write checkpoint to disk atomically.
         // First write to a temporary file, then rename to final name.
@@ -256,7 +259,8 @@ impl InjectionServiceCheckpointDownloader {
         watermark_tx.send(("checkpoint_monitor", initial_checkpoint))?;
 
         // Create channels for worker communication.
-        let (download_tx, download_rx) = async_channel::bounded::<Arc<CheckpointData>>(100);
+        // TODO: apply this to the other downloader if needed.
+        let (download_tx, download_rx) = async_channel::bounded::<Arc<CheckpointData>>(10);
         let (result_tx, result_rx) = sync::mpsc::channel::<CheckpointInfo>(100);
 
         // Start the ingestion service.

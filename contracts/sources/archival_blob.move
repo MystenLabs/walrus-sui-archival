@@ -55,7 +55,12 @@ module walrus_sui_archival_metadata::archival_blob {
     }
 
     /// Create and share a SharedBlob from a Blob.
-    public fun create_shared_blob(blob: Blob, ctx: &mut TxContext) {
+    /// This is an admin-only operation.
+    public fun create_shared_blob(
+        _admin_cap: &AdminCap,
+        blob: Blob,
+        ctx: &mut TxContext,
+    ) {
         let shared_blob = SharedBlob {
             id: object::new(ctx),
             blob,

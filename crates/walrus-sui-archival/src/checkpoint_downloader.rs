@@ -139,6 +139,8 @@ impl CheckpointDownloadWorker {
             );
 
             // We are doing unlimited retries here since we cannot miss any checkpoint.
+            // TODO: do not return checkpoint data to the caller, and create CheckpointInfo inside
+            // to reduce the memory usage.
             match self.try_download_checkpoint(&url).await {
                 Ok((bytes, checkpoint)) => {
                     // Create checkpoint info.

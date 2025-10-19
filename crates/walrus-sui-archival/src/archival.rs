@@ -150,6 +150,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
             .clone(),
         metrics.clone(),
         config.archival_state_snapshot.contract_package_id,
+        config.archival_state_snapshot.admin_cap_object_id,
     )
     .await?;
     let blob_publisher_handle =
