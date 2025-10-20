@@ -5,7 +5,7 @@ contexts:
     exchange_objects: []
     wallet_config:
       # Optional path to the wallet config file.
-      path: ./config/wallet/mainnet_wallet.yaml
+      path: /Users/zhewu/work/walrus-sui-archival/config/wallet/mainnet_wallet.yaml
       # Sui environment to use.
       active_env: mainnet
       # Optional override for the Sui address to use.

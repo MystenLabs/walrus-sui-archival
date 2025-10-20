@@ -337,14 +337,15 @@ impl ArchivalState {
     }
 
     /// List all checkpoint blobs in the database.
+    /// Returns blobs in decreasing order of start_checkpoint (newest first).
     pub fn list_all_blobs(&self) -> Result<Vec<CheckpointBlobInfo>> {
         let cf = self
             .db
             .cf_handle(CF_CHECKPOINT_BLOB_INFO)
             .expect("column family must exist");
 
-        // Create an iterator in forward order.
-        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
+        // Create an iterator in reverse order (from end to start).
+        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::End);
 
         let mut blobs = Vec::new();
         for item in iter {
