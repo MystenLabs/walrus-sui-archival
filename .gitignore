@@ -31,3 +31,4 @@ checkpoint_blobs/
 archival_db/
 config/wallet/
 archival_snapshots/
+walrus-sites/
