@@ -119,6 +119,10 @@ enum Commands {
         /// Path to configuration file.
         #[arg(short, long, default_value = "config/testnet_local_config.yaml")]
         config: PathBuf,
+        /// Optional file containing blob IDs to delete (one per line).
+        /// If provided, blob IDs will be read from this file instead of the database.
+        #[arg(short = 'f', long)]
+        blob_list_file: Option<PathBuf>,
     },
     /// Extend a shared blob's storage period using the caller's own WAL tokens.
     ExtendSharedBlob {
@@ -219,11 +223,21 @@ fn main() -> Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(dump_metadata_blob(config))?;
         }
-        Commands::DeleteAllSharedArchivalBlobs { config } => {
-            tracing::info!("deleting all shared archival blobs...");
+        Commands::DeleteAllSharedArchivalBlobs {
+            config,
+            blob_list_file,
+        } => {
+            if let Some(ref file) = blob_list_file {
+                tracing::info!(
+                    "deleting shared archival blobs from file: {}...",
+                    file.display()
+                );
+            } else {
+                tracing::info!("deleting all shared archival blobs from database...");
+            }
             // Create tokio runtime for async operation.
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(delete_all_shared_archival_blobs(config))?;
+            runtime.block_on(delete_all_shared_archival_blobs(config, blob_list_file))?;
         }
         Commands::ExtendSharedBlob {
             config,
