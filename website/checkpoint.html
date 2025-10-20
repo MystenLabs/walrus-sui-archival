@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Checkpoint Lookup - Walrus Sui Archival</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        .form-container {
+            margin-top: 20px;
+        }
+        input[type="number"] {
+            padding: 8px;
+            width: 300px;
+            font-size: 16px;
+        }
+        button {
+            padding: 8px 16px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #667eea;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #5568d3;
+        }
+        .error-text {
+            color: red;
+            margin-top: 10px;
+        }
+        .home-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #667eea;
+            text-decoration: none;
+            font-size: 1.1em;
+        }
+        .home-link:hover {
+            text-decoration: underline;
+        }
+        .info-table {
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        .info-table th, .info-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        .info-table th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        #result {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="index.html" class="home-link">← Back to Home</a>
+        <h1>Walrus Sui Archival - Checkpoint Lookup</h1>
+
+        <!-- Form -->
+        <div class="form-container">
+            <form id="checkpoint-form">
+                <label for="checkpoint">Checkpoint Number:</label><br>
+                <input type="number" id="checkpoint" name="checkpoint" min="0" required><br>
+                <br>
+                <button type="submit">Lookup Checkpoint</button>
+            </form>
+            <div id="form-error" class="error-text" style="display: none;"></div>
+        </div>
+
+        <!-- Loading indicator -->
+        <div id="loading" class="loading" style="display: none;">
+            <div class="spinner"></div>
+            <p>loading checkpoint data...</p>
+        </div>
+
+        <!-- Result -->
+        <div id="result">
+            <h2>Checkpoint <span id="checkpoint-number"></span></h2>
+
+            <table class="info-table">
+                <tr>
+                    <th>Field</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td>Checkpoint Number</td>
+                    <td id="result-checkpoint"></td>
+                </tr>
+                <tr>
+                    <td>Blob ID</td>
+                    <td id="result-blob-id"></td>
+                </tr>
+                <tr>
+                    <td>Object ID</td>
+                    <td id="result-object-id"></td>
+                </tr>
+                <tr>
+                    <td>Index</td>
+                    <td id="result-index"></td>
+                </tr>
+                <tr>
+                    <td>Offset</td>
+                    <td id="result-offset"></td>
+                </tr>
+                <tr>
+                    <td>Length</td>
+                    <td id="result-length"></td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/config.js"></script>
+    <script src="js/checkpoint.js"></script>
+</body>
+</html>

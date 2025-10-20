@@ -13,8 +13,8 @@ checkpoint_downloader:
   remote_store_url: "https://checkpoints.testnet.sui.io"
   downloaded_checkpoint_dir: "downloaded_checkpoint_dir"
   ingestion_config:
-    checkpoint_buffer_size: 200
-    ingest_concurrency: 50
+    checkpoint_buffer_size: 100
+    ingest_concurrency: 20
     retry_interval_ms: 1000
 checkpoint_blob_publisher:
   store_epoch_length: 2
@@ -25,9 +25,9 @@ checkpoint_blob_extender:
 archival_state_snapshot:
   snapshot_state_to_walrus_interval: 600s
   #snapshot_temp_dir:
-  contract_package_id: 0x16b852d7c1d55de8ad64c9ae8384c8707482680f14cf827f026a5b98b309ab81
+  contract_package_id: 0xab933040652f54d198b2f73f3ca8d3ac0d65e5146a8e7911a7a7fb5aa992fa56
   wal_token_package_id: 0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a
-  admin_cap_object_id: 0x4223b0e2851c38df603c6ba90a60e363292bdc5ac56d148db44bf6c43bc4bd62
-  metadata_pointer_object_id: 0x559d73e6c017af8ec77f5945e916664fb86b5141229036568a914ebe199e40c4
-  metadata_pointer_initial_shared_version: 599718274
+  admin_cap_object_id: 0x23e6025b4f45147d6d817cf82801f7fc082ad0fb12792c850e4b9ab536c2a5b2
+  metadata_pointer_object_id: 0xaf35f2fc9ec13a625ddced86e980e7983f49eff3cbbf65cbc4e890e654937283
+  metadata_pointer_initial_shared_version: 599718276
   store_epoch_length: 2

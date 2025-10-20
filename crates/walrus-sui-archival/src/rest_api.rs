@@ -19,6 +19,7 @@ use sui_types::{
     full_checkpoint_content::CheckpointData,
     messages_checkpoint::CheckpointSequenceNumber,
 };
+use tower_http::cors::CorsLayer;
 use walrus_core::{BlobId, encoding::Primary};
 use walrus_sdk::{ObjectID, SuiReadClient, client::WalrusNodeClient};
 
@@ -88,14 +89,17 @@ impl RestApiServer {
             .route("/", get(home_page))
             .route("/v1/blobs", get(list_all_blobs))
             .route(
-                "/v1/blobs_expired_before_epoch",
+                "/v1/app_blobs_expired_before_epoch",
                 get(get_blobs_expired_before_epoch),
             )
             .route("/v1/app_info_for_homepage", get(get_app_info_for_homepage))
+            .route("/v1/app_blobs", get(get_app_blobs))
+            .route("/v1/app_checkpoint", get(get_app_checkpoint))
             .route("/v1/health", get(health_check))
             .route("/v1/checkpoint", get(get_checkpoint))
             .route("/resources/walrus_image.png", get(serve_walrus_image))
-            .with_state(app_state);
+            .with_state(app_state)
+            .layer(CorsLayer::permissive()); // Allow all CORS requests.
 
         tracing::info!("starting REST API server on {}", self.address);
 
@@ -263,6 +267,31 @@ struct MetadataInfo {
     current_metadata_blob_id: Option<String>,
 }
 
+/// Response structure for app blobs endpoint.
+#[derive(Serialize)]
+struct AppBlobInfo {
+    blob_id: String,
+    object_id: String,
+    start_checkpoint: u64,
+    end_checkpoint: u64,
+    end_of_epoch: bool,
+    expiry_epoch: u32,
+    is_shared_blob: bool,
+    entries_count: usize,
+    total_size: u64,
+}
+
+/// Response structure for app checkpoint endpoint.
+#[derive(Serialize)]
+struct AppCheckpointInfo {
+    checkpoint_number: u64,
+    blob_id: String,
+    object_id: String,
+    index: usize,
+    offset: u64,
+    length: u64,
+}
+
 /// Handler for getting blobs that expire before a given epoch.
 async fn get_blobs_expired_before_epoch(
     State(app_state): State<AppState>,
@@ -367,6 +396,97 @@ async fn get_app_info_for_homepage(
         latest_checkpoint,
         total_size,
         metadata_info,
+    };
+
+    Ok(Json(response))
+}
+
+/// Handler for getting all blobs as JSON.
+async fn get_app_blobs(
+    State(app_state): State<AppState>,
+) -> Result<Json<Vec<AppBlobInfo>>, StatusCode> {
+    let archival_state = app_state.archival_state;
+
+    // Get all blobs from the database.
+    let blobs = archival_state.list_all_blobs().map_err(|e| {
+        tracing::error!("failed to list blobs: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Convert to app blob info format.
+    let app_blobs: Vec<AppBlobInfo> = blobs
+        .iter()
+        .map(|blob_info| {
+            let blob_id = String::from_utf8_lossy(&blob_info.blob_id).to_string();
+            let object_id = ObjectID::from_bytes(&blob_info.object_id)
+                .map(|id| id.to_string())
+                .unwrap_or_else(|_| ObjectID::ZERO.to_string());
+            let entries_count = blob_info.index_entries.len();
+            let total_size: u64 = blob_info.index_entries.iter().map(|e| e.length).sum();
+
+            AppBlobInfo {
+                blob_id,
+                object_id,
+                start_checkpoint: blob_info.start_checkpoint,
+                end_checkpoint: blob_info.end_checkpoint,
+                end_of_epoch: blob_info.end_of_epoch,
+                expiry_epoch: blob_info.blob_expiration_epoch,
+                is_shared_blob: blob_info.is_shared_blob,
+                entries_count,
+                total_size,
+            }
+        })
+        .collect();
+
+    Ok(Json(app_blobs))
+}
+
+/// Query parameters for app checkpoint endpoint.
+#[derive(Deserialize)]
+struct AppCheckpointQuery {
+    checkpoint: u64,
+}
+
+/// Handler for getting checkpoint information as JSON.
+async fn get_app_checkpoint(
+    State(app_state): State<AppState>,
+    Query(params): Query<AppCheckpointQuery>,
+) -> Result<Json<AppCheckpointInfo>, StatusCode> {
+    let checkpoint_num = CheckpointSequenceNumber::from(params.checkpoint);
+
+    // Get checkpoint blob info from database.
+    let blob_info = app_state
+        .archival_state
+        .get_checkpoint_blob_info(checkpoint_num)
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to get checkpoint blob info: {}", e);
+            StatusCode::NOT_FOUND
+        })?;
+
+    // Find the index entry for this checkpoint.
+    let (index, entry) = blob_info
+        .index_entries
+        .iter()
+        .enumerate()
+        .find(|(_, e)| e.checkpoint_number == checkpoint_num)
+        .ok_or_else(|| {
+            tracing::error!("checkpoint {} not found in blob index", checkpoint_num);
+            StatusCode::NOT_FOUND
+        })?;
+
+    let blob_id = String::from_utf8_lossy(&blob_info.blob_id).to_string();
+    let object_id = ObjectID::from_bytes(&blob_info.object_id)
+        .map(|id| id.to_string())
+        .unwrap_or_else(|_| ObjectID::ZERO.to_string());
+
+    let response = AppCheckpointInfo {
+        checkpoint_number: params.checkpoint,
+        blob_id,
+        object_id,
+        index,
+        offset: entry.offset,
+        length: entry.length,
     };
 
     Ok(Json(response))

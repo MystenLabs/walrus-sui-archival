@@ -10706,6 +10706,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util 0.7.16",
+ "tower-http 0.6.6",
  "tracing",
  "tracing-subscriber",
  "walrus-core",
