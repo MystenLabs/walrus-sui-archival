@@ -113,7 +113,7 @@ pub async fn delete_all_shared_archival_blobs(
     const BATCH_SIZE: usize = 100;
 
     // Process blobs in batches.
-    let total_batches = (shared_blob_ids.len() + BATCH_SIZE - 1) / BATCH_SIZE;
+    let total_batches = shared_blob_ids.len().div_ceil(BATCH_SIZE);
     let mut total_deleted = 0;
 
     for (batch_index, batch) in shared_blob_ids.chunks(BATCH_SIZE).enumerate() {

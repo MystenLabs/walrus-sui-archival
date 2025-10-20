@@ -1,5 +1,5 @@
 # Configuration for walrus-sui-archival.
-context: testnet
+context: mainnet
 client_config_path: /opt/walrus/config/testnet_client_config.yaml
 db_path: /opt/walrus/data/db
 thread_pool_size: 16
@@ -12,7 +12,7 @@ metrics_address: "0.0.0.0:9184"
 #   downloaded_checkpoint_dir: /opt/walrus/data/downloaded_checkpoints
 checkpoint_downloader:
   type: injection_service
-  remote_store_url: "https://checkpoints.testnet.sui.io"
+  remote_store_url: "https://checkpoints.mainnet.sui.io"
   num_workers: 50
   downloaded_checkpoint_dir: /opt/walrus/data/downloaded_checkpoints
   ingestion_config:

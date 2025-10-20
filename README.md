@@ -56,7 +56,7 @@ cargo run --release -- inspect-blob --path /path/to/blob.bin
 # Inspect a blob from Walrus by blob ID
 cargo run --release -- inspect-blob \
   --blob-id "BlobIDHere" \
-  --client-config config/local_client_config.yaml \
+  --client-config config/local_testnet_client_config.yaml \
   --context testnet
 
 # Inspect specific entry in blob by index
@@ -67,7 +67,7 @@ cargo run --release -- inspect-blob \
 # Inspect blob with full checkpoint data
 cargo run --release -- inspect-blob \
   --blob-id "BlobIDHere" \
-  --client-config config/local_client_config.yaml \
+  --client-config config/local_testnet_client_config.yaml \
   --full
 ```
 
@@ -76,7 +76,7 @@ cargo run --release -- inspect-blob \
 ```bash
 # List all blobs owned by the wallet
 cargo run --release -- list-owned-blobs \
-  --client-config config/local_client_config.yaml \
+  --client-config config/local_testnet_client_config.yaml \
   --context testnet
 ```
 

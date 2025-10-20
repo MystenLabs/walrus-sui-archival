@@ -21,15 +21,15 @@ const CONFIG = {
 
     // Contract package IDs for different networks.
     packageIds: {
-        localnet: '0xab933040652f54d198b2f73f3ca8d3ac0d65e5146a8e7911a7a7fb5aa992fa56',
-        testnet: '0xab933040652f54d198b2f73f3ca8d3ac0d65e5146a8e7911a7a7fb5aa992fa56',
+        localnet: '0x5066f4e1c7ec56acb4df4f53c7a0ebb0aab06fb161593c6ea4ed8e4b7f91246c',
+        testnet: '0x5066f4e1c7ec56acb4df4f53c7a0ebb0aab06fb161593c6ea4ed8e4b7f91246c',
         mainnet: null, // Placeholder: Not set yet.
     },
 
     // Fund object IDs for different networks.
     fundObjectIds: {
-        localnet: '0xaf8c83d3888d1584ecfbd8ded69065b9bcc476ff112d1bb403366a0f0f70f266',
-        testnet: '0xaf8c83d3888d1584ecfbd8ded69065b9bcc476ff112d1bb403366a0f0f70f266',
+        localnet: '0x1723afa986fecfcb37067b6ae1ab9a6e29b964b0b56adf7b4145190abf316bf2',
+        testnet: '0x1723afa986fecfcb37067b6ae1ab9a6e29b964b0b56adf7b4145190abf316bf2',
         mainnet: null, // Placeholder: Not set yet.
     },
 

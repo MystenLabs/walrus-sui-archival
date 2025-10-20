@@ -142,7 +142,7 @@ impl Config {
 }
 
 fn default_client_config_path() -> PathBuf {
-    ["./", "config", "wallet", "local_client_config.yaml"]
+    ["./", "config", "wallet", "local_testnet_client_config.yaml"]
         .iter()
         .collect()
 }

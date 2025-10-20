@@ -118,11 +118,16 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     )?;
     let sui_interactive_client = SuiInteractiveClient::new(walrus_client, wallet);
 
-    // TODO(zhe): remove testing initial checkpoint.
-    let initial_checkpoint = archival_state
-        .get_latest_stored_checkpoint()?
-        .unwrap_or(CheckpointSequenceNumber::from(244999999u64))
-        + 1;
+    let initial_checkpoint = match archival_state.get_latest_stored_checkpoint()? {
+        Some(checkpoint) => checkpoint + 1,
+        None => {
+            if config.context == "testnet" {
+                CheckpointSequenceNumber::from(245000000u64)
+            } else {
+                CheckpointSequenceNumber::from(0u64)
+            }
+        }
+    };
 
     // Cleanup all the old downloaded checkpoints before initial_checkpoint.
     cleanup_orphaned_downloaded_checkpoints_and_uploaded_blobs(

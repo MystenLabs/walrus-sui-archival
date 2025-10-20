@@ -357,7 +357,9 @@ impl CheckpointBlobPublisher {
                                 None
                             })
                             .ok_or_else(|| {
-                                anyhow::anyhow!("failed to find SharedArchivalBlob in created objects")
+                                anyhow::anyhow!(
+                                    "failed to find SharedArchivalBlob in created objects"
+                                )
                             })?;
 
                         tracing::info!(

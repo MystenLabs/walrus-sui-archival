@@ -36,14 +36,14 @@ const CONFIG = {
 
 - **localnet**: `http://localhost:9185` (for local development)
   - Sui RPC: `https://fullnode.testnet.sui.io:443`
-  - Package ID: `0xab933040652f54d198b2f73f3ca8d3ac0d65e5146a8e7911a7a7fb5aa992fa56`
-  - Fund Object ID: `0xaf8c83d3888d1584ecfbd8ded69065b9bcc476ff112d1bb403366a0f0f70f266`
+  - Package ID: `0x5066f4e1c7ec56acb4df4f53c7a0ebb0aab06fb161593c6ea4ed8e4b7f91246c`
+  - Fund Object ID: `0x1723afa986fecfcb37067b6ae1ab9a6e29b964b0b56adf7b4145190abf316bf2`
   - WAL Coin Type: `0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a::wal::WAL`
   - Walrus System Object ID: `0x6c2547cbbc38025cf3adac45f63cb0a8d12ecf777cdc75a4971612bf97fdf6af`
 - **testnet**: `https://walrus-sui-archival.testnet.walrus.space`
   - Sui RPC: `https://fullnode.testnet.sui.io:443`
-  - Package ID: `0xab933040652f54d198b2f73f3ca8d3ac0d65e5146a8e7911a7a7fb5aa992fa56`
-  - Fund Object ID: `0xaf8c83d3888d1584ecfbd8ded69065b9bcc476ff112d1bb403366a0f0f70f266`
+  - Package ID: `0x5066f4e1c7ec56acb4df4f53c7a0ebb0aab06fb161593c6ea4ed8e4b7f91246c`
+  - Fund Object ID: `0x1723afa986fecfcb37067b6ae1ab9a6e29b964b0b56adf7b4145190abf316bf2`
   - WAL Coin Type: `0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a::wal::WAL`
   - Walrus System Object ID: `0x6c2547cbbc38025cf3adac45f63cb0a8d12ecf777cdc75a4971612bf97fdf6af`
 - **mainnet**: `https://walrus-sui-archival.mainnet.walrus.space`

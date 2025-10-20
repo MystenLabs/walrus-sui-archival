@@ -1,6 +1,6 @@
 # Configuration for walrus-sui-archival.
 context: testnet
-client_config_path: ./config/local_client_config.yaml
+client_config_path: ./config/local_testnet_client_config.yaml
 thread_pool_size: 8
 rest_api_address: "0.0.0.0:9185"
 metrics_address: "0.0.0.0:9184"
@@ -25,9 +25,9 @@ checkpoint_blob_extender:
 archival_state_snapshot:
   snapshot_state_to_walrus_interval: 600s
   #snapshot_temp_dir:
-  contract_package_id: 0xab933040652f54d198b2f73f3ca8d3ac0d65e5146a8e7911a7a7fb5aa992fa56
+  contract_package_id: 0x5066f4e1c7ec56acb4df4f53c7a0ebb0aab06fb161593c6ea4ed8e4b7f91246c
   wal_token_package_id: 0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a
-  admin_cap_object_id: 0x23e6025b4f45147d6d817cf82801f7fc082ad0fb12792c850e4b9ab536c2a5b2
-  metadata_pointer_object_id: 0xaf35f2fc9ec13a625ddced86e980e7983f49eff3cbbf65cbc4e890e654937283
-  metadata_pointer_initial_shared_version: 599718276
+  admin_cap_object_id: 0x3c6aaedc4abf4e3acb218813a749199d54567a2acdda91e789b07d0664e8e454
+  metadata_pointer_object_id: 0x6d0d5f76151e96e0f7cbad41c256c908bdbbcafdda48e0bd2880c216a5bbdbfe
+  metadata_pointer_initial_shared_version: 621454879
   store_epoch_length: 2

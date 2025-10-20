@@ -1,0 +1,28 @@
+contexts:
+  mainnet:
+    system_object: 0x2134d52768ea07e8c43570ef975eb3e4c27a39fa6396bef985b5abc58d03ddd2
+    staking_object: 0x10b9d30c28448939ce6c4d6c6e0ffce4a7f8a4ada8248bdad09ef8b70e4a3904
+    exchange_objects: []
+    wallet_config:
+      # Optional path to the wallet config file.
+      path: ./config/wallet/mainnet_wallet.yaml
+      # Sui environment to use.
+      active_env: mainnet
+      # Optional override for the Sui address to use.
+      # active_address: 0x0000000000000000000000000000000000000000000000000000000000000000
+    rpc_urls:
+      - https://fullnode.mainnet.sui.io:443
+  testnet:
+    system_object: 0x6c2547cbbc38025cf3adac45f63cb0a8d12ecf777cdc75a4971612bf97fdf6af
+    staking_object: 0xbe46180321c30aab2f8b3501e24048377287fa708018a5b7c2792b35fe339ee3
+    exchange_objects: []
+    wallet_config:
+      # Optional path to the wallet config file.
+      path: ./config/wallet/wallet.yaml
+      # Sui environment to use.
+      active_env: testnet
+      # Optional override for the Sui address to use.
+      # active_address: 0x0000000000000000000000000000000000000000000000000000000000000000
+    rpc_urls:
+      - https://fullnode.testnet.sui.io:443
+default_context: mainnet
