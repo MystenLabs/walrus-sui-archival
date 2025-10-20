@@ -3,7 +3,7 @@
 const CONFIG = {
     // Network configuration.
     // Change this to 'localnet', 'testnet', or 'mainnet' depending on the target network.
-    network: 'localnet', // Options: 'localnet', 'testnet', 'mainnet'
+    network: 'testnet', // Options: 'localnet', 'testnet', 'mainnet'
 
     // API endpoints for different networks.
     endpoints: {
