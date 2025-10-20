@@ -5,6 +5,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use axum::{
+    Json,
     Router,
     body::Body,
     extract::{Query, State},
@@ -12,7 +13,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::get,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sui_storage::blob::Blob;
 use sui_types::{
     full_checkpoint_content::CheckpointData,
@@ -86,6 +87,10 @@ impl RestApiServer {
         let app = Router::new()
             .route("/", get(home_page))
             .route("/v1/blobs", get(list_all_blobs))
+            .route(
+                "/v1/blobs_expired_before_epoch",
+                get(get_blobs_expired_before_epoch),
+            )
             .route("/v1/health", get(health_check))
             .route("/v1/checkpoint", get(get_checkpoint))
             .route("/resources/walrus_image.png", get(serve_walrus_image))
@@ -223,6 +228,54 @@ async fn list_all_blobs(State(app_state): State<AppState>) -> Result<Html<String
     html.push_str("</html>\n");
 
     Ok(Html(html))
+}
+
+/// Query parameters for blobs expired before epoch endpoint.
+#[derive(Deserialize)]
+struct BlobsExpiredQuery {
+    epoch: u32,
+}
+
+/// Response structure for expired blobs.
+#[derive(Serialize)]
+struct ExpiredBlobInfo {
+    blob_id: String,
+    end_epoch: u32,
+}
+
+/// Handler for getting blobs that expire before a given epoch.
+async fn get_blobs_expired_before_epoch(
+    State(app_state): State<AppState>,
+    Query(params): Query<BlobsExpiredQuery>,
+) -> Result<Json<Vec<ExpiredBlobInfo>>, StatusCode> {
+    let archival_state = app_state.archival_state;
+
+    // Get all blobs from the database.
+    let blobs = archival_state.list_all_blobs().map_err(|e| {
+        tracing::error!("failed to list blobs: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Filter blobs that expire before or at the given epoch.
+    let mut expired_blobs: Vec<ExpiredBlobInfo> = blobs
+        .iter()
+        .filter(|blob| blob.blob_expiration_epoch <= params.epoch)
+        .map(|blob| ExpiredBlobInfo {
+            blob_id: String::from_utf8_lossy(&blob.blob_id).to_string(),
+            end_epoch: blob.blob_expiration_epoch,
+        })
+        .collect();
+
+    // Sort by end_epoch in ascending order.
+    expired_blobs.sort_by_key(|blob| blob.end_epoch);
+
+    tracing::info!(
+        "found {} blobs expiring before or at epoch {}",
+        expired_blobs.len(),
+        params.epoch
+    );
+
+    Ok(Json(expired_blobs))
 }
 
 /// Handler for health check endpoint.
