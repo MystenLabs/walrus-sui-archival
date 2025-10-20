@@ -91,6 +91,7 @@ impl RestApiServer {
                 "/v1/blobs_expired_before_epoch",
                 get(get_blobs_expired_before_epoch),
             )
+            .route("/v1/app_info_for_homepage", get(get_app_info_for_homepage))
             .route("/v1/health", get(health_check))
             .route("/v1/checkpoint", get(get_checkpoint))
             .route("/resources/walrus_image.png", get(serve_walrus_image))
@@ -243,6 +244,25 @@ struct ExpiredBlobInfo {
     end_epoch: u32,
 }
 
+/// Response structure for homepage info.
+#[derive(Serialize)]
+struct HomepageInfo {
+    blob_count: usize,
+    total_checkpoints: u64,
+    earliest_checkpoint: u64,
+    latest_checkpoint: u64,
+    total_size: u64,
+    metadata_info: Option<MetadataInfo>,
+}
+
+/// Metadata information structure.
+#[derive(Serialize)]
+struct MetadataInfo {
+    metadata_pointer_object_id: String,
+    contract_package_id: String,
+    current_metadata_blob_id: Option<String>,
+}
+
 /// Handler for getting blobs that expire before a given epoch.
 async fn get_blobs_expired_before_epoch(
     State(app_state): State<AppState>,
@@ -276,6 +296,80 @@ async fn get_blobs_expired_before_epoch(
     );
 
     Ok(Json(expired_blobs))
+}
+
+/// Handler for getting app homepage information as JSON.
+async fn get_app_info_for_homepage(
+    State(app_state): State<AppState>,
+) -> Result<Json<HomepageInfo>, StatusCode> {
+    let archival_state = app_state.archival_state;
+
+    // Get statistics from the database.
+    let total_blobs = archival_state.list_all_blobs().map_err(|e| {
+        tracing::error!("failed to list blobs: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let blob_count = total_blobs.len();
+    let latest_checkpoint = archival_state
+        .get_latest_stored_checkpoint()
+        .map_err(|e| {
+            tracing::error!("failed to get latest checkpoint: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .unwrap_or(0);
+
+    // Calculate total checkpoints and size.
+    let mut total_checkpoints = 0u64;
+    let mut total_size = 0u64;
+    let mut earliest_checkpoint = u64::MAX;
+
+    for blob in &total_blobs {
+        let checkpoint_count = blob.end_checkpoint - blob.start_checkpoint + 1;
+        total_checkpoints += checkpoint_count;
+
+        if blob.start_checkpoint < earliest_checkpoint {
+            earliest_checkpoint = blob.start_checkpoint;
+        }
+
+        let blob_size: u64 = blob.index_entries.iter().map(|e| e.length).sum();
+        total_size += blob_size;
+    }
+
+    if earliest_checkpoint == u64::MAX {
+        earliest_checkpoint = 0;
+    }
+
+    // Fetch metadata blob ID if snapshot config is available.
+    let metadata_info = if let Some(config) = app_state.snapshot_config.as_ref() {
+        let blob_id = util::fetch_metadata_blob_id(
+            &app_state.client_config_path,
+            config.metadata_pointer_object_id,
+            &app_state.context,
+        )
+        .await
+        .ok()
+        .flatten();
+
+        Some(MetadataInfo {
+            metadata_pointer_object_id: config.metadata_pointer_object_id.to_string(),
+            contract_package_id: config.contract_package_id.to_string(),
+            current_metadata_blob_id: blob_id.map(|id| id.to_string()),
+        })
+    } else {
+        None
+    };
+
+    let response = HomepageInfo {
+        blob_count,
+        total_checkpoints,
+        earliest_checkpoint,
+        latest_checkpoint,
+        total_size,
+        metadata_info,
+    };
+
+    Ok(Json(response))
 }
 
 /// Handler for health check endpoint.
