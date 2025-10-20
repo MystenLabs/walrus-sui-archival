@@ -48,10 +48,10 @@ const CONFIG = {
   - Walrus System Object ID: `0x6c2547cbbc38025cf3adac45f63cb0a8d12ecf777cdc75a4971612bf97fdf6af`
 - **mainnet**: `https://walrus-sui-archival.mainnet.walrus.space`
   - Sui RPC: `https://fullnode.mainnet.sui.io:443`
-  - Package ID: Not set yet (placeholder)
-  - Fund Object ID: Not set yet (placeholder)
-  - WAL Coin Type: Not set yet (placeholder)
-  - Walrus System Object ID: Not set yet (placeholder)
+  - Package ID: `0x88fe0bdce11ce0c0a8fc37b2e9682e21d05051cd31522ac88dcff3076c051dc6`
+  - Fund Object ID: `0x1aed91664f6a2a929b795d2b71dd8707f674131367b8ae4650565685e8eeba62`
+  - WAL Coin Type: `0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59`
+  - Walrus System Object ID: `0x2134d52768ea07e8c43570ef975eb3e4c27a39fa6396bef985b5abc58d03ddd2`
 
 ## Deployment
 

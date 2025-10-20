@@ -16,7 +16,7 @@ checkpoint_downloader:
   num_workers: 50
   downloaded_checkpoint_dir: /opt/walrus/data/downloaded_checkpoints
   ingestion_config:
-    checkpoint_buffer_size: 100
+    checkpoint_buffer_size: 500
     ingest_concurrency: 50
     retry_interval_ms: 1000
 checkpoint_monitor:
