@@ -24,7 +24,7 @@ use walrus_core::{BlobId, encoding::Primary};
 use walrus_sdk::{ObjectID, SuiReadClient, client::WalrusNodeClient};
 
 use crate::{
-    archival_state::{proto, ArchivalState},
+    archival_state::{ArchivalState, proto},
     config::ArchivalStateSnapshotConfig,
     util,
 };
@@ -549,7 +549,10 @@ async fn refresh_blob_end_epoch(
 
     // Spawn a background task to refresh the blob end epochs.
     tokio::spawn(async move {
-        tracing::info!("starting background task to refresh {} blob end epochs", parsed_object_ids.len());
+        tracing::info!(
+            "starting background task to refresh {} blob end epochs",
+            parsed_object_ids.len()
+        );
 
         // Get all blobs from the database once.
         let all_blobs = match archival_state.list_all_blobs() {
@@ -561,12 +564,27 @@ async fn refresh_blob_end_epoch(
         };
 
         for object_id in parsed_object_ids {
-            match refresh_single_blob_end_epoch(&archival_state, &walrus_client, &all_blobs, &object_id).await {
+            match refresh_single_blob_end_epoch(
+                &archival_state,
+                &walrus_client,
+                &all_blobs,
+                &object_id,
+            )
+            .await
+            {
                 Ok(new_epoch) => {
-                    tracing::info!("refreshed blob end epoch for object {}: new epoch {}", object_id, new_epoch);
+                    tracing::info!(
+                        "refreshed blob end epoch for object {}: new epoch {}",
+                        object_id,
+                        new_epoch
+                    );
                 }
                 Err(e) => {
-                    tracing::error!("failed to refresh blob end epoch for object {}: {}", object_id, e);
+                    tracing::error!(
+                        "failed to refresh blob end epoch for object {}: {}",
+                        object_id,
+                        e
+                    );
                 }
             }
         }
@@ -606,7 +624,9 @@ async fn refresh_single_blob_end_epoch(
                 .map(|id| id == *object_id)
                 .unwrap_or(false)
         })
-        .ok_or_else(|| anyhow::anyhow!("blob with object_id {} not found in database", object_id))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("blob with object_id {} not found in database", object_id)
+        })?;
 
     // Update the blob's expiration epoch.
     archival_state.update_blob_expiration_epoch(

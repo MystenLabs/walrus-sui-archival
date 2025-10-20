@@ -331,12 +331,12 @@ impl CheckpointBlobPublisher {
                         let signed_tx = wallet.sign_transaction(&tx_data).await;
                         let response = wallet.execute_transaction_may_fail(signed_tx).await?;
 
-                        // Extract the SharedBlob object ID from object changes.
+                        // Extract the SharedArchivalBlob object ID from object changes.
                         let object_changes = response.object_changes.as_ref().ok_or_else(|| {
                             anyhow::anyhow!("transaction object changes not found")
                         })?;
 
-                        // Find the created SharedBlob object by type.
+                        // Find the created SharedArchivalBlob object by type.
                         let shared_blob_id = object_changes
                             .iter()
                             .find_map(|change| {
@@ -346,10 +346,10 @@ impl CheckpointBlobPublisher {
                                     ..
                                 } = change
                                 {
-                                    // Check if the object type ends with "::archival_blob::SharedBlob".
+                                    // Check if the object type ends with "::archival_blob::SharedArchivalBlob".
                                     if object_type
                                         .to_string()
-                                        .ends_with("::archival_blob::SharedBlob")
+                                        .ends_with("::archival_blob::SharedArchivalBlob")
                                     {
                                         return Some(*object_id);
                                     }
@@ -357,7 +357,7 @@ impl CheckpointBlobPublisher {
                                 None
                             })
                             .ok_or_else(|| {
-                                anyhow::anyhow!("failed to find SharedBlob in created objects")
+                                anyhow::anyhow!("failed to find SharedArchivalBlob in created objects")
                             })?;
 
                         tracing::info!(

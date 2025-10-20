@@ -225,7 +225,7 @@ pub struct CheckpointBlobPublisherConfig {
     pub max_retry_duration: Duration,
 
     /// Whether to create shared blobs for all checkpoint blobs.
-    /// If true, after a blob is created, it will be wrapped in a SharedBlob.
+    /// If true, after a blob is created, it will be wrapped in a SharedArchivalBlob.
     /// Default: false.
     #[serde(default = "default_create_shared_blobs")]
     pub create_shared_blobs: bool,

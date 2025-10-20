@@ -1,7 +1,4 @@
 module walrus_sui_archival_metadata::archival_blob {
-    use sui::tx_context::TxContext;
-    use sui::object::{Self, UID};
-    use sui::transfer;
     use sui::balance::{Self, Balance};
     use sui::coin::{Self, Coin};
     use wal::wal::WAL;
@@ -10,34 +7,22 @@ module walrus_sui_archival_metadata::archival_blob {
     use walrus_sui_archival_metadata::admin::AdminCap;
 
     // Error codes.
-    const EInvalidAmount: u64 = 0;
+    const EInvalidNumEpochs: u64 = 0;
 
     /// Global fund that holds WAL tokens for extending blobs.
-    struct ArchivalBlobFund has key {
+    public struct ArchivalBlobFund has key {
         id: UID,
         balance: Balance<WAL>,
     }
 
     /// A wrapper around Blob that can be funded from the ArchivalBlobFund and extended.
-    struct SharedBlob has key, store {
+    public struct SharedArchivalBlob has key, store {
         id: UID,
         blob: Blob,
     }
 
     /// Initialize the module, creating and sharing the ArchivalBlobFund.
     fun init(ctx: &mut TxContext) {
-        let archival_blob_fund = ArchivalBlobFund {
-            id: object::new(ctx),
-            balance: balance::zero(),
-        };
-        transfer::share_object(archival_blob_fund);
-    }
-
-    /// Create a new ArchivalBlobFund and share it.
-    public fun create(
-        _admin_cap: &AdminCap,
-        ctx: &mut TxContext,
-    ) {
         let archival_blob_fund = ArchivalBlobFund {
             id: object::new(ctx),
             balance: balance::zero(),
@@ -54,86 +39,79 @@ module walrus_sui_archival_metadata::archival_blob {
         balance::join(&mut archival_blob_fund.balance, coin_balance);
     }
 
-    /// Create and share a SharedBlob from a Blob.
+    /// Create and share a SharedArchivalBlob from a Blob.
     /// This is an admin-only operation.
     public fun create_shared_blob(
         _admin_cap: &AdminCap,
         blob: Blob,
         ctx: &mut TxContext,
     ) {
-        let shared_blob = SharedBlob {
+        let shared_blob = SharedArchivalBlob {
             id: object::new(ctx),
             blob,
         };
         transfer::share_object(shared_blob);
     }
 
-    /// Extend a SharedBlob's storage period using funds from the ArchivalBlobFund.
-    /// Takes a SharedBlob object, extends it by the specified number of epochs using the Walrus system.
+    /// Extend a SharedArchivalBlob's storage period using funds from the ArchivalBlobFund.
+    /// Takes a SharedArchivalBlob object, extends it by the specified number of epochs using the Walrus system.
     public fun extend_shared_blob_using_shared_funds(
         archival_blob_fund: &mut ArchivalBlobFund,
         system: &mut System,
-        shared_blob: &mut SharedBlob,
+        shared_blob: &mut SharedArchivalBlob,
         extended_epochs: u32,
         ctx: &mut TxContext,
     ) {
-        use walrus::system;
-
-        assert!(extended_epochs > 0, EInvalidAmount);
+        assert!(extended_epochs > 0, EInvalidNumEpochs);
 
         // Withdraw all funds and create a coin.
-        let payment_coin = coin::from_balance(
+        let mut payment_coin = coin::from_balance(
             balance::withdraw_all(&mut archival_blob_fund.balance),
             ctx
         );
 
         // Call the Walrus system extend function on the wrapped blob.
         // This will deduct the required amount from payment_coin and extend the blob.
-        system::extend_blob(system, &mut shared_blob.blob, extended_epochs, &mut payment_coin);
+        system.extend_blob(&mut shared_blob.blob, extended_epochs, &mut payment_coin);
 
         // Put any remaining funds back into the ArchivalBlobFund.
         balance::join(&mut archival_blob_fund.balance, coin::into_balance(payment_coin));
     }
 
-    /// Extend a SharedBlob's storage period using the caller's own token.
+    /// Extend a SharedArchivalBlob's storage period using the caller's own token.
     /// Takes a token as input, extends the blob, and the remaining token stays with the caller.
     public fun extend_shared_blob_using_token(
         system: &mut System,
-        shared_blob: &mut SharedBlob,
+        shared_blob: &mut SharedArchivalBlob,
         extended_epochs: u32,
         payment: &mut Coin<WAL>,
     ) {
-        use walrus::system;
-
-        assert!(extended_epochs > 0, EInvalidAmount);
+        assert!(extended_epochs > 0, EInvalidNumEpochs);
 
         // Call the Walrus system extend function on the wrapped blob.
         // This will deduct the required amount from payment and extend the blob.
         // Any remaining funds stay in the payment coin, which is returned to the caller.
-        system::extend_blob(system, &mut shared_blob.blob, extended_epochs, payment);
+        system.extend_blob(&mut shared_blob.blob, extended_epochs, payment);
     }
 
-    /// Delete a SharedBlob, burning the wrapped Blob.
+    /// Delete a SharedArchivalBlob object, burning the wrapped Blob.
     /// This is an admin-only operation.
-    entry fun delete_shared_blob(
+    entry fun burn_shared_blob(
         _admin_cap: &AdminCap,
-        shared_blob: SharedBlob,
+        shared_blob: SharedArchivalBlob,
     ) {
-        use walrus::blob;
-
-        let SharedBlob { id, blob } = shared_blob;
+        let SharedArchivalBlob { id, blob } = shared_blob;
         object::delete(id);
-        blob::burn(blob);
+        blob.burn();
     }
 
     /// Get a reference to the wrapped Blob.
-    public fun blob(shared_blob: &SharedBlob): &Blob {
+    public fun blob(shared_blob: &SharedArchivalBlob): &Blob {
         &shared_blob.blob
     }
 
-    public fun blob_expiration_epoch(shared_blob: &SharedBlob): u32 {
-        use walrus::blob;
-        blob::end_epoch(&shared_blob.blob)
+    public fun blob_expiration_epoch(shared_blob: &SharedArchivalBlob): u32 {
+        shared_blob.blob.end_epoch()
     }
 
     /// Get the current balance of the fund.

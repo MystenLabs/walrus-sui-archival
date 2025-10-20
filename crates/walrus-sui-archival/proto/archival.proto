@@ -30,8 +30,8 @@ message CheckpointBlobInfo {
   // Index entries mapping checkpoint numbers to their offset/length in the blob.
   repeated IndexEntry index_entries = 8;
 
-  // Whether this blob has been wrapped as a SharedBlob.
-  // If true, object_id stores the SharedBlob object ID.
+  // Whether this blob has been wrapped as a SharedArchivalBlob.
+  // If true, object_id stores the SharedArchivalBlob object ID.
   // If false, object_id stores the regular Blob object ID.
   bool is_shared_blob = 9;
 

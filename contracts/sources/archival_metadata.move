@@ -1,15 +1,10 @@
 module walrus_sui_archival_metadata::archival_metadata {
-    use std::vector;
-    use std::option::{Self, Option};
-    use sui::tx_context::TxContext;
-    use sui::object::{Self, UID};
-    use sui::transfer;
     use walrus_sui_archival_metadata::admin::AdminCap;
 
     // Error codes.
     const EInvalidBlobIdLength: u64 = 0;
 
-    struct MetadataBlobPointer has key {
+    public struct MetadataBlobPointer has key {
         id: UID,
         blob_id: Option<vector<u8>>,
     }

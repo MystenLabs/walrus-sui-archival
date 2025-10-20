@@ -124,12 +124,12 @@ enum Commands {
         #[arg(short = 'f', long)]
         blob_list_file: Option<PathBuf>,
     },
-    /// Extend a shared blob's storage period using the caller's own WAL tokens.
-    ExtendSharedBlob {
+    /// Extend a shared archival blob's storage period using the caller's own WAL tokens.
+    ExtendSharedArchivalBlob {
         /// Path to configuration file.
         #[arg(short, long, default_value = "config/testnet_local_config.yaml")]
         config: PathBuf,
-        /// Object ID of the shared blob to extend.
+        /// Object ID of the shared archival blob to extend.
         #[arg(short, long)]
         shared_blob_id: String,
         /// Number of epochs to extend.
@@ -239,7 +239,7 @@ fn main() -> Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(delete_all_shared_archival_blobs(config, blob_list_file))?;
         }
-        Commands::ExtendSharedBlob {
+        Commands::ExtendSharedArchivalBlob {
             config,
             shared_blob_id,
             epochs,
@@ -250,9 +250,9 @@ fn main() -> Result<()> {
                 epochs
             );
             // Parse the object ID.
-            let shared_blob_id = shared_blob_id.parse().map_err(|e| {
-                anyhow::anyhow!("failed to parse shared blob object ID: {}", e)
-            })?;
+            let shared_blob_id = shared_blob_id
+                .parse()
+                .map_err(|e| anyhow::anyhow!("failed to parse shared blob object ID: {}", e))?;
             // Create tokio runtime for async operation.
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(extend_shared_blob(config, shared_blob_id, epochs))?;

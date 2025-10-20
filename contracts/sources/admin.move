@@ -1,10 +1,6 @@
 module walrus_sui_archival_metadata::admin {
-    use sui::tx_context::{Self, TxContext};
-    use sui::object::{Self, UID};
-    use sui::transfer;
-
     /// Admin capability shared across all modules.
-    struct AdminCap has key, store {
+    public struct AdminCap has key, store {
         id: UID,
     }
 
