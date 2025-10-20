@@ -39,16 +39,19 @@ const CONFIG = {
   - Package ID: `0xab933040652f54d198b2f73f3ca8d3ac0d65e5146a8e7911a7a7fb5aa992fa56`
   - Fund Object ID: `0xaf8c83d3888d1584ecfbd8ded69065b9bcc476ff112d1bb403366a0f0f70f266`
   - WAL Coin Type: `0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a::wal::WAL`
+  - Walrus System Object ID: `0x6c2547cbbc38025cf3adac45f63cb0a8d12ecf777cdc75a4971612bf97fdf6af`
 - **testnet**: `https://walrus-sui-archival.testnet.walrus.space`
   - Sui RPC: `https://fullnode.testnet.sui.io:443`
   - Package ID: `0xab933040652f54d198b2f73f3ca8d3ac0d65e5146a8e7911a7a7fb5aa992fa56`
   - Fund Object ID: `0xaf8c83d3888d1584ecfbd8ded69065b9bcc476ff112d1bb403366a0f0f70f266`
   - WAL Coin Type: `0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a::wal::WAL`
+  - Walrus System Object ID: `0x6c2547cbbc38025cf3adac45f63cb0a8d12ecf777cdc75a4971612bf97fdf6af`
 - **mainnet**: `https://walrus-sui-archival.mainnet.walrus.space`
   - Sui RPC: `https://fullnode.mainnet.sui.io:443`
   - Package ID: Not set yet (placeholder)
   - Fund Object ID: Not set yet (placeholder)
   - WAL Coin Type: Not set yet (placeholder)
+  - Walrus System Object ID: Not set yet (placeholder)
 
 ## Deployment
 
@@ -89,8 +92,9 @@ This website can be deployed to any static hosting service:
 - **Sui TypeScript SDK Integration**: Calls on-chain Move functions to fetch shared fund balance
 - **Wallet Standard Integration**: Uses Sui Wallet Standard for universal wallet support
 - **Multi-Wallet Support**: Automatic wallet detection with preference for Slush wallet
-- **Shared Blob Lifetime Management**: Displays the current WAL balance in the shared fund
+- **Archival Blob Management**: Displays the current WAL balance in the shared fund
 - **Contribution Feature**: Contribute WAL tokens directly to the shared fund (max 100 WAL experimental limit)
+- **Extend Blobs Feature**: Automatically extend expiring blobs using the shared fund (extends by 5 epochs)
 - **Responsive Design**: Works on desktop and mobile devices
 - **Error Handling**: Displays friendly error messages if data cannot be loaded
 - **Loading States**: Shows loading spinner while fetching data
@@ -232,7 +236,7 @@ The homepage displays the shared fund balance by:
 
 4. Extracting the return value (u64 balance) and converting it to a human-readable format
 
-### Shared Blob Lifetime Management
+### Archival Blob Management
 
 The archival system uses a shared fund (ArchivalBlobFund) that holds WAL tokens for automatically extending the lifetime of shared blobs. The website displays:
 
@@ -262,7 +266,7 @@ The website uses the Sui Wallet Standard and works with any compliant wallet:
 
 Once your wallet is connected:
 
-1. The contribution form will appear in the Shared Blob Lifetime Management section
+1. The contribution form will appear in the Archival Blob Management section
 2. Enter the amount of WAL tokens you want to contribute (max 100 WAL)
 3. Click **"Contribute"**
 4. Approve the transaction in your wallet
@@ -288,6 +292,39 @@ The contribution process:
 2. Creates a transaction that splits the exact amount you want to contribute
 3. Calls `archival_blob::deposit` to transfer the tokens to the shared fund
 4. Signs and executes the transaction through your wallet using the Wallet Standard API
+
+## Extending Blobs
+
+The website includes an automated blob extension feature that helps maintain the archival system.
+
+### How to Extend Blobs
+
+Once your wallet is connected:
+
+1. The "Extend Blobs" section appears in the Archival Blob Management area
+2. Enter the number of blobs you want to extend (max 100)
+3. Click **"Extend Blobs"**
+4. The system will:
+   - Fetch the current Walrus epoch from the blockchain
+   - Query blobs expiring within the next 3 epochs
+   - Create a Programmable Transaction Block (PTB) to extend the selected blobs
+5. Approve the transaction in your wallet
+6. Wait for confirmation
+
+**Important Notes:**
+- Each call extends selected blobs by **5 epochs**
+- Maximum 100 blobs can be extended at once
+- Uses funds from the shared fund (no personal WAL required)
+- Requires wallet connection to sign the transaction
+
+### Technical Details
+
+The extend blobs process:
+
+1. **Fetch Walrus Epoch**: Reads the current epoch from the Walrus system object (`0x6c2547...`)
+2. **Query Expiring Blobs**: Calls `/v1/app_blobs_expired_before_epoch?epoch=X` where X = current epoch + 3
+3. **Build PTB**: Creates a single transaction with multiple `extend_shared_blob_using_shared_funds` calls
+4. **Execute**: Signs and executes the PTB to extend all selected blobs by 5 epochs
 
 ## License
 

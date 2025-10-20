@@ -40,6 +40,13 @@ const CONFIG = {
         mainnet: null, // Placeholder: Not set yet.
     },
 
+    // Walrus system object IDs for different networks.
+    walrusSystemObjectIds: {
+        localnet: '0x6c2547cbbc38025cf3adac45f63cb0a8d12ecf777cdc75a4971612bf97fdf6af',
+        testnet: '0x6c2547cbbc38025cf3adac45f63cb0a8d12ecf777cdc75a4971612bf97fdf6af',
+        mainnet: null, // Placeholder: Not set yet.
+    },
+
     // Get the current API endpoint based on the selected network.
     getApiEndpoint() {
         return this.endpoints[this.network];
@@ -68,6 +75,11 @@ const CONFIG = {
     // Get the WAL coin type for the current network.
     getWalCoinType() {
         return this.walCoinTypes[this.network];
+    },
+
+    // Get the Walrus system object ID for the current network.
+    getWalrusSystemObjectId() {
+        return this.walrusSystemObjectIds[this.network];
     },
 };
 

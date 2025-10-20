@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use sui_sdk::wallet_context::WalletContext;
 use tokio::sync::Mutex;
-use walrus_sdk::{client::WalrusNodeClient, sui::client::SuiContractClient};
+use walrus_sdk::{SuiReadClient, client::WalrusNodeClient, sui::client::SuiContractClient};
 
 /// A client that wraps both WalrusNodeClient and WalletContext with mutex protection.
 /// This ensures that walrus_client and wallet cannot be used at the same time.
@@ -112,6 +112,15 @@ impl SuiInteractiveClient {
     {
         let mut inner = self.inner.lock().await;
         f(&mut inner.wallet).await
+    }
+
+    /// Get the SuiContractClient without holding the lock.
+    ///
+    /// This method locks briefly to clone the sui_client reference, then releases the lock.
+    /// This allows calling sui_client methods without blocking other operations.
+    pub async fn get_sui_read_client(&self) -> Arc<SuiReadClient> {
+        let inner = self.inner.lock().await;
+        inner.walrus_client.sui_client().read_client.clone()
     }
 }
 

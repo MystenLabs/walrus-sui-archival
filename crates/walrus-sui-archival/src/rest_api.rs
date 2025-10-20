@@ -11,7 +11,7 @@ use axum::{
     extract::{Query, State},
     http::{StatusCode, header},
     response::{Html, IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use sui_storage::blob::Blob;
@@ -23,7 +23,11 @@ use tower_http::cors::CorsLayer;
 use walrus_core::{BlobId, encoding::Primary};
 use walrus_sdk::{ObjectID, SuiReadClient, client::WalrusNodeClient};
 
-use crate::{archival_state::ArchivalState, config::ArchivalStateSnapshotConfig, util};
+use crate::{
+    archival_state::{proto, ArchivalState},
+    config::ArchivalStateSnapshotConfig,
+    util,
+};
 
 /// Format size in bytes to human-readable format.
 fn format_size(bytes: u64) -> String {
@@ -95,6 +99,10 @@ impl RestApiServer {
             .route("/v1/app_info_for_homepage", get(get_app_info_for_homepage))
             .route("/v1/app_blobs", get(get_app_blobs))
             .route("/v1/app_checkpoint", get(get_app_checkpoint))
+            .route(
+                "/v1/app_refresh_blob_end_epoch",
+                post(refresh_blob_end_epoch),
+            )
             .route("/v1/health", get(health_check))
             .route("/v1/checkpoint", get(get_checkpoint))
             .route("/resources/walrus_image.png", get(serve_walrus_image))
@@ -245,6 +253,7 @@ struct BlobsExpiredQuery {
 #[derive(Serialize)]
 struct ExpiredBlobInfo {
     blob_id: String,
+    object_id: String,
     end_epoch: u32,
 }
 
@@ -292,6 +301,19 @@ struct AppCheckpointInfo {
     length: u64,
 }
 
+/// Request structure for refresh blob end epoch endpoint.
+#[derive(Deserialize)]
+struct RefreshBlobEndEpochRequest {
+    object_ids: Vec<String>,
+}
+
+/// Response structure for refresh blob end epoch endpoint.
+#[derive(Serialize)]
+struct RefreshBlobEndEpochResponse {
+    message: String,
+    count: usize,
+}
+
 /// Handler for getting blobs that expire before a given epoch.
 async fn get_blobs_expired_before_epoch(
     State(app_state): State<AppState>,
@@ -309,9 +331,16 @@ async fn get_blobs_expired_before_epoch(
     let mut expired_blobs: Vec<ExpiredBlobInfo> = blobs
         .iter()
         .filter(|blob| blob.blob_expiration_epoch <= params.epoch)
-        .map(|blob| ExpiredBlobInfo {
-            blob_id: String::from_utf8_lossy(&blob.blob_id).to_string(),
-            end_epoch: blob.blob_expiration_epoch,
+        .map(|blob| {
+            let object_id = ObjectID::from_bytes(&blob.object_id)
+                .map(|id| id.to_string())
+                .expect("failed to parse object ID");
+
+            ExpiredBlobInfo {
+                blob_id: String::from_utf8_lossy(&blob.blob_id).to_string(),
+                object_id,
+                end_epoch: blob.blob_expiration_epoch,
+            }
         })
         .collect();
 
@@ -490,6 +519,104 @@ async fn get_app_checkpoint(
     };
 
     Ok(Json(response))
+}
+
+/// Handler for refreshing blob end epochs.
+async fn refresh_blob_end_epoch(
+    State(app_state): State<AppState>,
+    Json(request): Json<RefreshBlobEndEpochRequest>,
+) -> Result<Json<RefreshBlobEndEpochResponse>, StatusCode> {
+    let object_ids = request.object_ids;
+    let count = object_ids.len();
+
+    tracing::info!("received request to refresh {} blob end epochs", count);
+
+    // Parse object IDs.
+    let mut parsed_object_ids = Vec::new();
+    for object_id_str in &object_ids {
+        match ObjectID::from_hex_literal(object_id_str) {
+            Ok(object_id) => parsed_object_ids.push(object_id),
+            Err(e) => {
+                tracing::error!("failed to parse object ID {}: {}", object_id_str, e);
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+    }
+
+    // Clone the necessary state for the background task.
+    let archival_state = app_state.archival_state.clone();
+    let walrus_client = app_state.walrus_client.clone();
+
+    // Spawn a background task to refresh the blob end epochs.
+    tokio::spawn(async move {
+        tracing::info!("starting background task to refresh {} blob end epochs", parsed_object_ids.len());
+
+        // Get all blobs from the database once.
+        let all_blobs = match archival_state.list_all_blobs() {
+            Ok(blobs) => blobs,
+            Err(e) => {
+                tracing::error!("failed to list blobs: {}", e);
+                return;
+            }
+        };
+
+        for object_id in parsed_object_ids {
+            match refresh_single_blob_end_epoch(&archival_state, &walrus_client, &all_blobs, &object_id).await {
+                Ok(new_epoch) => {
+                    tracing::info!("refreshed blob end epoch for object {}: new epoch {}", object_id, new_epoch);
+                }
+                Err(e) => {
+                    tracing::error!("failed to refresh blob end epoch for object {}: {}", object_id, e);
+                }
+            }
+        }
+
+        tracing::info!("background task completed: refreshed blob end epochs");
+    });
+
+    let response = RefreshBlobEndEpochResponse {
+        message: "blob end epoch refresh task started".to_string(),
+        count,
+    };
+
+    Ok(Json(response))
+}
+
+/// Refresh the end epoch for a single blob.
+async fn refresh_single_blob_end_epoch(
+    archival_state: &Arc<ArchivalState>,
+    walrus_client: &Arc<WalrusNodeClient<SuiReadClient>>,
+    all_blobs: &[proto::CheckpointBlobInfo],
+    object_id: &ObjectID,
+) -> Result<u32> {
+    // Get the blob from the blockchain.
+    let blob_response = walrus_client
+        .get_blob_by_object_id(object_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to get blob: {}", e))?;
+
+    let new_end_epoch = blob_response.blob.storage.end_epoch;
+    let blob_id = blob_response.blob.blob_id;
+
+    // Find the blob in the database by object_id.
+    let blob_info = all_blobs
+        .iter()
+        .find(|b| {
+            ObjectID::from_bytes(&b.object_id)
+                .map(|id| id == *object_id)
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| anyhow::anyhow!("blob with object_id {} not found in database", object_id))?;
+
+    // Update the blob's expiration epoch.
+    archival_state.update_blob_expiration_epoch(
+        blob_info.start_checkpoint,
+        &blob_id,
+        object_id,
+        new_end_epoch,
+    )?;
+
+    Ok(new_end_epoch)
 }
 
 /// Handler for health check endpoint.

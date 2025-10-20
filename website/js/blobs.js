@@ -57,8 +57,8 @@ function renderBlobs(blobs) {
 
     contentDiv.innerHTML = `<p>found ${blobs.length} blob(s) in the database:</p>`;
 
-    // Add note about asterisk.
-    contentDiv.innerHTML += '<div class="note"><strong>Note:</strong> * indicates the blob is at the end of an epoch.</div>\n';
+    // Add note about red blob IDs.
+    contentDiv.innerHTML += '<div class="note"><strong>Note:</strong> Blob IDs in <span style="color: #dc3545; font-weight: bold;">red</span> indicate the blob is at the end of an epoch.</div>\n';
 
     // Create table with container for horizontal scrolling.
     let tableHtml = '<div class="table-container">\n';
@@ -80,8 +80,10 @@ function renderBlobs(blobs) {
         totalEntries += blob.entries_count;
         totalSize += blob.total_size;
 
-        // Add * prefix to blob_id if end_of_epoch is true.
-        const blobIdDisplay = blob.end_of_epoch ? `*${blob.blob_id}` : blob.blob_id;
+        // Wrap blob_id in red if end_of_epoch is true.
+        const blobIdDisplay = blob.end_of_epoch
+            ? `<span class="end-of-epoch-blob">${blob.blob_id}</span>`
+            : blob.blob_id;
 
         tableHtml += '<tr>\n';
         tableHtml += `<td>${blobIdDisplay}</td>\n`;

@@ -12,7 +12,7 @@ use sui_types::{
     transaction::{ObjectArg, TransactionData, TransactionKind},
 };
 use tokio::time;
-use walrus_sdk::sui::client::ReadClient;
+use walrus_sdk::{SuiReadClient, sui::client::ReadClient};
 
 use crate::{
     archival_state::ArchivalState,
@@ -57,23 +57,35 @@ impl CheckpointBlobExtender {
     pub async fn start(self) -> Result<()> {
         tracing::info!("starting checkpoint blob extender service");
 
+        // Spawn a background task for syncing blob expiration epochs.
+        let sync_self = self.clone();
+        tokio::spawn(async move {
+            sync_self.sync_blob_expiration_epochs_loop().await;
+        });
+
+        // Main loop for checking and extending blobs.
         let mut extend_interval = time::interval(self.config.check_interval);
-        let mut sync_interval = time::interval(Duration::from_secs(60));
 
         loop {
-            tokio::select! {
-                _ = extend_interval.tick() => {
-                    if let Err(e) = self.check_and_extend_blobs().await {
-                        tracing::error!("failed to check and extend blobs: {}", e);
-                        // Continue running despite errors.
-                    }
-                }
-                _ = sync_interval.tick() => {
-                    if let Err(e) = self.sync_all_blob_expiration_epochs().await {
-                        tracing::error!("failed to sync blob expiration epochs: {}", e);
-                        // Continue running despite errors.
-                    }
-                }
+            extend_interval.tick().await;
+            if let Err(e) = self.check_and_extend_blobs().await {
+                tracing::error!("failed to check and extend blobs: {}", e);
+                // Continue running despite errors.
+            }
+        }
+    }
+
+    /// Background loop for syncing blob expiration epochs.
+    async fn sync_blob_expiration_epochs_loop(&self) {
+        // Run sync every hour.
+        let mut sync_interval = time::interval(Duration::from_secs(3600));
+
+        loop {
+            sync_interval.tick().await;
+            tracing::info!("starting scheduled blob expiration epoch sync");
+            if let Err(e) = self.sync_all_blob_expiration_epochs().await {
+                tracing::error!("failed to sync blob expiration epochs: {}", e);
+                // Continue running despite errors.
             }
         }
     }
@@ -140,6 +152,9 @@ impl CheckpointBlobExtender {
 
         tracing::info!("extending {} blobs", blobs_to_extend.len());
 
+        // For reading blobs, get sui_read_client without holding the lock.
+        let sui_read_client = self.sui_interactive_client.get_sui_read_client().await;
+
         // Extend each blob.
         for (object_id, start_checkpoint, blob_id, is_shared_blob) in blobs_to_extend {
             if let Err(e) = self.extend_blob(object_id, is_shared_blob).await {
@@ -149,7 +164,7 @@ impl CheckpointBlobExtender {
             }
 
             let new_end_epoch = self
-                .get_blob_expiration_epoch(object_id, is_shared_blob)
+                .get_blob_expiration_epoch(object_id, is_shared_blob, sui_read_client.clone())
                 .await;
 
             // Update the archival state with the new expiration epoch.
@@ -181,6 +196,9 @@ impl CheckpointBlobExtender {
         let mut synced_count = 0;
         let mut error_count = 0;
 
+        // Get a read client for reading blob epoch. This is read-only and therefore do not mutual
+        // exclusive to the client.
+        let sui_read_client = self.sui_interactive_client.get_sui_read_client().await;
         for blob_info in blobs {
             // Parse the object ID.
             let object_id = match ObjectID::from_bytes(&blob_info.object_id) {
@@ -204,7 +222,11 @@ impl CheckpointBlobExtender {
             };
 
             let on_chain_end_epoch = self
-                .get_blob_expiration_epoch(object_id, blob_info.is_shared_blob)
+                .get_blob_expiration_epoch(
+                    object_id,
+                    blob_info.is_shared_blob,
+                    sui_read_client.clone(),
+                )
                 .await;
 
             // Compare with stored epoch.
@@ -246,7 +268,12 @@ impl CheckpointBlobExtender {
     }
 
     /// Get the updated blob expiration epoch with infinite retry.
-    async fn get_blob_expiration_epoch(&self, object_id: ObjectID, is_shared_blob: bool) -> u32 {
+    async fn get_blob_expiration_epoch(
+        &self,
+        object_id: ObjectID,
+        is_shared_blob: bool,
+        sui_read_client: Arc<SuiReadClient>,
+    ) -> u32 {
         // Get the updated blob expiration epoch with infinite retry.
         let mut retry_delay = self.config.min_transaction_retry_duration;
         let max_retry_delay = self.config.max_transaction_retry_duration;
@@ -255,19 +282,14 @@ impl CheckpointBlobExtender {
                 // For shared blobs, call blob_expiration_epoch Move function.
                 self.get_shared_blob_expiration_epoch(object_id).await
             } else {
-                // For regular blobs, use the Walrus SDK method.
-                self.sui_interactive_client
-                    .with_walrus_client_async(|client| {
-                        Box::pin(async move {
-                            let blob = client
-                                .sui_client()
-                                .get_blob_by_object_id(&object_id)
-                                .await
-                                .map_err(|e| anyhow!("failed to get blob: {}", e))?;
-                            Ok(blob.blob.storage.end_epoch)
-                        })
-                    })
-                    .await
+                async {
+                    let blob = sui_read_client
+                        .get_blob_by_object_id(&object_id)
+                        .await
+                        .map_err(|e| anyhow!("failed to get blob: {}", e))?;
+                    Ok(blob.blob.storage.end_epoch)
+                }
+                .await
             };
 
             match result {
@@ -607,5 +629,19 @@ impl CheckpointBlobExtender {
                 })
             })
             .await
+    }
+}
+
+impl Clone for CheckpointBlobExtender {
+    fn clone(&self) -> Self {
+        Self {
+            archival_state: self.archival_state.clone(),
+            sui_interactive_client: self.sui_interactive_client.clone(),
+            config: self.config.clone(),
+            metrics: self.metrics.clone(),
+            contract_package_id: self.contract_package_id,
+            system_object_id: self.system_object_id,
+            wal_token_package_id: self.wal_token_package_id,
+        }
     }
 }
