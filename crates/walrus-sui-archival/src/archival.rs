@@ -141,8 +141,19 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
 
     tracing::info!("initial checkpoint: {}", initial_checkpoint);
 
+    // Initialize guage metrics.
+    metrics
+        .latest_processed_checkpoint
+        .set(initial_checkpoint as i64 - 1);
+    metrics
+        .latest_uploaded_checkpoint
+        .set(initial_checkpoint as i64 - 1);
+    metrics
+        .latest_cleaned_checkpoint
+        .set(initial_checkpoint as i64 - 1);
+
     // Create channel for blob build requests.
-    let (blob_publisher_tx, blob_publisher_rx) = mpsc::channel::<BlobBuildRequest>(1);
+    let (blob_publisher_tx, blob_publisher_rx) = mpsc::channel::<BlobBuildRequest>(2);
 
     // Start the checkpoint blob publisher.
     let blob_publisher = checkpoint_blob_publisher::CheckpointBlobPublisher::new(
