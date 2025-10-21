@@ -119,21 +119,43 @@ impl Metrics {
         .expect("metrics defined at compile time must be valid");
 
         // Checkpoint blob publisher metrics.
-        let blob_build_latency_seconds = Histogram::with_opts(HistogramOpts::new(
-            "blob_build_latency_seconds",
-            "Blob build latency in seconds",
-        ))
+        let blob_build_latency_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "blob_build_latency_seconds",
+                "Blob build latency in seconds",
+            )
+            .buckets(vec![
+                0.1, 0.5, 1.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 300.0,
+            ]),
+        )
         .expect("metrics defined at compile time must be valid");
 
-        let blob_upload_latency_seconds = Histogram::with_opts(HistogramOpts::new(
-            "blob_upload_latency_seconds",
-            "Blob upload latency in seconds",
-        ))
+        let blob_upload_latency_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "blob_upload_latency_seconds",
+                "Blob upload latency in seconds",
+            )
+            .buckets(vec![
+                1.0, 5.0, 10.0, 20.0, 40.0, 60.0, 120.0, 240.0, 300.0, 360.0, 420.0, 480.0, 540.0,
+                600.0, 900.0, 1200.0,
+            ]),
+        )
         .expect("metrics defined at compile time must be valid");
 
-        let blob_size_bytes =
-            Histogram::with_opts(HistogramOpts::new("blob_size_bytes", "Blob size in bytes"))
-                .expect("metrics defined at compile time must be valid");
+        let blob_size_bytes = Histogram::with_opts(
+            HistogramOpts::new("blob_size_bytes", "Blob size in bytes").buckets(vec![
+                1024.0,       // 1 KB
+                10240.0,      // 10 KB
+                102400.0,     // 100 KB
+                1048576.0,    // 1 MB
+                10485760.0,   // 10 MB
+                104857600.0,  // 100 MB
+                1073741824.0, // 1 GB
+                2147483648.0, // 2 GB
+                3221225472.0, // 3 GB
+            ]),
+        )
+        .expect("metrics defined at compile time must be valid");
 
         let latest_blob_size_bytes = IntGauge::new(
             "latest_blob_size_bytes",
@@ -193,16 +215,27 @@ impl Metrics {
                 .expect("metrics defined at compile time must be valid");
 
         // Archival state snapshot metrics.
-        let snapshot_creation_latency_seconds = Histogram::with_opts(HistogramOpts::new(
-            "snapshot_creation_latency_seconds",
-            "Snapshot creation latency in seconds",
-        ))
+        let snapshot_creation_latency_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "snapshot_creation_latency_seconds",
+                "Snapshot creation latency in seconds",
+            )
+            .buckets(vec![
+                0.1, 0.5, 1.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 300.0,
+            ]),
+        )
         .expect("metrics defined at compile time must be valid");
 
-        let snapshot_upload_latency_seconds = Histogram::with_opts(HistogramOpts::new(
-            "snapshot_upload_latency_seconds",
-            "Snapshot upload latency in seconds",
-        ))
+        let snapshot_upload_latency_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "snapshot_upload_latency_seconds",
+                "Snapshot upload latency in seconds",
+            )
+            .buckets(vec![
+                1.0, 5.0, 10.0, 20.0, 40.0, 60.0, 120.0, 240.0, 300.0, 360.0, 420.0, 480.0, 540.0,
+                600.0, 900.0, 1200.0,
+            ]),
+        )
         .expect("metrics defined at compile time must be valid");
 
         let snapshot_records_total = IntGauge::new(
