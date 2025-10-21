@@ -18,6 +18,8 @@ RUN cargo build --profile $PROFILE --bin walrus-sui-archival
 # Production Image for walrus-sui-archival
 FROM rust:1.89-bookworm AS walrus-sui-archival
 RUN apt-get update && apt-get install -y ca-certificates curl
+# Use jemalloc for better memory management
+RUN apt-get install -y libjemalloc2
 ARG PROFILE=release
 WORKDIR "/tmp/walrus-sui-archival"
 COPY --from=builder /tmp/walrus-sui-archival/target/release/walrus-sui-archival /opt/walrus/bin/walrus-sui-archival

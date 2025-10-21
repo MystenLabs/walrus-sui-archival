@@ -61,6 +61,42 @@
         .home-link:hover {
             text-decoration: underline;
         }
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 5px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        .pagination button {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            background-color: white;
+            color: #667eea;
+            cursor: pointer;
+            font-size: 0.95em;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+        .pagination button:hover:not(:disabled) {
+            background-color: #f0f0f0;
+        }
+        .pagination button.active {
+            background-color: #667eea;
+            color: white;
+            border-color: #667eea;
+            font-weight: bold;
+        }
+        .pagination button:disabled {
+            color: #ccc;
+            cursor: not-allowed;
+            border-color: #eee;
+        }
+        .pagination-ellipsis {
+            padding: 8px 4px;
+            color: #999;
+        }
     </style>
 </head>
 <body>
