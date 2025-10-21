@@ -1,6 +1,5 @@
 #[test_only]
 module walrus_sui_archival_metadata::archival_metadata_tests {
-    use std::option;
     use sui::test_scenario as ts;
     use walrus_sui_archival_metadata::admin::{Self, AdminCap};
     use walrus_sui_archival_metadata::archival_metadata::{Self, MetadataBlobPointer};
@@ -10,7 +9,7 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
 
     #[test]
     fun test_init() {
-        let scenario_val = ts::begin(ADMIN);
+        let mut scenario_val = ts::begin(ADMIN);
         let scenario = &mut scenario_val;
 
         // initialize the admin module.
@@ -28,7 +27,7 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
 
     #[test]
     fun test_create_metadata_blob_pointer() {
-        let scenario_val = ts::begin(ADMIN);
+        let mut scenario_val = ts::begin(ADMIN);
         let scenario = &mut scenario_val;
 
         // initialize admin module.
@@ -48,7 +47,7 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
             let pointer = ts::take_shared<MetadataBlobPointer>(scenario);
             let blob_id_opt = archival_metadata::get_blob_id(&pointer);
 
-            assert!(option::is_none(blob_id_opt), 0);
+            assert!(blob_id_opt.is_none(), 0);
 
             ts::return_shared(pointer);
         };
@@ -58,7 +57,7 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
 
     #[test]
     fun test_update_metadata_blob_pointer() {
-        let scenario_val = ts::begin(ADMIN);
+        let mut scenario_val = ts::begin(ADMIN);
         let scenario = &mut scenario_val;
 
         // initialize admin module.
@@ -76,7 +75,7 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
         ts::next_tx(scenario, ADMIN);
         {
             let admin_cap = ts::take_from_sender<AdminCap>(scenario);
-            let pointer = ts::take_shared<MetadataBlobPointer>(scenario);
+            let mut pointer = ts::take_shared<MetadataBlobPointer>(scenario);
 
             let new_blob_id = vector[
                 32u8, 31u8, 30u8, 29u8, 28u8, 27u8, 26u8, 25u8,
@@ -92,9 +91,9 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
             );
 
             let blob_id_opt = archival_metadata::get_blob_id(&pointer);
-            assert!(option::is_some(blob_id_opt), 0);
+            assert!(blob_id_opt.is_some(), 0);
 
-            let blob_id_ref = option::borrow(blob_id_opt);
+            let blob_id_ref = blob_id_opt.borrow();
             assert!(*blob_id_ref == new_blob_id, 1);
 
             ts::return_to_sender(scenario, admin_cap);
@@ -106,7 +105,7 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
 
     #[test]
     fun test_clear_metadata_blob_pointer() {
-        let scenario_val = ts::begin(ADMIN);
+        let mut scenario_val = ts::begin(ADMIN);
         let scenario = &mut scenario_val;
 
         // initialize admin module.
@@ -124,7 +123,7 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
         ts::next_tx(scenario, ADMIN);
         {
             let admin_cap = ts::take_from_sender<AdminCap>(scenario);
-            let pointer = ts::take_shared<MetadataBlobPointer>(scenario);
+            let mut pointer = ts::take_shared<MetadataBlobPointer>(scenario);
 
             let blob_id = vector[
                 1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8,
@@ -147,7 +146,7 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
         ts::next_tx(scenario, ADMIN);
         {
             let admin_cap = ts::take_from_sender<AdminCap>(scenario);
-            let pointer = ts::take_shared<MetadataBlobPointer>(scenario);
+            let mut pointer = ts::take_shared<MetadataBlobPointer>(scenario);
 
             archival_metadata::clear_metadata_blob_pointer(
                 &admin_cap,
@@ -155,7 +154,7 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
             );
 
             let blob_id_opt = archival_metadata::get_blob_id(&pointer);
-            assert!(option::is_none(blob_id_opt), 0);
+            assert!(blob_id_opt.is_none(), 0);
 
             ts::return_to_sender(scenario, admin_cap);
             ts::return_shared(pointer);
@@ -166,7 +165,7 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
 
     #[test]
     fun test_delete_metadata_blob_pointer() {
-        let scenario_val = ts::begin(ADMIN);
+        let mut scenario_val = ts::begin(ADMIN);
         let scenario = &mut scenario_val;
 
         // initialize admin module.
@@ -200,7 +199,7 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
     #[test]
     #[expected_failure(abort_code = archival_metadata::EInvalidBlobIdLength)]
     fun test_update_with_invalid_blob_id_length() {
-        let scenario_val = ts::begin(ADMIN);
+        let mut scenario_val = ts::begin(ADMIN);
         let scenario = &mut scenario_val;
 
         // initialize admin module.
@@ -218,7 +217,7 @@ module walrus_sui_archival_metadata::archival_metadata_tests {
         ts::next_tx(scenario, ADMIN);
         {
             let admin_cap = ts::take_from_sender<AdminCap>(scenario);
-            let pointer = ts::take_shared<MetadataBlobPointer>(scenario);
+            let mut pointer = ts::take_shared<MetadataBlobPointer>(scenario);
 
             // invalid blob id (16 bytes instead of 32).
             let new_blob_id = vector[
