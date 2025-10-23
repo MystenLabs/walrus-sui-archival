@@ -318,8 +318,9 @@ impl CheckpointBlobExtender {
         let max_retry_delay = self.config.max_transaction_retry_duration;
         loop {
             let result = if is_shared_blob {
-                // For shared blobs, call blob_expiration_epoch Move function.
-                self.get_shared_blob_expiration_epoch(object_id).await
+                // For shared blobs, parse the object to get expiration epoch.
+                self.get_shared_blob_expiration_epoch(object_id, sui_read_client.clone())
+                    .await
             } else {
                 async {
                     let blob = sui_read_client
@@ -423,96 +424,51 @@ impl CheckpointBlobExtender {
             .await
     }
 
-    /// Get the expiration epoch of a shared blob by calling the Move function.
-    async fn get_shared_blob_expiration_epoch(&self, shared_blob_id: ObjectID) -> Result<u32> {
-        let package_id = self.contract_package_id;
+    /// Get the expiration epoch of a shared blob by parsing the object.
+    async fn get_shared_blob_expiration_epoch(
+        &self,
+        shared_blob_id: ObjectID,
+        sui_read_client: Arc<SuiReadClient>,
+    ) -> Result<u32> {
+        // Fetch shared blob object with content.
+        let shared_blob_obj = sui_read_client
+            .retriable_sui_client()
+            .get_object_with_options(
+                shared_blob_id,
+                sui_sdk::rpc_types::SuiObjectDataOptions::new().with_content(),
+            )
+            .await?;
 
-        self.sui_interactive_client
-            .with_wallet_mut_async(|wallet| {
-                Box::pin(async move {
-                    let sui_client = wallet.get_client().await?;
+        let shared_blob_data = shared_blob_obj
+            .data
+            .ok_or_else(|| anyhow!("shared blob object data not found"))?;
 
-                    // Fetch shared blob object to get initial shared version.
-                    let shared_blob_obj = sui_client
-                        .read_api()
-                        .get_object_with_options(
-                            shared_blob_id,
-                            sui_sdk::rpc_types::SuiObjectDataOptions::new().with_owner(),
-                        )
-                        .await?;
+        // Parse the content to get the blob field.
+        let content = shared_blob_data
+            .content
+            .ok_or_else(|| anyhow!("shared blob object content not found"))?;
 
-                    let shared_blob_data = shared_blob_obj
-                        .data
-                        .ok_or_else(|| anyhow!("shared blob object data not found"))?;
+        // Extract fields from the Move object.
+        let fields = match content {
+            sui_sdk::rpc_types::SuiParsedData::MoveObject(obj) => obj.fields.to_json_value(),
+            _ => return Err(anyhow!("unexpected object type")),
+        };
 
-                    let shared_blob_initial_shared_version = match shared_blob_data.owner {
-                        Some(Owner::Shared {
-                            initial_shared_version,
-                        }) => initial_shared_version,
-                        _ => return Err(anyhow!("shared blob object is not a shared object")),
-                    };
+        // Navigate to blob.storage.end_epoch.
+        // Structure: SharedArchivalBlob { id, blob: Blob { ... } }
+        // Blob contains a storage field with end_epoch.
+        // TODO: use a more generic and robust way to parse the onchain object.
+        let end_epoch = fields
+            .get("blob")
+            .ok_or_else(|| anyhow!("blob field not found"))?
+            .get("storage")
+            .ok_or_else(|| anyhow!("blob.storage not found"))?
+            .get("end_epoch")
+            .ok_or_else(|| anyhow!("blob.storage.end_epoch not found"))?
+            .as_u64()
+            .ok_or_else(|| anyhow!("end_epoch is not a number"))? as u32;
 
-                    // Build PTB to call blob_expiration_epoch.
-                    let mut ptb = ProgrammableTransactionBuilder::new();
-                    let shared_blob_arg = ptb.obj(ObjectArg::SharedObject {
-                        id: shared_blob_id,
-                        initial_shared_version: shared_blob_initial_shared_version,
-                        mutable: false,
-                    })?;
-
-                    // Call blob_expiration_epoch function.
-                    ptb.programmable_move_call(
-                        package_id,
-                        Identifier::new("archival_blob")?,
-                        Identifier::new("blob_expiration_epoch")?,
-                        vec![],
-                        vec![shared_blob_arg],
-                    );
-
-                    let pt = ptb.finish();
-
-                    // Use dev_inspect to call the function without executing a transaction.
-                    let tx_kind = TransactionKind::ProgrammableTransaction(pt);
-
-                    let response = sui_client
-                        .read_api()
-                        .dev_inspect_transaction_block(
-                            wallet.active_address()?,
-                            tx_kind,
-                            None,
-                            None,
-                            None,
-                        )
-                        .await?;
-
-                    // Extract the return value from the response.
-                    let return_values = response
-                        .results
-                        .ok_or_else(|| anyhow!("no results from dev_inspect"))?;
-
-                    if return_values.is_empty() {
-                        return Err(anyhow!("no return values from blob_expiration_epoch call"));
-                    }
-
-                    let return_value = &return_values[0].return_values;
-                    if return_value.is_empty() {
-                        return Err(anyhow!(
-                            "empty return value from blob_expiration_epoch call"
-                        ));
-                    }
-
-                    // Parse the u32 return value (4 bytes in little endian).
-                    let bytes = &return_value[0].0;
-                    if bytes.len() != 4 {
-                        return Err(anyhow!("unexpected return value length: {}", bytes.len()));
-                    }
-
-                    let end_epoch = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-
-                    Ok(end_epoch)
-                })
-            })
-            .await
+        Ok(end_epoch)
     }
 
     /// Extend a shared blob using the Move contract call.
