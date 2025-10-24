@@ -229,6 +229,10 @@ pub struct CheckpointBlobPublisherConfig {
     /// Default: false.
     #[serde(default = "default_create_shared_blobs")]
     pub create_shared_blobs: bool,
+
+    /// Maximum number of concurrent publishing tasks.
+    #[serde(default = "default_concurrent_publishing_tasks")]
+    pub concurrent_publishing_tasks: usize,
 }
 
 impl Default for CheckpointBlobPublisherConfig {
@@ -239,6 +243,7 @@ impl Default for CheckpointBlobPublisherConfig {
             min_retry_duration: default_min_retry_duration(),
             max_retry_duration: default_max_retry_duration(),
             create_shared_blobs: default_create_shared_blobs(),
+            concurrent_publishing_tasks: default_concurrent_publishing_tasks(),
         }
     }
 }
@@ -261,6 +266,10 @@ fn default_max_retry_duration() -> Duration {
 
 fn default_create_shared_blobs() -> bool {
     false
+}
+
+fn default_concurrent_publishing_tasks() -> usize {
+    1
 }
 
 fn default_rest_api_address() -> SocketAddr {

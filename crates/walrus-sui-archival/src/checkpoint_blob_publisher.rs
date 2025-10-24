@@ -22,9 +22,6 @@ use crate::{
     util::upload_blob_to_walrus_with_retry,
 };
 
-/// Maximum number of concurrent blob build and upload tasks.
-const MAX_CONCURRENT_UPLOADS: usize = 2;
-
 /// Message sent from CheckpointMonitor to CheckpointBlobPublisher.
 #[derive(Debug, Clone)]
 pub struct BlobBuildRequest {
@@ -82,7 +79,7 @@ impl CheckpointBlobPublisher {
     pub async fn start(self, mut request_rx: mpsc::Receiver<BlobBuildRequest>) -> Result<()> {
         tracing::info!(
             "starting checkpoint blob publisher with {} concurrent upload slots, storing blobs in {}",
-            MAX_CONCURRENT_UPLOADS,
+            self.config.concurrent_publishing_tasks,
             self.config.checkpoint_blobs_dir.display()
         );
 
@@ -98,7 +95,9 @@ impl CheckpointBlobPublisher {
         }
 
         // Use a semaphore to limit concurrent uploads.
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_UPLOADS));
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(
+            self.config.concurrent_publishing_tasks,
+        ));
 
         // Wrap self in Arc to share across tasks.
         let self_arc = Arc::new(self);
