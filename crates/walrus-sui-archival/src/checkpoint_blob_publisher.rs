@@ -206,14 +206,17 @@ impl CheckpointBlobPublisher {
             start_checkpoint, end_checkpoint
         );
         let output_path = self.config.checkpoint_blobs_dir.join(&blob_filename);
+        let file_num = file_paths.len();
 
-        // Build the blob bundle.
-        let result = builder.build(&file_paths, &output_path)?;
+        // Build the blob bundle in a blocking thread.
+        let result = tokio::task::spawn_blocking(move || builder.build(&file_paths, &output_path))
+            .await
+            .map_err(|e| anyhow::anyhow!("blob build task failed: {}", e))??;
 
         tracing::info!(
             "successfully built blob {} with {} checkpoints, total size {} bytes",
             blob_filename,
-            file_paths.len(),
+            file_num,
             result.total_size
         );
 
