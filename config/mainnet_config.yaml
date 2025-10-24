@@ -23,12 +23,12 @@ checkpoint_monitor:
   max_accumulation_duration: 1h
   max_accumulation_size_bytes: 3221225472 #3GB
 checkpoint_blob_publisher:
-  store_epoch_length: 10
+  store_epoch_length: 7
   checkpoint_blobs_dir: /opt/walrus/data/checkpoint_blobs
   create_shared_blobs: true
 checkpoint_blob_extender:
   check_interval: 24h
-  extend_epoch_length: 10
+  extend_epoch_length: 5
 archival_state_snapshot:
   snapshot_state_to_walrus_interval: 12h
   snapshot_temp_dir: /opt/walrus/data/archival_snapshots

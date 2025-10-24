@@ -438,7 +438,7 @@ impl CheckpointBlobPublisher {
                 // First checkpoint blob, just create it.
                 break;
             }
-            if latest_checkpoint.unwrap() + 1 == request.end_checkpoint {
+            if latest_checkpoint.unwrap() + 1 == request.start_checkpoint {
                 // We are the next checkpoint blob, just create it.
                 break;
             }
