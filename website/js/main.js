@@ -230,11 +230,11 @@ async function fetchHomepageInfo() {
 }
 
 /**
- * Format size in bytes to human-readable format.
+ * Format size in bytes to TB with 3 decimal places.
  */
 function formatSize(bytes) {
-    const GB = 1024 * 1024 * 1024;
-    return (bytes / GB).toFixed(2);
+    const TB = 1024 * 1024 * 1024 * 1024;
+    return (bytes / TB).toFixed(3);
 }
 
 /**
@@ -244,8 +244,6 @@ function renderHomepage(data) {
     // Update stats.
     document.getElementById('blob-count').textContent = data.blob_count || 0;
     document.getElementById('total-checkpoints').textContent = data.total_checkpoints || 0;
-    document.getElementById('checkpoint-range').textContent =
-        `${data.earliest_checkpoint || 0} - ${data.latest_checkpoint || 0}`;
     document.getElementById('total-size').textContent = formatSize(data.total_size || 0);
 
     // Update metadata section if available.

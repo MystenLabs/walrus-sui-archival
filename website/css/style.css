@@ -98,7 +98,7 @@ h1 {
     background: #f8f9fa;
     border-radius: 5px;
     margin-bottom: 20px;
-    font-size: 0.9em;
+    font-size: 2em;
     color: #666;
 }
 
@@ -340,7 +340,8 @@ code {
 }
 
 /* Loading and error states */
-.loading, .error {
+.loading,
+.error {
     text-align: center;
     padding: 60px 20px;
 }
@@ -361,8 +362,13 @@ code {
 }
 
 @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+    0% {
+        transform: rotate(0deg);
+    }
+
+    100% {
+        transform: rotate(360deg);
+    }
 }
 
 .error {
