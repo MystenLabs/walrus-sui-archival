@@ -16,19 +16,19 @@ checkpoint_downloader:
   num_workers: 50
   downloaded_checkpoint_dir: /opt/walrus/data/downloaded_checkpoints
   ingestion_config:
-    checkpoint_buffer_size: 500
+    checkpoint_buffer_size: 2000
     ingest_concurrency: 50
     retry_interval_ms: 1000
 checkpoint_monitor:
   max_accumulation_duration: 1h
   max_accumulation_size_bytes: 3221225472 #3GB
 checkpoint_blob_publisher:
-  store_epoch_length: 2
+  store_epoch_length: 10
   checkpoint_blobs_dir: /opt/walrus/data/checkpoint_blobs
   create_shared_blobs: true
 checkpoint_blob_extender:
-  check_interval: 3600s
-  extend_epoch_length: 2
+  check_interval: 24h
+  extend_epoch_length: 10
 archival_state_snapshot:
   snapshot_state_to_walrus_interval: 12h
   snapshot_temp_dir: /opt/walrus/data/archival_snapshots

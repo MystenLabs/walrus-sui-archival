@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{num::NonZeroU16, path::PathBuf, sync::Arc};
+use std::{num::NonZeroU16, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use blob_bundle::{BlobBundleBuildResult, BlobBundleBuilder};
@@ -12,7 +12,7 @@ use sui_types::{
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     transaction::{ObjectArg, TransactionData, TransactionKind},
 };
-use tokio::{fs, sync::mpsc};
+use tokio::{fs, sync::mpsc, task::JoinSet};
 
 use crate::{
     archival_state::ArchivalState,
@@ -21,6 +21,9 @@ use crate::{
     sui_interactive_client::SuiInteractiveClient,
     util::upload_blob_to_walrus_with_retry,
 };
+
+/// Maximum number of concurrent blob build and upload tasks.
+const MAX_CONCURRENT_UPLOADS: usize = 2;
 
 /// Message sent from CheckpointMonitor to CheckpointBlobPublisher.
 #[derive(Debug, Clone)]
@@ -78,7 +81,8 @@ impl CheckpointBlobPublisher {
     /// Start the blob publisher service that listens for build requests.
     pub async fn start(self, mut request_rx: mpsc::Receiver<BlobBuildRequest>) -> Result<()> {
         tracing::info!(
-            "starting checkpoint blob publisher, storing blobs in {}",
+            "starting checkpoint blob publisher with {} concurrent upload slots, storing blobs in {}",
+            MAX_CONCURRENT_UPLOADS,
             self.config.checkpoint_blobs_dir.display()
         );
 
@@ -93,19 +97,64 @@ impl CheckpointBlobPublisher {
             }
         }
 
-        while let Some(request) = request_rx.recv().await {
-            tracing::info!(
-                "received blob build request for checkpoints {} to {}",
-                request.start_checkpoint,
-                request.end_checkpoint
-            );
+        // Use a semaphore to limit concurrent uploads.
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_UPLOADS));
 
-            if let Err(e) = self.build_and_upload_blob(request).await {
-                tracing::error!(
-                    "failed to build blob: {}, stopping checkpoint blob publisher",
-                    e
-                );
-                return Err(e);
+        // Wrap self in Arc to share across tasks.
+        let self_arc = Arc::new(self);
+
+        // Use JoinSet to track running tasks.
+        let mut tasks = JoinSet::new();
+
+        loop {
+            tokio::select! {
+                // Check if any task has completed.
+                Some(result) = tasks.join_next() => {
+                    match result {
+                        Ok(task_result) => {
+                            // If the task returned an error, stop immediately.
+                            if let Err(e) = task_result {
+                                tracing::error!(
+                                    "failed to build blob: {}, stopping checkpoint blob publisher",
+                                    e
+                                );
+                                return Err(e);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("task join error: {}", e);
+                            return Err(anyhow::anyhow!("task join error: {}", e));
+                        }
+                    }
+                }
+
+                // Receive new requests.
+                Some(request) = request_rx.recv() => {
+                    tracing::info!(
+                        "received blob build request for checkpoints {} to {}",
+                        request.start_checkpoint,
+                        request.end_checkpoint
+                    );
+
+                    // Acquire a permit (wait if all slots are busy).
+                    let permit = semaphore.clone().acquire_owned().await.unwrap();
+                    let self_clone = self_arc.clone();
+
+                    // Spawn task in background.
+                    tasks.spawn(async move {
+                        let result = self_clone.build_and_upload_blob(request).await;
+
+                        // Release the permit.
+                        drop(permit);
+
+                        result
+                    });
+                }
+
+                // All requests processed and no tasks running.
+                else => {
+                    break;
+                }
             }
         }
 
@@ -377,6 +426,28 @@ impl CheckpointBlobPublisher {
         } else {
             (object_id, false)
         };
+
+        // Wait until all prior checkpoint blobs are created.
+        let start_wait_time = std::time::Instant::now();
+        loop {
+            let latest_checkpoint = self.archival_state.get_latest_stored_checkpoint()?;
+            if latest_checkpoint.is_none() {
+                // First checkpoint blob, just create it.
+                break;
+            }
+            if latest_checkpoint.unwrap() + 1 == request.end_checkpoint {
+                // We are the next checkpoint blob, just create it.
+                break;
+            }
+            if start_wait_time.elapsed() > Duration::from_secs(1200) {
+                return Err(anyhow::anyhow!(
+                    "timed out waiting for prior checkpoint blobs to be created, latest checkpoint: {}, current start checkpoint: {}",
+                    latest_checkpoint.unwrap(),
+                    request.start_checkpoint
+                ));
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
 
         self.archival_state.create_new_checkpoint_blob(
             request.start_checkpoint,

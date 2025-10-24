@@ -109,6 +109,8 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
 
     let archival_state = Arc::new(archival_state);
 
+    let consistency_checker_handle = archival_state.clone().start_consistency_checker();
+
     let wallet = WalletContext::new(
         client_config
             .wallet_config
@@ -294,6 +296,13 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
             if let Err(e) = snapshot_creator_result {
                 tracing::error!("archival state snapshot creator failed: {}", e);
                 return Err(anyhow::anyhow!("archival state snapshot creator failed: {}", e));
+            }
+        }
+        consistency_checker_result = consistency_checker_handle => {
+            tracing::info!("consistency checker stopped: {:?}", consistency_checker_result);
+            if let Err(e) = consistency_checker_result {
+                tracing::error!("consistency checker failed: {}", e);
+                return Err(anyhow::anyhow!("consistency checker failed: {}", e));
             }
         }
     }

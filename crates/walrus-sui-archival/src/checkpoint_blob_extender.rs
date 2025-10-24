@@ -78,6 +78,7 @@ impl CheckpointBlobExtender {
     /// Background loop for syncing blob expiration epochs.
     async fn sync_blob_expiration_epochs_loop(&self) {
         // Run sync every hour.
+        // We need relatively fresh if others are extending blobs.
         let mut sync_interval = time::interval(Duration::from_secs(3600));
 
         loop {
@@ -239,6 +240,8 @@ impl CheckpointBlobExtender {
         // exclusive to the client.
         let sui_read_client = self.sui_interactive_client.get_sui_read_client().await;
         for blob_info in blobs {
+            // To not sending too many requests to the RPC node, we wait a little bit between each blob.
+            tokio::time::sleep(Duration::from_secs(1)).await;
             // Parse the object ID.
             let object_id = match ObjectID::from_bytes(&blob_info.object_id) {
                 Ok(id) => id,

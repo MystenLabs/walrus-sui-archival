@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use bincode::Options;
@@ -10,6 +10,7 @@ use bytes::Bytes;
 use prost::Message;
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksOptions};
 use sui_types::{base_types::ObjectID, messages_checkpoint::CheckpointSequenceNumber};
+use tokio::task::JoinHandle;
 use walrus_core::{BlobId, Epoch, encoding::Primary};
 use walrus_sdk::{SuiReadClient, client::WalrusNodeClient};
 
@@ -461,6 +462,80 @@ impl ArchivalState {
         );
 
         Ok(())
+    }
+
+    /// Check the consistency of the checkpoint blob database by ensuring there are no gaps.
+    /// Logs warnings if any gaps are detected in the checkpoint sequence.
+    pub fn check_consistency(&self) -> Result<()> {
+        tracing::info!("starting database consistency check");
+
+        let cf = self
+            .db
+            .cf_handle(CF_CHECKPOINT_BLOB_INFO)
+            .expect("column family must exist");
+
+        // Create an iterator in forward order (from start to end).
+        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
+
+        let mut blobs = Vec::new();
+        for item in iter {
+            let (_key_bytes, value_bytes) = item?;
+            let blob_info = CheckpointBlobInfo::decode(value_bytes.as_ref())?;
+            blobs.push(blob_info);
+        }
+
+        if blobs.is_empty() {
+            tracing::info!("no blobs found in database, consistency check passed");
+            return Ok(());
+        }
+
+        tracing::info!("checking consistency for {} blobs", blobs.len());
+
+        let mut has_gaps = false;
+        let mut expected_next_checkpoint = None;
+
+        for blob in &blobs {
+            if let Some(expected) = expected_next_checkpoint {
+                if blob.start_checkpoint != expected {
+                    tracing::warn!(
+                        "gap detected: expected start_checkpoint {}, found {}",
+                        expected,
+                        blob.start_checkpoint
+                    );
+                    has_gaps = true;
+                }
+            }
+
+            expected_next_checkpoint = Some(blob.end_checkpoint + 1);
+        }
+
+        if has_gaps {
+            tracing::warn!("database consistency check completed with gaps detected");
+        } else {
+            tracing::info!("database consistency check passed, no gaps found");
+        }
+
+        Ok(())
+    }
+
+    /// Start a background task that periodically checks database consistency.
+    /// This task runs once per hour and logs any gaps found in the checkpoint sequence.
+    pub fn start_consistency_checker(self: Arc<Self>) -> JoinHandle<Result<()>> {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(3600)); // 1 hour.
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            loop {
+                interval.tick().await;
+
+                tracing::info!("running periodic consistency check");
+
+                if let Err(e) = self.check_consistency() {
+                    tracing::error!("consistency check failed: {}", e);
+                    return Err(e);
+                }
+            }
+        })
     }
 }
 
@@ -1158,5 +1233,98 @@ mod tests {
             let expected_new_epoch = blobs[i].4 + 500;
             assert_eq!(blob_info.blob_expiration_epoch, expected_new_epoch);
         }
+    }
+
+    #[test]
+    fn test_consistency_checker_no_gaps() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+
+        // Create continuous blobs without gaps.
+        let blobs = vec![
+            (0u64, 99u64, "blob_1"),
+            (100u64, 199u64, "blob_2"),
+            (200u64, 299u64, "blob_3"),
+            (300u64, 399u64, "blob_4"),
+        ];
+
+        for (start, end, blob_id_str) in &blobs {
+            let (index_map, blob_id, epoch) = create_test_blob_info(*start, *end, blob_id_str);
+            state
+                .create_new_checkpoint_blob(
+                    *start,
+                    *end,
+                    &index_map,
+                    blob_id,
+                    ObjectID::random(),
+                    epoch,
+                    false,
+                    false,
+                )
+                .expect("Failed to create blob");
+        }
+
+        // Run consistency check - should pass without gaps.
+        let result = state.check_consistency();
+        assert!(result.is_ok(), "Consistency check should pass");
+    }
+
+    #[test]
+    fn test_consistency_checker_with_gaps() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+
+        // Create blobs with gaps.
+        let blobs = vec![
+            (0u64, 99u64, "blob_1"),
+            (100u64, 199u64, "blob_2"),
+            // Gap from 200-299.
+            (300u64, 399u64, "blob_3"),
+            // Gap from 400-499.
+            (500u64, 599u64, "blob_4"),
+        ];
+
+        for (start, end, blob_id_str) in &blobs {
+            let (index_map, blob_id, epoch) = create_test_blob_info(*start, *end, blob_id_str);
+            state
+                .create_new_checkpoint_blob(
+                    *start,
+                    *end,
+                    &index_map,
+                    blob_id,
+                    ObjectID::random(),
+                    epoch,
+                    false,
+                    false,
+                )
+                .expect("Failed to create blob");
+        }
+
+        // Run consistency check - should complete successfully but log warnings.
+        let result = state.check_consistency();
+        assert!(result.is_ok(), "Consistency check should complete");
+        // Note: The test will log warnings about gaps, which is expected behavior.
+    }
+
+    #[test]
+    fn test_consistency_checker_empty_database() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+
+        // Run consistency check on empty database.
+        let result = state.check_consistency();
+        assert!(
+            result.is_ok(),
+            "Consistency check should pass on empty database"
+        );
     }
 }
