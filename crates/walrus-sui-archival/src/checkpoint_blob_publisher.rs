@@ -196,6 +196,8 @@ impl CheckpointBlobPublisher {
             return Ok(());
         }
 
+        tracing::info!("bundling {} checkpoint files into a blob", file_paths.len());
+
         // Create the blob bundle.
         let builder = BlobBundleBuilder::new(self.n_shards);
 

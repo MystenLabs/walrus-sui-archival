@@ -108,7 +108,7 @@ impl CheckpointBlobExtender {
         tracing::info!("current walrus epoch: {}", current_epoch);
 
         // Get all blobs from the archival state.
-        let blobs = self.archival_state.list_all_blobs()?;
+        let blobs = self.archival_state.list_all_blobs(false)?;
         tracing::info!("found {} blobs to check", blobs.len());
 
         // Store tuple of (object_id, start_checkpoint, blob_id) for regular and shared blobs separately.
@@ -230,7 +230,7 @@ impl CheckpointBlobExtender {
         tracing::info!("syncing blob expiration epochs from on-chain state");
 
         // Get all blobs from the archival state.
-        let blobs = self.archival_state.list_all_blobs()?;
+        let blobs = self.archival_state.list_all_blobs(true)?;
         tracing::info!("found {} blobs to sync", blobs.len());
 
         let mut synced_count = 0;

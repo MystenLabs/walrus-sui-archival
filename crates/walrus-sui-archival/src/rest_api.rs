@@ -136,7 +136,7 @@ struct AppState {
 async fn list_all_blobs(State(app_state): State<AppState>) -> Result<Html<String>, StatusCode> {
     let archival_state = app_state.archival_state;
     // Get all blobs from the database.
-    let blobs = archival_state.list_all_blobs().map_err(|e| {
+    let blobs = archival_state.list_all_blobs(true).map_err(|e| {
         tracing::error!("failed to list blobs: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -322,7 +322,7 @@ async fn get_blobs_expired_before_epoch(
     let archival_state = app_state.archival_state;
 
     // Get all blobs from the database.
-    let blobs = archival_state.list_all_blobs().map_err(|e| {
+    let blobs = archival_state.list_all_blobs(false).map_err(|e| {
         tracing::error!("failed to list blobs: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -363,7 +363,7 @@ async fn get_app_info_for_homepage(
     let archival_state = app_state.archival_state;
 
     // Get statistics from the database.
-    let total_blobs = archival_state.list_all_blobs().map_err(|e| {
+    let total_blobs = archival_state.list_all_blobs(false).map_err(|e| {
         tracing::error!("failed to list blobs: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -437,7 +437,7 @@ async fn get_app_blobs(
     let archival_state = app_state.archival_state;
 
     // Get all blobs from the database.
-    let blobs = archival_state.list_all_blobs().map_err(|e| {
+    let blobs = archival_state.list_all_blobs(true).map_err(|e| {
         tracing::error!("failed to list blobs: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -555,7 +555,7 @@ async fn refresh_blob_end_epoch(
         );
 
         // Get all blobs from the database once.
-        let all_blobs = match archival_state.list_all_blobs() {
+        let all_blobs = match archival_state.list_all_blobs(false) {
             Ok(blobs) => blobs,
             Err(e) => {
                 tracing::error!("failed to list blobs: {}", e);
@@ -665,7 +665,7 @@ async fn home_page(State(app_state): State<AppState>) -> Result<Html<String>, St
     let archival_state = app_state.archival_state;
 
     // Get statistics from the database.
-    let total_blobs = archival_state.list_all_blobs().map_err(|e| {
+    let total_blobs = archival_state.list_all_blobs(false).map_err(|e| {
         tracing::error!("failed to list blobs: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;

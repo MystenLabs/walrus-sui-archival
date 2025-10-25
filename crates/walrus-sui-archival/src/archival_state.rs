@@ -339,14 +339,21 @@ impl ArchivalState {
 
     /// List all checkpoint blobs in the database.
     /// Returns blobs in decreasing order of start_checkpoint (newest first).
-    pub fn list_all_blobs(&self) -> Result<Vec<CheckpointBlobInfo>> {
+    pub fn list_all_blobs(&self, reverse: bool) -> Result<Vec<CheckpointBlobInfo>> {
         let cf = self
             .db
             .cf_handle(CF_CHECKPOINT_BLOB_INFO)
             .expect("column family must exist");
 
         // Create an iterator in reverse order (from end to start).
-        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::End);
+        let iter = self.db.iterator_cf(
+            &cf,
+            if reverse {
+                rocksdb::IteratorMode::End
+            } else {
+                rocksdb::IteratorMode::Start
+            },
+        );
 
         let mut blobs = Vec::new();
         for item in iter {
@@ -495,15 +502,15 @@ impl ArchivalState {
         let mut expected_next_checkpoint = None;
 
         for blob in &blobs {
-            if let Some(expected) = expected_next_checkpoint {
-                if blob.start_checkpoint != expected {
-                    tracing::warn!(
-                        "gap detected: expected start_checkpoint {}, found {}",
-                        expected,
-                        blob.start_checkpoint
-                    );
-                    has_gaps = true;
-                }
+            if let Some(expected) = expected_next_checkpoint
+                && blob.start_checkpoint != expected
+            {
+                tracing::warn!(
+                    "gap detected: expected start_checkpoint {}, found {}",
+                    expected,
+                    blob.start_checkpoint
+                );
+                has_gaps = true;
             }
 
             expected_next_checkpoint = Some(blob.end_checkpoint + 1);
@@ -1226,7 +1233,7 @@ mod tests {
         }
 
         // Verify all blobs have been updated correctly.
-        let all_blobs = state.list_all_blobs().expect("Should list all blobs");
+        let all_blobs = state.list_all_blobs(false).expect("Should list all blobs");
         assert_eq!(all_blobs.len(), 3);
 
         for (i, blob_info) in all_blobs.iter().enumerate() {
