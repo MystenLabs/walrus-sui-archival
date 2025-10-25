@@ -518,7 +518,7 @@ impl BlobBundleBuilder {
         let total_size = output_file.stream_position()?;
 
         // Ensure all data is written to disk
-        output_file.sync_all()?;
+        // output_file.sync_all()?;
         drop(output_file);
 
         // Atomically rename temp file to final name
