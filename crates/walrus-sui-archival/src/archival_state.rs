@@ -471,6 +471,58 @@ impl ArchivalState {
         Ok(())
     }
 
+    /// Remove all checkpoint blob entries with start_checkpoint >= the specified checkpoint.
+    /// Returns the number of entries removed.
+    pub fn remove_entries_from_checkpoint(
+        &self,
+        from_checkpoint: CheckpointSequenceNumber,
+    ) -> Result<usize> {
+        if self.read_only {
+            return Err(anyhow::anyhow!(
+                "cannot remove entries in read-only mode"
+            ));
+        }
+
+        tracing::info!(
+            "removing all checkpoint blob entries with start_checkpoint >= {}",
+            from_checkpoint
+        );
+
+        let cf = self
+            .db
+            .cf_handle(CF_CHECKPOINT_BLOB_INFO)
+            .expect("column family must exist");
+
+        // Create an iterator starting from the target checkpoint.
+        let seek_key = be_fix_int_ser(&from_checkpoint)?;
+        let iter = self.db.iterator_cf(
+            &cf,
+            rocksdb::IteratorMode::From(&seek_key, rocksdb::Direction::Forward),
+        );
+
+        // Collect all keys to delete.
+        let mut keys_to_delete = Vec::new();
+        for item in iter {
+            let (key_bytes, _value_bytes) = item?;
+            keys_to_delete.push(key_bytes.to_vec());
+        }
+
+        let num_entries = keys_to_delete.len();
+
+        // Delete all collected keys.
+        for key in keys_to_delete {
+            self.db.delete_cf(&cf, key)?;
+        }
+
+        tracing::info!(
+            "removed {} checkpoint blob entries with start_checkpoint >= {}",
+            num_entries,
+            from_checkpoint
+        );
+
+        Ok(num_entries)
+    }
+
     /// Check the consistency of the checkpoint blob database by ensuring there are no gaps.
     /// Logs warnings if any gaps are detected in the checkpoint sequence.
     pub fn check_consistency(&self) -> Result<()> {
@@ -1332,6 +1384,179 @@ mod tests {
         assert!(
             result.is_ok(),
             "Consistency check should pass on empty database"
+        );
+    }
+
+    #[test]
+    fn test_remove_entries_from_checkpoint() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+
+        // Create multiple blobs.
+        let blobs = vec![
+            (0u64, 99u64, "blob_1"),
+            (100u64, 199u64, "blob_2"),
+            (200u64, 299u64, "blob_3"),
+            (300u64, 399u64, "blob_4"),
+            (400u64, 499u64, "blob_5"),
+        ];
+
+        for (start, end, blob_id_str) in &blobs {
+            let (index_map, blob_id, epoch) = create_test_blob_info(*start, *end, blob_id_str);
+            state
+                .create_new_checkpoint_blob(
+                    *start,
+                    *end,
+                    &index_map,
+                    blob_id,
+                    ObjectID::random(),
+                    epoch,
+                    false,
+                    false,
+                )
+                .expect("Failed to create blob");
+        }
+
+        // Verify all 5 blobs exist.
+        let count = state.count_checkpoint_blobs().expect("should count blobs");
+        assert_eq!(count, 5);
+
+        // Remove entries with start_checkpoint >= 200.
+        let removed = state
+            .remove_entries_from_checkpoint(200)
+            .expect("should remove entries");
+        assert_eq!(removed, 3); // blob_3, blob_4, blob_5.
+
+        // Verify only 2 blobs remain.
+        let count = state.count_checkpoint_blobs().expect("should count blobs");
+        assert_eq!(count, 2);
+
+        // Verify we can still find the remaining blobs.
+        let all_blobs = state.list_all_blobs(true).expect("should list blobs");
+        assert_eq!(all_blobs.len(), 2);
+        assert_eq!(all_blobs[0].start_checkpoint, 100);
+        assert_eq!(all_blobs[1].start_checkpoint, 0);
+    }
+
+    #[test]
+    fn test_remove_entries_from_checkpoint_boundary() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+
+        // Create blobs.
+        let blobs = vec![
+            (0u64, 99u64, "blob_1"),
+            (100u64, 199u64, "blob_2"),
+            (200u64, 299u64, "blob_3"),
+        ];
+
+        for (start, end, blob_id_str) in &blobs {
+            let (index_map, blob_id, epoch) = create_test_blob_info(*start, *end, blob_id_str);
+            state
+                .create_new_checkpoint_blob(
+                    *start,
+                    *end,
+                    &index_map,
+                    blob_id,
+                    ObjectID::random(),
+                    epoch,
+                    false,
+                    false,
+                )
+                .expect("Failed to create blob");
+        }
+
+        // Remove from checkpoint 0 - should remove everything.
+        let removed = state
+            .remove_entries_from_checkpoint(0)
+            .expect("should remove entries");
+        assert_eq!(removed, 3);
+
+        // Verify database is empty.
+        let count = state.count_checkpoint_blobs().expect("should count blobs");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_remove_entries_from_checkpoint_none_match() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+
+        // Create blobs.
+        let blobs = vec![(0u64, 99u64, "blob_1"), (100u64, 199u64, "blob_2")];
+
+        for (start, end, blob_id_str) in &blobs {
+            let (index_map, blob_id, epoch) = create_test_blob_info(*start, *end, blob_id_str);
+            state
+                .create_new_checkpoint_blob(
+                    *start,
+                    *end,
+                    &index_map,
+                    blob_id,
+                    ObjectID::random(),
+                    epoch,
+                    false,
+                    false,
+                )
+                .expect("Failed to create blob");
+        }
+
+        // Remove from checkpoint 300 - should remove nothing.
+        let removed = state
+            .remove_entries_from_checkpoint(300)
+            .expect("should remove entries");
+        assert_eq!(removed, 0);
+
+        // Verify all blobs still exist.
+        let count = state.count_checkpoint_blobs().expect("should count blobs");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_remove_entries_read_only_mode() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+
+        // Create a blob in read-write mode.
+        {
+            let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+            let (index_map, blob_id, epoch) = create_test_blob_info(0, 99, "blob_1");
+            state
+                .create_new_checkpoint_blob(
+                    0,
+                    99,
+                    &index_map,
+                    blob_id,
+                    ObjectID::random(),
+                    epoch,
+                    false,
+                    false,
+                )
+                .expect("Failed to create blob");
+        }
+
+        // Open in read-only mode and try to remove.
+        let state =
+            ArchivalState::open(&db_path, true).expect("Failed to open database in read-only mode");
+        let result = state.remove_entries_from_checkpoint(0);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot remove entries in read-only mode")
         );
     }
 }

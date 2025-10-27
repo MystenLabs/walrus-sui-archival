@@ -17,6 +17,7 @@ use walrus_sui_archival::{
     inspect_blob::inspect_blob,
     inspect_db::{InspectDbCommand, execute_inspect_db},
     list_blobs::list_owned_blobs,
+    remove_metadata_from_db::remove_metadata_from_db,
 };
 
 // Define version constants.
@@ -135,6 +136,15 @@ enum Commands {
         /// Number of epochs to extend.
         #[arg(short, long)]
         epochs: u32,
+    },
+    /// Remove metadata entries from the database with checkpoint >= specified value.
+    RemoveMetadataFromDb {
+        /// Path to the database.
+        #[arg(short, long, default_value = "archival_db")]
+        db_path: PathBuf,
+        /// Checkpoint number - all entries with start_checkpoint >= this value will be removed.
+        #[arg(short, long)]
+        from_checkpoint: u64,
     },
 }
 
@@ -256,6 +266,17 @@ fn main() -> Result<()> {
             // Create tokio runtime for async operation.
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(extend_shared_blob(config, shared_blob_id, epochs))?;
+        }
+        Commands::RemoveMetadataFromDb {
+            db_path,
+            from_checkpoint,
+        } => {
+            tracing::info!(
+                "removing metadata entries from database {} with checkpoint >= {}",
+                db_path.display(),
+                from_checkpoint
+            );
+            remove_metadata_from_db(db_path, from_checkpoint)?;
         }
     }
 

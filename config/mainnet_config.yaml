@@ -5,20 +5,20 @@ db_path: /opt/walrus/data/db
 thread_pool_size: 16
 rest_api_address: "0.0.0.0:9185"
 metrics_address: "0.0.0.0:9184"
-# checkpoint_downloader:
-#   type: bucket
-#   bucket_base_url: "https://checkpoints.testnet.sui.io"
-#   num_workers: 14
-#   downloaded_checkpoint_dir: /opt/walrus/data/downloaded_checkpoints
 checkpoint_downloader:
-  type: injection_service
-  remote_store_url: "https://checkpoints.mainnet.sui.io"
+  type: bucket
+  bucket_base_url: "https://checkpoints.mainnet.sui.io"
   num_workers: 50
   downloaded_checkpoint_dir: /opt/walrus/data/downloaded_checkpoints
-  ingestion_config:
-    checkpoint_buffer_size: 2000
-    ingest_concurrency: 50
-    retry_interval_ms: 1000
+# checkpoint_downloader:
+#   type: injection_service
+#   remote_store_url: "https://checkpoints.mainnet.sui.io"
+#   num_workers: 50
+#   downloaded_checkpoint_dir: /opt/walrus/data/downloaded_checkpoints
+#   ingestion_config:
+#     checkpoint_buffer_size: 1000
+#     ingest_concurrency: 50
+#     retry_interval_ms: 1000
 checkpoint_monitor:
   max_accumulation_duration: 1h
   max_accumulation_size_bytes: 3221225472 #3GB

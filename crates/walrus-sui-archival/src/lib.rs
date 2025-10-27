@@ -22,6 +22,7 @@ pub mod inspect_blob;
 pub mod inspect_db;
 pub mod list_blobs;
 pub mod metrics;
+pub mod remove_metadata_from_db;
 pub mod rest_api;
 pub mod sui_interactive_client;
 pub mod util;
