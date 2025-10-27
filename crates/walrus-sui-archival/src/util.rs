@@ -97,15 +97,15 @@ pub async fn upload_blob_to_walrus_with_retry(
 ) -> Result<(BlobId, ObjectID, Epoch)> {
     let blob = fs::read(blob_file_path).await.context("read blob file")?;
 
-    let mut store_args = StoreArgs::default_with_epochs(store_epoch_length);
-    store_args.persistence = BlobPersistence::Permanent;
-
-    // TODO(zhewu): check if this is necessary. Currently, we turn off the optimization
-    // because we have to have a blob object owned by us so that we can extend it.
-    store_args.store_optimizations = StoreOptimizations::none();
+    let mut store_args = StoreArgs::default_with_epochs(store_epoch_length)
+        .with_persistence(BlobPersistence::Permanent)
+        // TODO(zhewu): check if this is necessary. Currently, we turn off the optimization
+        // because we have to have a blob object owned by us so that we can extend it.
+        .with_store_optimizations(StoreOptimizations::none())
+        .with_metrics(metrics.walrus_client_metrics.clone());
 
     if burn_blob {
-        store_args.post_store = PostStoreAction::Burn;
+        store_args = store_args.with_post_store(PostStoreAction::Burn);
     }
 
     // Infinite retry with exponential backoff.

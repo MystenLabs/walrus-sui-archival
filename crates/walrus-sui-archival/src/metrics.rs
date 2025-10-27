@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use prometheus::{Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, Opts, Registry};
 use sui_indexer_alt_framework::metrics::IndexerMetrics;
+use walrus_sdk::{client::metrics::ClientMetrics, core_utils::metrics::Registry as WalrusRegistry};
 
 /// Metrics for the walrus-sui-archival service.
 pub struct Metrics {
@@ -74,6 +75,11 @@ pub struct Metrics {
     pub metadata_updates_success: IntCounter,
     /// Total on-chain metadata updates failed.
     pub metadata_updates_failed: IntCounter,
+
+    // Walrus client metrics.
+    pub walrus_sdk_registry: WalrusRegistry,
+    /// Metrics for the Walrus client.
+    pub walrus_client_metrics: Arc<ClientMetrics>,
 }
 
 impl Metrics {
@@ -351,6 +357,9 @@ impl Metrics {
             .register(Box::new(metadata_updates_failed.clone()))
             .expect("metrics defined at compile time must be valid");
 
+        let walrus_sdk_registry = WalrusRegistry::new(registry.clone());
+        let walrus_client_metrics = Arc::new(ClientMetrics::new(&walrus_sdk_registry));
+
         Self {
             indexer_metrics,
             total_downloaded_checkpoints,
@@ -380,6 +389,8 @@ impl Metrics {
             snapshots_created_failed,
             metadata_updates_success,
             metadata_updates_failed,
+            walrus_sdk_registry,
+            walrus_client_metrics,
         }
     }
 }
