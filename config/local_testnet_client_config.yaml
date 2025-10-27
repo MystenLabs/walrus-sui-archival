@@ -18,7 +18,7 @@ contexts:
     exchange_objects: []
     wallet_config:
       # Optional path to the wallet config file.
-      path: ./config/wallet/wallet.yaml
+      path: ./config/wallet/testnet_wallet.yaml
       # Sui environment to use.
       active_env: testnet
       # Optional override for the Sui address to use.
