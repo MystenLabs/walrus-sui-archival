@@ -242,6 +242,10 @@ pub struct CheckpointBlobPublisherConfig {
     /// Maximum number of concurrent publishing tasks.
     #[serde(default = "default_concurrent_publishing_tasks")]
     pub concurrent_publishing_tasks: usize,
+
+    /// Whether to build blobs in memory.
+    #[serde(default = "default_in_memory_build")]
+    pub in_memory_build: bool,
 }
 
 impl Default for CheckpointBlobPublisherConfig {
@@ -253,6 +257,7 @@ impl Default for CheckpointBlobPublisherConfig {
             max_retry_duration: default_max_retry_duration(),
             create_shared_blobs: default_create_shared_blobs(),
             concurrent_publishing_tasks: default_concurrent_publishing_tasks(),
+            in_memory_build: default_in_memory_build(),
         }
     }
 }
@@ -287,6 +292,10 @@ fn default_rest_api_address() -> SocketAddr {
 
 fn default_metrics_address() -> SocketAddr {
     "0.0.0.0:9184".parse().unwrap()
+}
+
+fn default_in_memory_build() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -3,11 +3,10 @@
 
 use std::{path::Path, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Deserialize;
 use sui_sdk::{types::base_types::ObjectID as SuiObjectID, wallet_context::WalletContext};
 use sui_types::base_types::SuiAddress;
-use tokio::fs;
 use walrus_core::{BlobId, Epoch};
 use walrus_sdk::{
     ObjectID,
@@ -91,14 +90,14 @@ pub async fn upload_blob_to_walrus_with_retry(
     worker_name: &str,
     walrus_client: &WalrusNodeClient<SuiContractClient>,
     main_client_address: Option<SuiAddress>,
-    blob_file_path: &Path,
+    blob: Vec<u8>,
     min_retry_duration: Duration,
     max_retry_duration: Duration,
     store_epoch_length: u32,
     burn_blob: bool,
     metrics: &Metrics,
 ) -> Result<(BlobId, ObjectID, Epoch)> {
-    let blob = fs::read(blob_file_path).await.context("read blob file")?;
+    // let blob = fs::read(blob_file_path).await.context("read blob file")?;
 
     let mut store_args = StoreArgs::default_with_epochs(store_epoch_length)
         .with_persistence(BlobPersistence::Permanent)

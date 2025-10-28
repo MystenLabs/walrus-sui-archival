@@ -324,7 +324,7 @@ impl ArchivalStateSnapshotCreator {
 
         let upload_timer = self.metrics.blob_upload_latency_seconds.start_timer();
 
-        let blob_file_path = file_path.to_path_buf();
+        let blob_data = fs::read(file_path)?;
         let min_retry_duration = self.config.min_retry_duration;
         let max_retry_duration = self.config.max_retry_duration;
         let store_epoch_length = self.config.store_epoch_length;
@@ -338,7 +338,7 @@ impl ArchivalStateSnapshotCreator {
                         "archival_state_snapshot_creator",
                         client,
                         None,
-                        &blob_file_path,
+                        blob_data,
                         min_retry_duration,
                         max_retry_duration,
                         store_epoch_length,

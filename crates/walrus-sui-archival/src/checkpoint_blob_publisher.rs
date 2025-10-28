@@ -3,8 +3,8 @@
 
 use std::{num::NonZeroU16, path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::Result;
-use blob_bundle::{BlobBundleBuildResult, BlobBundleBuilder};
+use anyhow::{Context, Result};
+use blob_bundle::{BlobBundleBuilder, BlobBundleBuilderTrait};
 use sui_types::{
     Identifier,
     base_types::ObjectID,
@@ -418,28 +418,47 @@ impl CheckpointBlobPublisher {
         let _build_permit = get_blob_build_semaphore().acquire().await.unwrap();
         tracing::info!("{} acquired blob build semaphore", worker_name);
 
-        // Build the blob bundle in a blocking thread.
-        let build_result =
-            tokio::task::spawn_blocking(move || builder.build(&file_paths, &output_path)).await;
+        // Build the blob bundle and extract common data.
+        let (total_size, index_map, data) = if config.in_memory_build {
+            let build_result = builder
+                .build_in_memory(&file_paths)
+                .context("build blob bundle in memory");
 
-        // Release the semaphore immediately after build task completes (success or failure).
-        drop(_build_permit);
-        tracing::info!("{} released blob build semaphore", worker_name);
+            // Release the semaphore immediately after build completes.
+            drop(_build_permit);
+            tracing::info!("{} released blob build semaphore", worker_name);
 
-        // Now handle the result.
-        let result =
-            build_result.map_err(|e| anyhow::anyhow!("blob build task failed: {}", e))??;
+            let result = build_result?;
+            let total_size = result.get_total_size();
+            let index_map = result.get_index_map();
+            let data = result.get_data().await?;
+            (total_size, index_map, data)
+        } else {
+            let build_result = builder
+                .build(&file_paths, &output_path)
+                .context("build blob bundle on disk");
+
+            // Release the semaphore immediately after build completes.
+            drop(_build_permit);
+            tracing::info!("{} released blob build semaphore", worker_name);
+
+            let result = build_result?;
+            let total_size = result.get_total_size();
+            let index_map = result.get_index_map();
+            let data = result.get_data().await?;
+            (total_size, index_map, data)
+        };
 
         tracing::info!(
             "{} successfully built blob {} with {} checkpoints, total size {} bytes",
             worker_name,
             blob_filename,
             file_num,
-            result.total_size
+            total_size
         );
 
         // Track blob size metrics.
-        let blob_size = result.total_size as i64;
+        let blob_size = total_size as i64;
         metrics.blob_size_bytes.observe(blob_size as f64);
         metrics.latest_blob_size_bytes.set(blob_size);
 
@@ -449,7 +468,8 @@ impl CheckpointBlobPublisher {
         Self::upload_blob_to_walrus(
             worker_name,
             &request,
-            &result,
+            index_map,
+            data,
             main_sui_interactive_client,
             sui_interactive_client,
             archival_state,
@@ -465,14 +485,16 @@ impl CheckpointBlobPublisher {
             .latest_uploaded_checkpoint
             .set(request.end_checkpoint as i64);
 
-        // Clean up the downloaded checkpoints and uploaded blobs.
-        Self::clean_up_downloaded_checkpoints_and_uploaded_blobs(
-            &request,
-            &result,
-            downloaded_checkpoint_dir,
-            metrics,
-        )
-        .await?;
+        if !config.in_memory_build {
+            // Clean up the downloaded checkpoints and uploaded blobs.
+            Self::clean_up_downloaded_checkpoints_and_uploaded_blobs(
+                &request,
+                &output_path,
+                downloaded_checkpoint_dir,
+                metrics,
+            )
+            .await?;
+        }
 
         tracing::info!(
             "{} successfully cleaned up downloaded checkpoints and uploaded blobs for checkpoints {} to {}",
@@ -487,7 +509,8 @@ impl CheckpointBlobPublisher {
     async fn upload_blob_to_walrus(
         worker_name: &str,
         request: &BlobBuildRequest,
-        result: &BlobBundleBuildResult,
+        index_map: Vec<(String, (u64, u64))>,
+        data: Vec<u8>,
         main_sui_interactive_client: SuiInteractiveClient,
         sui_interactive_client: SuiInteractiveClient,
         archival_state: &Arc<ArchivalState>,
@@ -503,7 +526,8 @@ impl CheckpointBlobPublisher {
         let result = Self::upload_blob_to_walrus_inner(
             worker_name,
             request,
-            result,
+            index_map,
+            data,
             main_sui_interactive_client,
             sui_interactive_client,
             archival_state,
@@ -523,7 +547,8 @@ impl CheckpointBlobPublisher {
     async fn upload_blob_to_walrus_inner(
         worker_name: &str,
         request: &BlobBuildRequest,
-        result: &BlobBundleBuildResult,
+        index_map: Vec<(String, (u64, u64))>,
+        data: Vec<u8>,
         main_sui_interactive_client: SuiInteractiveClient,
         sui_interactive_client: SuiInteractiveClient,
         archival_state: &Arc<ArchivalState>,
@@ -535,7 +560,6 @@ impl CheckpointBlobPublisher {
         // Track the latency of uploading blobs.
         let upload_timer = metrics.blob_upload_latency_seconds.start_timer();
 
-        let blob_file_path = result.file_path.clone();
         let min_retry_duration = config.min_retry_duration;
         let max_retry_duration = config.max_retry_duration;
         let store_epoch_length = config.store_epoch_length;
@@ -556,7 +580,7 @@ impl CheckpointBlobPublisher {
                         } else {
                             None
                         },
-                        &blob_file_path,
+                        data,
                         min_retry_duration,
                         max_retry_duration,
                         store_epoch_length,
@@ -572,7 +596,7 @@ impl CheckpointBlobPublisher {
 
         // Log the index map for debugging.
         tracing::debug!("blob index map:");
-        for (id, (offset, length)) in &result.index_map {
+        for (id, (offset, length)) in &index_map {
             tracing::debug!("  {} -> offset: {}, length: {} bytes", id, offset, length);
         }
 
@@ -668,7 +692,37 @@ impl CheckpointBlobPublisher {
                         );
 
                         let signed_tx = wallet.sign_transaction(&tx_data).await;
-                        let response = wallet.execute_transaction_may_fail(signed_tx).await?;
+
+                        // Retry transaction execution up to 3 times with 1s delay.
+                        let mut last_error = None;
+                        let mut response = None;
+
+                        for attempt in 1..=3 {
+                            match wallet.execute_transaction_may_fail(signed_tx.clone()).await {
+                                Ok(resp) => {
+                                    response = Some(resp);
+                                    break;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "{} transaction execution attempt {} failed: {}",
+                                        &worker_name_clone,
+                                        attempt,
+                                        e
+                                    );
+                                    last_error = Some(e);
+                                    if attempt < 3 {
+                                        tokio::time::sleep(Duration::from_secs(1)).await;
+                                    } else {
+                                        return Err(anyhow::anyhow!("{} transaction execution failed after 3 attempts: {:?}", &worker_name_clone, last_error));
+                                    }
+                                }
+                            }
+                        }
+
+                        let response = response.ok_or_else(|| {
+                            last_error.unwrap_or_else(|| anyhow::anyhow!("transaction execution failed"))
+                        })?;
 
                         // Extract the SharedArchivalBlob object ID from object changes.
                         let object_changes = response.object_changes.as_ref().ok_or_else(|| {
@@ -744,7 +798,7 @@ impl CheckpointBlobPublisher {
         archival_state.create_new_checkpoint_blob(
             request.start_checkpoint,
             request.end_checkpoint,
-            &result.index_map,
+            &index_map,
             blob_id,
             final_object_id,
             end_epoch,
@@ -757,7 +811,7 @@ impl CheckpointBlobPublisher {
 
     async fn clean_up_downloaded_checkpoints_and_uploaded_blobs(
         request: &BlobBuildRequest,
-        result: &BlobBundleBuildResult,
+        file_path: &PathBuf,
         downloaded_checkpoint_dir: &PathBuf,
         metrics: &Arc<Metrics>,
     ) -> Result<()> {
@@ -790,16 +844,16 @@ impl CheckpointBlobPublisher {
             .set(request.end_checkpoint as i64);
 
         // Remove the uploaded blob.
-        if let Err(e) = std::fs::remove_file(&result.file_path) {
+        if let Err(e) = std::fs::remove_file(&file_path) {
             // Do not stop if file removal fails.
             tracing::warn!(
                 "failed to remove uploaded blob {}: {}",
-                result.file_path.display(),
+                file_path.display(),
                 e
             );
         } else {
             metrics.local_blobs_removed.inc();
-            tracing::info!("removed uploaded blob: {}", result.file_path.display());
+            tracing::info!("removed uploaded blob: {}", file_path.display());
         }
 
         Ok(())

@@ -319,6 +319,13 @@ impl Footer {
     }
 }
 
+pub trait BlobBundleBuilderTrait {
+    fn get_index_map(&self) -> Vec<(String, (u64, u64))>;
+    fn get_total_size(&self) -> u64;
+    // Intentionally to move the data out of the builder.
+    fn get_data(self) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send;
+}
+
 /// Result of building a blob bundle to a file
 #[derive(Debug)]
 pub struct BlobBundleBuildResult {
@@ -328,6 +335,45 @@ pub struct BlobBundleBuildResult {
     pub index_map: Vec<(String, (u64, u64))>,
     /// Total size of the blob bundle file
     pub total_size: u64,
+}
+
+impl BlobBundleBuilderTrait for BlobBundleBuildResult {
+    fn get_index_map(&self) -> Vec<(String, (u64, u64))> {
+        self.index_map.clone()
+    }
+
+    fn get_total_size(&self) -> u64 {
+        self.total_size
+    }
+
+    async fn get_data(self) -> Result<Vec<u8>> {
+        tokio::fs::read(self.file_path.clone())
+            .await
+            .map_err(|e| BlobBundleError::Io(e))
+    }
+}
+
+/// Result from building a blob bundle entirely in memory.
+#[derive(Debug, Clone)]
+pub struct BlobBundleInMemoryBuildResult {
+    /// The complete blob bundle as bytes.
+    pub bundle: Vec<u8>,
+    /// Map of id to (offset, length) in insertion order.
+    pub index_map: Vec<(String, (u64, u64))>,
+}
+
+impl BlobBundleBuilderTrait for BlobBundleInMemoryBuildResult {
+    fn get_index_map(&self) -> Vec<(String, (u64, u64))> {
+        self.index_map.clone()
+    }
+
+    fn get_total_size(&self) -> u64 {
+        self.bundle.len() as u64
+    }
+
+    async fn get_data(self) -> Result<Vec<u8>> {
+        Ok(self.bundle)
+    }
 }
 
 /// Builder for creating blob bundle with the specified format
@@ -528,6 +574,134 @@ impl BlobBundleBuilder {
             file_path: output_path.to_path_buf(),
             index_map,
             total_size,
+        })
+    }
+
+    /// Build the blob bundle entirely in memory from a list of file paths.
+    /// Returns the complete blob bundle as a Vec<u8> along with the index map.
+    ///
+    /// # Arguments
+    /// * `file_paths` - List of paths to files to include in the bundle
+    ///
+    /// # Returns
+    /// * `BlobBundleInMemoryBuildResult` - The blob bundle bytes and index map
+    pub fn build_in_memory<P: AsRef<Path>>(
+        self,
+        file_paths: &[P],
+    ) -> Result<BlobBundleInMemoryBuildResult> {
+        // First, estimate the total size to check against max blob size.
+        let estimated_size = Self::estimate_size(file_paths)?;
+
+        // Check against max blob size for RS2 encoding.
+        let max_size = walrus_core::encoding::max_blob_size_for_n_shards(
+            self.n_shards,
+            walrus_core::EncodingType::RS2,
+        );
+
+        if estimated_size > max_size {
+            return Err(BlobBundleError::BlobSizeExceeded {
+                size: estimated_size,
+                max_size,
+                n_shards: self.n_shards.get(),
+            });
+        }
+
+        // Pre-allocate a buffer with estimated size.
+        let mut output_buffer = Vec::with_capacity(estimated_size as usize);
+        let mut cursor = Cursor::new(&mut output_buffer);
+
+        let mut index_entries = Vec::new();
+        let mut index_map = Vec::new();
+
+        // Write header.
+        let header = Header::new();
+        header.write_to(&mut cursor)?;
+
+        // Stream each file to the buffer, building index as we go.
+        for path in file_paths {
+            let path = path.as_ref();
+
+            // Get the current position in the output buffer (this is the offset for this entry).
+            let offset = cursor.position();
+
+            // Open input file.
+            let mut input_file = File::open(path)?;
+            let metadata = input_file.metadata()?;
+            let file_size = metadata.len();
+
+            // Calculate CRC32 while copying.
+            let mut hasher = Hasher::new();
+            let mut buffer = [0u8; 8192]; // 8KB buffer for streaming.
+            let mut bytes_copied = 0u64;
+
+            loop {
+                let bytes_read = input_file.read(&mut buffer)?;
+                if bytes_read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..bytes_read]);
+                cursor.write_all(&buffer[..bytes_read])?;
+                bytes_copied += bytes_read as u64;
+            }
+
+            // Verify we copied the expected number of bytes.
+            if bytes_copied != file_size {
+                return Err(BlobBundleError::Io(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!(
+                        "File size mismatch for {}: expected {}, copied {}",
+                        path.display(),
+                        file_size,
+                        bytes_copied
+                    ),
+                )));
+            }
+
+            let crc32 = hasher.finalize();
+
+            // Create ID from filename.
+            let id = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            // Add to index map.
+            index_map.push((id.clone(), (offset, file_size)));
+
+            // Create index entry.
+            let entry = IndexEntry {
+                id,
+                offset,
+                length: file_size,
+                crc32,
+            };
+            index_entries.push(entry);
+        }
+
+        // Record where the index starts.
+        let index_offset = cursor.position();
+
+        // Write index entries.
+        for entry in &index_entries {
+            entry.write_to(&mut cursor)?;
+        }
+
+        // Write footer.
+        let index_entries_count =
+            u32::try_from(index_entries.len()).map_err(|_| BlobBundleError::InvalidFormat)?;
+        let footer = Footer::new(index_offset, index_entries_count);
+        footer.write_to(&mut cursor)?;
+
+        // Drop the cursor to release the borrow on output_buffer.
+        drop(cursor);
+
+        // Shrink the buffer to the exact size (remove any extra capacity).
+        output_buffer.shrink_to_fit();
+
+        Ok(BlobBundleInMemoryBuildResult {
+            bundle: output_buffer,
+            index_map,
         })
     }
 }
@@ -1494,5 +1668,249 @@ mod tests {
             reader.get("001.txt").expect("Failed to get 001.txt"),
             Bytes::from("001 content")
         );
+    }
+
+    #[test]
+    fn test_build_in_memory() {
+        // Create temporary directory for test files.
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create test files.
+        let file1_path = temp_dir.path().join("entry1.txt");
+        let file2_path = temp_dir.path().join("entry2.txt");
+        let file3_path = temp_dir.path().join("entry3.bin");
+
+        let data1 = b"Hello, World!";
+        let data2 = b"This is test data";
+        let data3 = vec![1, 2, 3, 4, 5];
+
+        fs::write(&file1_path, data1).expect("Failed to write file1");
+        fs::write(&file2_path, data2).expect("Failed to write file2");
+        fs::write(&file3_path, &data3).expect("Failed to write file3");
+
+        // Build blob bundle in memory.
+        let builder = BlobBundleBuilder::new(NonZeroU16::new(10).expect("10 is non-zero"));
+        let file_paths = vec![&file1_path, &file2_path, &file3_path];
+        let result = builder
+            .build_in_memory(&file_paths)
+            .expect("Failed to build bundle in memory");
+
+        // Verify index map.
+        assert_eq!(result.index_map.len(), 3);
+        assert_eq!(result.index_map[0].0, "entry1.txt");
+        assert_eq!(result.index_map[1].0, "entry2.txt");
+        assert_eq!(result.index_map[2].0, "entry3.bin");
+
+        // Verify bundle bytes are not empty.
+        assert!(!result.bundle.is_empty());
+
+        // Read blob bundle from memory.
+        let reader = BlobBundleReader::new(Bytes::from(result.bundle))
+            .expect("Failed to create reader from in-memory bundle");
+
+        // Verify all entries.
+        assert_eq!(
+            reader.get("entry1.txt").expect("Failed to get entry1"),
+            Bytes::from(data1.to_vec())
+        );
+        assert_eq!(
+            reader.get("entry2.txt").expect("Failed to get entry2"),
+            Bytes::from(data2.to_vec())
+        );
+        assert_eq!(
+            reader.get("entry3.bin").expect("Failed to get entry3"),
+            Bytes::from(data3.clone())
+        );
+
+        // Verify IDs.
+        let mut ids = reader.list_ids().expect("Failed to list IDs");
+        ids.sort();
+        assert_eq!(ids, vec!["entry1.txt", "entry2.txt", "entry3.bin"]);
+    }
+
+    #[test]
+    fn test_build_in_memory_vs_build_to_file() {
+        // Test that build_in_memory produces the same output as build.
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create test files.
+        let file1_path = temp_dir.path().join("test1.txt");
+        let file2_path = temp_dir.path().join("test2.txt");
+
+        let data1 = b"Test data 1";
+        let data2 = b"Test data 2";
+
+        fs::write(&file1_path, data1).expect("Failed to write file1");
+        fs::write(&file2_path, data2).expect("Failed to write file2");
+
+        let file_paths = vec![&file1_path, &file2_path];
+
+        // Build in memory.
+        let builder1 = BlobBundleBuilder::new(NonZeroU16::new(10).expect("10 is non-zero"));
+        let memory_result = builder1
+            .build_in_memory(&file_paths)
+            .expect("Failed to build in memory");
+
+        // Build to file.
+        let builder2 = BlobBundleBuilder::new(NonZeroU16::new(10).expect("10 is non-zero"));
+        let output_path = temp_dir.path().join("bundle.blob");
+        let file_result = builder2
+            .build(&file_paths, &output_path)
+            .expect("Failed to build to file");
+
+        // Read file bundle.
+        let file_bundle = fs::read(&output_path).expect("Failed to read file bundle");
+
+        // Verify bundles are identical.
+        assert_eq!(memory_result.bundle, file_bundle);
+
+        // Verify index maps are identical.
+        assert_eq!(memory_result.index_map, file_result.index_map);
+
+        // Verify both can be read correctly.
+        let memory_reader = BlobBundleReader::new(Bytes::from(memory_result.bundle))
+            .expect("Failed to create reader from memory");
+        let file_reader = BlobBundleReader::new(Bytes::from(file_bundle))
+            .expect("Failed to create reader from file");
+
+        assert_eq!(
+            memory_reader.get("test1.txt").expect("Failed to get test1"),
+            file_reader.get("test1.txt").expect("Failed to get test1")
+        );
+        assert_eq!(
+            memory_reader.get("test2.txt").expect("Failed to get test2"),
+            file_reader.get("test2.txt").expect("Failed to get test2")
+        );
+    }
+
+    #[test]
+    fn test_build_in_memory_no_padding() {
+        // Create temporary directory for test files.
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file1_path = temp_dir.path().join("test1.txt");
+        let file2_path = temp_dir.path().join("test2.txt");
+
+        // Create test files.
+        fs::write(&file1_path, b"Hello, world!").expect("Failed to write test file");
+        fs::write(&file2_path, b"Blob bundle test content").expect("Failed to write test file");
+
+        let n_shards = NonZeroU16::new(100).unwrap();
+        let builder = BlobBundleBuilder::new(n_shards);
+
+        let result = builder
+            .build_in_memory(&[file1_path, file2_path])
+            .expect("Failed to build in memory");
+
+        // Verify that the buffer has no padding: capacity should equal length.
+        assert_eq!(
+            result.bundle.capacity(),
+            result.bundle.len(),
+            "buffer capacity ({}) should equal length ({}) with no padding",
+            result.bundle.capacity(),
+            result.bundle.len()
+        );
+
+        // Additionally verify the bundle is valid and can be read.
+        let reader = BlobBundleReader::new(Bytes::from(result.bundle))
+            .expect("Failed to create reader from memory");
+
+        assert_eq!(
+            reader.get("test1.txt").expect("Failed to get test1"),
+            Bytes::from("Hello, world!")
+        );
+        assert_eq!(
+            reader.get("test2.txt").expect("Failed to get test2"),
+            Bytes::from("Blob bundle test content")
+        );
+    }
+
+    #[test]
+    fn test_build_in_memory_exceeds_estimated_capacity() {
+        // Create temporary directory for test files.
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create multiple files with varying sizes to potentially exceed initial capacity estimate.
+        // Use long file names to increase index overhead.
+        let mut file_paths = Vec::new();
+        let mut expected_contents = Vec::new();
+
+        for i in 0..20 {
+            let file_name = format!(
+                "very_long_file_name_to_increase_index_overhead_{:03}.txt",
+                i
+            );
+            let file_path = temp_dir.path().join(&file_name);
+            // Create content that grows progressively larger.
+            let content = format!("File {} content: {}", i, "x".repeat(100 * (i + 1)));
+            fs::write(&file_path, &content).expect("Failed to write test file");
+            file_paths.push(file_path);
+            expected_contents.push((file_name, content));
+        }
+
+        let n_shards = NonZeroU16::new(100).unwrap();
+        let builder = BlobBundleBuilder::new(n_shards);
+
+        // Get the estimated size for comparison.
+        let estimated_size =
+            BlobBundleBuilder::estimate_size(&file_paths).expect("Failed to estimate size");
+
+        let result = builder
+            .build_in_memory(&file_paths)
+            .expect("Failed to build in memory");
+
+        // The actual size might be slightly different from estimate.
+        // What matters is that Vec can grow if needed.
+        println!(
+            "estimated size: {}, actual size: {}",
+            estimated_size,
+            result.bundle.len()
+        );
+
+        // Verify that the buffer has no padding.
+        assert_eq!(
+            result.bundle.capacity(),
+            result.bundle.len(),
+            "buffer capacity should equal length with no padding"
+        );
+
+        // Verify the bundle is valid and can be read.
+        let reader = BlobBundleReader::new(Bytes::from(result.bundle))
+            .expect("Failed to create reader from memory");
+
+        // Verify all files are included and have correct content.
+        assert_eq!(
+            result.index_map.len(),
+            expected_contents.len(),
+            "index map should contain all files"
+        );
+
+        for (file_name, expected_content) in &expected_contents {
+            let actual_content = reader
+                .get(file_name)
+                .unwrap_or_else(|e| panic!("Failed to get file {}: {}", file_name, e));
+            assert_eq!(
+                actual_content,
+                Bytes::from(expected_content.clone()),
+                "content mismatch for file: {}",
+                file_name
+            );
+        }
+
+        // Verify that all entries in the index map exist and can be retrieved.
+        for (file_name, (_offset, length)) in &result.index_map {
+            assert!(
+                *length > 0,
+                "file {} should have non-zero length",
+                file_name
+            );
+            let content = reader
+                .get(file_name)
+                .unwrap_or_else(|e| panic!("Failed to get file from index {}: {}", file_name, e));
+            assert!(
+                !content.is_empty(),
+                "content should not be empty for file: {}",
+                file_name
+            );
+        }
     }
 }

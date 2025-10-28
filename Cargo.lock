@@ -1388,6 +1388,7 @@ dependencies = [
  "crc32fast",
  "tempfile",
  "thiserror 2.0.17",
+ "tokio",
  "walrus-core",
 ]
 
