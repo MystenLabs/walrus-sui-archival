@@ -336,6 +336,7 @@ impl ArchivalStateSnapshotCreator {
                 Box::pin(async move {
                     upload_blob_to_walrus_with_retry(
                         client,
+                        None,
                         &blob_file_path,
                         min_retry_duration,
                         max_retry_duration,

@@ -6,6 +6,7 @@ use std::{path::Path, time::Duration};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use sui_sdk::{types::base_types::ObjectID as SuiObjectID, wallet_context::WalletContext};
+use sui_types::base_types::SuiAddress;
 use tokio::fs;
 use walrus_core::{BlobId, Epoch};
 use walrus_sdk::{
@@ -88,6 +89,7 @@ macro_rules! git_revision {
 /// Returns tuple of (blob_id, object_id, end_epoch) on success.
 pub async fn upload_blob_to_walrus_with_retry(
     walrus_client: &WalrusNodeClient<SuiContractClient>,
+    main_client_address: Option<SuiAddress>,
     blob_file_path: &Path,
     min_retry_duration: Duration,
     max_retry_duration: Duration,
@@ -103,6 +105,10 @@ pub async fn upload_blob_to_walrus_with_retry(
         // because we have to have a blob object owned by us so that we can extend it.
         .with_store_optimizations(StoreOptimizations::none())
         .with_metrics(metrics.walrus_client_metrics.clone());
+
+    if let Some(transfer_to_address) = main_client_address {
+        store_args = store_args.with_post_store(PostStoreAction::TransferTo(transfer_to_address));
+    }
 
     if burn_blob {
         store_args = store_args.with_post_store(PostStoreAction::Burn);

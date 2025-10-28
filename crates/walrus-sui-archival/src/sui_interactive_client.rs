@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use sui_sdk::wallet_context::WalletContext;
+use sui_types::base_types::SuiAddress;
 use tokio::sync::Mutex;
 use walrus_sdk::{SuiReadClient, client::WalrusNodeClient, sui::client::SuiContractClient};
 
@@ -12,6 +13,7 @@ use walrus_sdk::{SuiReadClient, client::WalrusNodeClient, sui::client::SuiContra
 /// This ensures that walrus_client and wallet cannot be used at the same time.
 pub struct SuiInteractiveClient {
     inner: Arc<Mutex<SuiInteractiveClientInner>>,
+    pub active_address: SuiAddress,
 }
 
 struct SuiInteractiveClientInner {
@@ -21,12 +23,17 @@ struct SuiInteractiveClientInner {
 
 impl SuiInteractiveClient {
     /// Create a new SuiInteractiveClient.
-    pub fn new(walrus_client: WalrusNodeClient<SuiContractClient>, wallet: WalletContext) -> Self {
+    pub fn new(
+        walrus_client: WalrusNodeClient<SuiContractClient>,
+        mut wallet: WalletContext,
+    ) -> Self {
+        let active_address = wallet.active_address().unwrap();
         Self {
             inner: Arc::new(Mutex::new(SuiInteractiveClientInner {
                 walrus_client,
                 wallet,
             })),
+            active_address,
         }
     }
 
@@ -128,6 +135,7 @@ impl Clone for SuiInteractiveClient {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
+            active_address: self.active_address.clone(),
         }
     }
 }

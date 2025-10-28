@@ -148,6 +148,7 @@ impl CheckpointBlobPublisher {
                             request,
                             &self_clone.archival_state,
                             self_clone.sui_interactive_client.clone(),
+                            self_clone.sui_interactive_client.clone(),
                             self_clone.n_shards,
                             &self_clone.config,
                             &self_clone.downloaded_checkpoint_dir,
@@ -226,6 +227,7 @@ impl CheckpointBlobPublisher {
             let admin_cap_object_id = self.admin_cap_object_id;
             let n_shards = self.n_shards;
             let worker_rx = shared_rx.clone();
+            let main_sui_interactive_client = self.sui_interactive_client.clone();
 
             // Spawn worker task.
             let handle = tokio::spawn(async move {
@@ -244,6 +246,7 @@ impl CheckpointBlobPublisher {
                     let result = Self::build_and_upload_blob(
                         request,
                         &archival_state,
+                        main_sui_interactive_client.clone(),
                         client.clone(),
                         n_shards,
                         &config,
@@ -333,6 +336,7 @@ impl CheckpointBlobPublisher {
     async fn build_and_upload_blob(
         request: BlobBuildRequest,
         archival_state: &Arc<ArchivalState>,
+        main_sui_interactive_client: SuiInteractiveClient,
         sui_interactive_client: SuiInteractiveClient,
         n_shards: NonZeroU16,
         config: &CheckpointBlobPublisherConfig,
@@ -409,6 +413,7 @@ impl CheckpointBlobPublisher {
         Self::upload_blob_to_walrus(
             &request,
             &result,
+            main_sui_interactive_client,
             sui_interactive_client,
             archival_state,
             config,
@@ -444,6 +449,7 @@ impl CheckpointBlobPublisher {
     async fn upload_blob_to_walrus(
         request: &BlobBuildRequest,
         result: &BlobBundleBuildResult,
+        main_sui_interactive_client: SuiInteractiveClient,
         sui_interactive_client: SuiInteractiveClient,
         archival_state: &Arc<ArchivalState>,
         config: &CheckpointBlobPublisherConfig,
@@ -458,6 +464,7 @@ impl CheckpointBlobPublisher {
         let result = Self::upload_blob_to_walrus_inner(
             request,
             result,
+            main_sui_interactive_client,
             sui_interactive_client,
             archival_state,
             config,
@@ -476,6 +483,7 @@ impl CheckpointBlobPublisher {
     async fn upload_blob_to_walrus_inner(
         request: &BlobBuildRequest,
         result: &BlobBundleBuildResult,
+        main_sui_interactive_client: SuiInteractiveClient,
         sui_interactive_client: SuiInteractiveClient,
         archival_state: &Arc<ArchivalState>,
         config: &CheckpointBlobPublisherConfig,
@@ -492,11 +500,19 @@ impl CheckpointBlobPublisher {
         let store_epoch_length = config.store_epoch_length;
         let metrics_clone = metrics.clone();
 
+        let transfer_to_address =
+            main_sui_interactive_client.active_address != sui_interactive_client.active_address;
+
         let (blob_id, object_id, end_epoch) = sui_interactive_client
             .with_walrus_client_async(|client| {
                 Box::pin(async move {
                     upload_blob_to_walrus_with_retry(
                         client,
+                        if transfer_to_address {
+                            Some(main_sui_interactive_client.active_address)
+                        } else {
+                            None
+                        },
                         &blob_file_path,
                         min_retry_duration,
                         max_retry_duration,
@@ -521,7 +537,7 @@ impl CheckpointBlobPublisher {
         let (final_object_id, is_shared_blob) = if config.create_shared_blobs {
             tracing::info!("creating shared blob for blob_id: {}", blob_id);
 
-            let shared_blob_id = sui_interactive_client
+            let shared_blob_id = main_sui_interactive_client
                 .with_wallet_mut_async(|wallet| {
                     let package_id = contract_package_id;
                     let admin_cap_object_id_clone = admin_cap_object_id;
@@ -532,26 +548,20 @@ impl CheckpointBlobPublisher {
                         let active_address = wallet.active_address()?;
 
                         // Fetch AdminCap object to get version and digest.
-                        let admin_cap_obj = sui_client
+                        let fetched_objects = sui_client
                             .read_api()
-                            .get_object_with_options(
-                                admin_cap_object_id_clone,
+                            .multi_get_object_with_options(
+                                vec![admin_cap_object_id_clone, blob_object_id],
                                 sui_sdk::rpc_types::SuiObjectDataOptions::default(),
                             )
                             .await?;
+
+                        let admin_cap_obj = fetched_objects[0].clone();
+                        let blob_obj = fetched_objects[1].clone();
 
                         let admin_cap_ref = admin_cap_obj
                             .object_ref_if_exists()
                             .ok_or_else(|| anyhow::anyhow!("admin cap object not found"))?;
-
-                        // Fetch blob object to get version and digest.
-                        let blob_obj = sui_client
-                            .read_api()
-                            .get_object_with_options(
-                                blob_object_id,
-                                sui_sdk::rpc_types::SuiObjectDataOptions::default(),
-                            )
-                            .await?;
 
                         let blob_ref = blob_obj
                             .object_ref_if_exists()
