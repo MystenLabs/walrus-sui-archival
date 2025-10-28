@@ -154,6 +154,7 @@ impl CheckpointBlobPublisher {
                     // Spawn task in background.
                     tasks.spawn(async move {
                         let result = Self::build_and_upload_blob(
+                            "checkpoint_blob_publisher",
                             request,
                             &self_clone.archival_state,
                             self_clone.sui_interactive_client.clone(),
@@ -217,7 +218,7 @@ impl CheckpointBlobPublisher {
         let (shared_tx, shared_rx) = async_channel::bounded::<BlobBuildRequest>(1);
 
         // Spawn workers that all listen on the same channel.
-        let mut worker_handles = Vec::new();
+        let mut worker_handles = JoinSet::new();
 
         for i in 0..num_workers {
             // Determine which client to use for this worker.
@@ -239,7 +240,7 @@ impl CheckpointBlobPublisher {
             let main_sui_interactive_client = self.sui_interactive_client.clone();
 
             // Spawn worker task.
-            let handle = tokio::spawn(async move {
+            worker_handles.spawn(async move {
                 tracing::info!("worker {} started", i);
 
                 // Process messages one at a time from the shared channel.
@@ -253,6 +254,7 @@ impl CheckpointBlobPublisher {
 
                     // Build and upload blob.
                     let result = Self::build_and_upload_blob(
+                        &format!("worker_{}", i),
                         request,
                         &archival_state,
                         main_sui_interactive_client.clone(),
@@ -276,66 +278,70 @@ impl CheckpointBlobPublisher {
                 tracing::info!("worker {} stopped", i);
                 Ok::<(), anyhow::Error>(())
             });
-
-            worker_handles.push(handle);
         }
 
         // Forward requests from mpsc channel to shared async_channel.
-        loop {
-            tokio::select! {
-                // Check if any worker has failed.
-                Some(result) = async {
-                    for handle in &mut worker_handles {
-                        if handle.is_finished() {
-                            return Some(handle.await);
-                        }
-                    }
-                    // Yield to avoid busy loop.
-                    tokio::task::yield_now().await;
-                    None
-                } => {
-                    match result {
-                        Ok(worker_result) => {
-                            if let Err(e) = worker_result {
-                                tracing::error!(
-                                    "worker failed: {}, stopping checkpoint blob publisher",
-                                    e
-                                );
-                                return Err(e);
+        // Monitor worker exits and return immediately on error.
+        let forward_result: Result<()> = async {
+            loop {
+                tokio::select! {
+                    // Monitor workers and exit immediately if any fails.
+                    Some(result) = worker_handles.join_next() => {
+                        // A worker has exited.
+                        match result {
+                            Ok(worker_result) => {
+                                match worker_result {
+                                    Ok(()) => {
+                                        // Worker exited successfully (channel closed).
+                                        tracing::info!("worker exited successfully");
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "worker failed: {}, stopping checkpoint blob publisher",
+                                            e
+                                        );
+                                        return Err(e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("worker join error: {}", e);
+                                return Err(anyhow::anyhow!("worker join error: {}", e));
                             }
                         }
-                        Err(e) => {
-                            tracing::error!("worker join error: {}", e);
-                            return Err(anyhow::anyhow!("worker join error: {}", e));
-                        }
+                    }
+
+                    // Receive new requests and forward to shared channel.
+                    Some(request) = request_rx.recv() => {
+                        tracing::info!(
+                            "received blob build request for checkpoints {} to {}",
+                            request.start_checkpoint,
+                            request.end_checkpoint,
+                        );
+
+                        // Send to shared channel (this will block if buffer is full).
+                        shared_tx.send(request).await?;
+                    }
+
+                    // All requests processed.
+                    else => {
+                        break;
                     }
                 }
-
-                // Receive new requests and forward to shared channel.
-                Some(request) = request_rx.recv() => {
-                    tracing::info!(
-                        "received blob build request for checkpoints {} to {}",
-                        request.start_checkpoint,
-                        request.end_checkpoint,
-                    );
-
-                    // Send to shared channel (this will block if buffer is full).
-                    shared_tx.send(request).await?;
-                }
-
-                // All requests processed.
-                else => {
-                    break;
-                }
             }
+            Ok(())
         }
+        .await;
 
         // Close the shared channel.
         shared_tx.close();
 
-        // Wait for all workers to finish.
-        for handle in worker_handles {
-            handle.await??;
+        // If forwarding failed due to worker error, return immediately.
+        forward_result?;
+
+        // Wait for all remaining workers to finish.
+        while let Some(result) = worker_handles.join_next().await {
+            result??;
         }
 
         tracing::info!("checkpoint blob publisher v2 stopped");
@@ -343,6 +349,7 @@ impl CheckpointBlobPublisher {
     }
 
     async fn build_and_upload_blob(
+        worker_name: &str,
         request: BlobBuildRequest,
         archival_state: &Arc<ArchivalState>,
         main_sui_interactive_client: SuiInteractiveClient,
@@ -360,7 +367,8 @@ impl CheckpointBlobPublisher {
         let end_checkpoint = request.end_checkpoint;
 
         tracing::info!(
-            "building blob for checkpoints {} to {}",
+            "{} building blob for checkpoints {} to {}",
+            worker_name,
             start_checkpoint,
             end_checkpoint
         );
@@ -396,7 +404,8 @@ impl CheckpointBlobPublisher {
         );
 
         tracing::info!(
-            "bundling {} checkpoint files into a blob: {}",
+            "{} bundling {} checkpoint files into a blob: {}",
+            worker_name,
             file_paths.len(),
             blob_filename
         );
@@ -405,9 +414,9 @@ impl CheckpointBlobPublisher {
         let file_num = file_paths.len();
 
         // Acquire blob build semaphore to prevent concurrent builds (disk I/O contention).
-        tracing::info!("waiting for blob build semaphore");
+        tracing::info!("{} waiting for blob build semaphore", worker_name);
         let _build_permit = get_blob_build_semaphore().acquire().await.unwrap();
-        tracing::info!("acquired blob build semaphore");
+        tracing::info!("{} acquired blob build semaphore", worker_name);
 
         // Build the blob bundle in a blocking thread.
         let build_result =
@@ -415,14 +424,15 @@ impl CheckpointBlobPublisher {
 
         // Release the semaphore immediately after build task completes (success or failure).
         drop(_build_permit);
-        tracing::info!("released blob build semaphore");
+        tracing::info!("{} released blob build semaphore", worker_name);
 
         // Now handle the result.
         let result =
             build_result.map_err(|e| anyhow::anyhow!("blob build task failed: {}", e))??;
 
         tracing::info!(
-            "successfully built blob {} with {} checkpoints, total size {} bytes",
+            "{} successfully built blob {} with {} checkpoints, total size {} bytes",
+            worker_name,
             blob_filename,
             file_num,
             result.total_size
@@ -437,6 +447,7 @@ impl CheckpointBlobPublisher {
         build_timer.observe_duration();
 
         Self::upload_blob_to_walrus(
+            worker_name,
             &request,
             &result,
             main_sui_interactive_client,
@@ -464,7 +475,8 @@ impl CheckpointBlobPublisher {
         .await?;
 
         tracing::info!(
-            "successfully cleaned up downloaded checkpoints and uploaded blobs for checkpoints {} to {}",
+            "{} successfully cleaned up downloaded checkpoints and uploaded blobs for checkpoints {} to {}",
+            worker_name,
             request.start_checkpoint,
             request.end_checkpoint
         );
@@ -473,6 +485,7 @@ impl CheckpointBlobPublisher {
     }
 
     async fn upload_blob_to_walrus(
+        worker_name: &str,
         request: &BlobBuildRequest,
         result: &BlobBundleBuildResult,
         main_sui_interactive_client: SuiInteractiveClient,
@@ -488,6 +501,7 @@ impl CheckpointBlobPublisher {
 
         // Execute the upload and ensure we decrement on exit (both success and error).
         let result = Self::upload_blob_to_walrus_inner(
+            worker_name,
             request,
             result,
             main_sui_interactive_client,
@@ -507,6 +521,7 @@ impl CheckpointBlobPublisher {
     }
 
     async fn upload_blob_to_walrus_inner(
+        worker_name: &str,
         request: &BlobBuildRequest,
         result: &BlobBundleBuildResult,
         main_sui_interactive_client: SuiInteractiveClient,
@@ -525,6 +540,7 @@ impl CheckpointBlobPublisher {
         let max_retry_duration = config.max_retry_duration;
         let store_epoch_length = config.store_epoch_length;
         let metrics_clone = metrics.clone();
+        let worker_name_clone = worker_name.to_string();
 
         let transfer_to_address =
             main_sui_interactive_client.active_address != sui_interactive_client.active_address;
@@ -533,6 +549,7 @@ impl CheckpointBlobPublisher {
             .with_walrus_client_async(|client| {
                 Box::pin(async move {
                     upload_blob_to_walrus_with_retry(
+                        &worker_name_clone,
                         client,
                         if transfer_to_address {
                             Some(main_sui_interactive_client.active_address)
@@ -561,13 +578,18 @@ impl CheckpointBlobPublisher {
 
         // Optionally create a shared blob if configured.
         let (final_object_id, is_shared_blob) = if config.create_shared_blobs {
-            tracing::info!("creating shared blob for blob_id: {}", blob_id);
+            tracing::info!(
+                "{} creating shared blob for blob_id: {}",
+                worker_name,
+                blob_id
+            );
 
             let shared_blob_id = main_sui_interactive_client
                 .with_wallet_mut_async(|wallet| {
                     let package_id = contract_package_id;
                     let admin_cap_object_id_clone = admin_cap_object_id;
                     let blob_object_id = object_id;
+                    let worker_name_clone = worker_name.to_string();
 
                     Box::pin(async move {
                         let sui_client = wallet.get_client().await?;
@@ -612,7 +634,8 @@ impl CheckpointBlobPublisher {
                         let pt = ptb.finish();
 
                         tracing::info!(
-                            "executing create_shared_blob transaction - package: {}, blob: {}",
+                            "{} executing create_shared_blob transaction - package: {}, blob: {}",
+                            &worker_name_clone,
                             package_id,
                             blob_object_id
                         );
@@ -679,7 +702,8 @@ impl CheckpointBlobPublisher {
                             })?;
 
                         tracing::info!(
-                            "successfully created shared blob, tx digest: {:?}, shared_blob_id: {}",
+                            "{} successfully created shared blob, tx digest: {:?}, shared_blob_id: {}",
+                            &worker_name_clone,
                             response.digest,
                             shared_blob_id
                         );
@@ -708,7 +732,8 @@ impl CheckpointBlobPublisher {
             }
             if start_wait_time.elapsed() > Duration::from_secs(1200) {
                 return Err(anyhow::anyhow!(
-                    "timed out waiting for prior checkpoint blobs to be created, latest checkpoint: {}, current start checkpoint: {}",
+                    "{} timed out waiting for prior checkpoint blobs to be created, latest checkpoint: {}, current start checkpoint: {}",
+                    worker_name,
                     latest_checkpoint.unwrap(),
                     request.start_checkpoint
                 ));

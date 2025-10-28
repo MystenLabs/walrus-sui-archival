@@ -88,6 +88,7 @@ macro_rules! git_revision {
 ///
 /// Returns tuple of (blob_id, object_id, end_epoch) on success.
 pub async fn upload_blob_to_walrus_with_retry(
+    worker_name: &str,
     walrus_client: &WalrusNodeClient<SuiContractClient>,
     main_client_address: Option<SuiAddress>,
     blob_file_path: &Path,
@@ -131,7 +132,8 @@ pub async fn upload_blob_to_walrus_with_retry(
                         metrics.blobs_uploaded_not_stored.inc();
 
                         tracing::error!(
-                            "blob upload failed with is_not_stored status, retrying in {:?}",
+                            "{} blob upload failed with is_not_stored status, retrying in {:?}",
+                            worker_name,
                             retry_delay
                         );
                         tokio::time::sleep(retry_delay).await;
@@ -159,7 +161,8 @@ pub async fn upload_blob_to_walrus_with_retry(
                     return Ok((blob_id, object_id, end_epoch));
                 } else {
                     tracing::error!(
-                        "blob upload returned empty results, retrying in {:?}",
+                        "{} blob upload returned empty results, retrying in {:?}",
+                        worker_name,
                         retry_delay
                     );
                     tokio::time::sleep(retry_delay).await;
@@ -171,7 +174,12 @@ pub async fn upload_blob_to_walrus_with_retry(
                 // Track upload failures.
                 metrics.blobs_uploaded_failed.inc();
 
-                tracing::error!("blob upload failed: {}, retrying in {:?}", e, retry_delay);
+                tracing::error!(
+                    "{} blob upload failed: {}, retrying in {:?}",
+                    worker_name,
+                    e,
+                    retry_delay
+                );
                 tokio::time::sleep(retry_delay).await;
                 // Exponential backoff.
                 retry_delay = std::cmp::min(retry_delay * 2, max_retry_delay);
