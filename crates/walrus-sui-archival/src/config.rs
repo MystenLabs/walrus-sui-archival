@@ -24,6 +24,11 @@ pub struct Config {
     #[serde(default = "default_client_config_path")]
     pub client_config_path: PathBuf,
 
+    /// List of uploader client config paths for blob uploading.
+    /// Default: empty list.
+    #[serde(default = "default_uploader_client_config_path")]
+    pub uploader_client_config_path: Vec<PathBuf>,
+
     /// Path to the RocksDB database directory.
     #[serde(default = "default_db_path")]
     pub db_path: PathBuf,
@@ -145,6 +150,10 @@ fn default_client_config_path() -> PathBuf {
     ["./", "config", "wallet", "local_testnet_client_config.yaml"]
         .iter()
         .collect()
+}
+
+fn default_uploader_client_config_path() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 fn default_db_path() -> PathBuf {

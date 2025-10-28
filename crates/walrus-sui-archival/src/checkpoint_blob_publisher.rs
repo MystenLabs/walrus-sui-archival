@@ -37,6 +37,7 @@ pub struct BlobBuildRequest {
 pub struct CheckpointBlobPublisher {
     archival_state: Arc<ArchivalState>,
     sui_interactive_client: SuiInteractiveClient,
+    uploader_interactive_clients: Vec<SuiInteractiveClient>,
     n_shards: NonZeroU16,
     config: CheckpointBlobPublisherConfig,
     downloaded_checkpoint_dir: PathBuf,
@@ -49,6 +50,7 @@ impl CheckpointBlobPublisher {
     pub async fn new(
         archival_state: Arc<ArchivalState>,
         sui_interactive_client: SuiInteractiveClient,
+        uploader_interactive_clients: Vec<SuiInteractiveClient>,
         config: CheckpointBlobPublisherConfig,
         downloaded_checkpoint_dir: PathBuf,
         metrics: Arc<Metrics>,
@@ -66,6 +68,7 @@ impl CheckpointBlobPublisher {
         Ok(Self {
             archival_state,
             sui_interactive_client,
+            uploader_interactive_clients,
             n_shards,
             config,
             downloaded_checkpoint_dir,
@@ -141,7 +144,18 @@ impl CheckpointBlobPublisher {
 
                     // Spawn task in background.
                     tasks.spawn(async move {
-                        let result = self_clone.build_and_upload_blob(request).await;
+                        let result = Self::build_and_upload_blob(
+                            request,
+                            &self_clone.archival_state,
+                            self_clone.sui_interactive_client.clone(),
+                            self_clone.n_shards,
+                            &self_clone.config,
+                            &self_clone.downloaded_checkpoint_dir,
+                            &self_clone.metrics,
+                            self_clone.contract_package_id,
+                            self_clone.admin_cap_object_id,
+                        )
+                        .await;
 
                         // Release the permit.
                         drop(permit);
@@ -161,9 +175,174 @@ impl CheckpointBlobPublisher {
         Ok(())
     }
 
-    async fn build_and_upload_blob(&self, request: BlobBuildRequest) -> Result<()> {
+    /// Start the blob publisher service with dedicated workers per uploader client.
+    /// If uploader_interactive_clients is non-empty, creates one worker per client.
+    /// Otherwise, creates a single worker using sui_interactive_client.
+    /// All workers share a single async_channel with buffer size 1.
+    pub async fn start_v2(self, mut request_rx: mpsc::Receiver<BlobBuildRequest>) -> Result<()> {
+        let num_workers = if self.uploader_interactive_clients.is_empty() {
+            1
+        } else {
+            self.uploader_interactive_clients.len()
+        };
+
+        tracing::info!(
+            "starting checkpoint blob publisher v2 with {} workers, storing blobs in {}",
+            num_workers,
+            self.config.checkpoint_blobs_dir.display()
+        );
+
+        // Clear the blob directory.
+        fs::create_dir_all(&self.config.checkpoint_blobs_dir).await?;
+
+        // Remove all files in the blob directory if there are any.
+        for entry in std::fs::read_dir(&self.config.checkpoint_blobs_dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+
+        // Create a single shared channel with buffer size 1 for all workers.
+        let (shared_tx, shared_rx) = async_channel::bounded::<BlobBuildRequest>(1);
+
+        // Spawn workers that all listen on the same channel.
+        let mut worker_handles = Vec::new();
+
+        for i in 0..num_workers {
+            // Determine which client to use for this worker.
+            let client = if self.uploader_interactive_clients.is_empty() {
+                self.sui_interactive_client.clone()
+            } else {
+                self.uploader_interactive_clients[i].clone()
+            };
+
+            // Clone necessary data for the worker.
+            let archival_state = self.archival_state.clone();
+            let config = self.config.clone();
+            let downloaded_checkpoint_dir = self.downloaded_checkpoint_dir.clone();
+            let metrics = self.metrics.clone();
+            let contract_package_id = self.contract_package_id;
+            let admin_cap_object_id = self.admin_cap_object_id;
+            let n_shards = self.n_shards;
+            let worker_rx = shared_rx.clone();
+
+            // Spawn worker task.
+            let handle = tokio::spawn(async move {
+                tracing::info!("worker {} started", i);
+
+                // Process messages one at a time from the shared channel.
+                while let Ok(request) = worker_rx.recv().await {
+                    tracing::info!(
+                        "worker {} processing checkpoints {} to {}",
+                        i,
+                        request.start_checkpoint,
+                        request.end_checkpoint
+                    );
+
+                    // Build and upload blob.
+                    let result = Self::build_and_upload_blob(
+                        request,
+                        &archival_state,
+                        client.clone(),
+                        n_shards,
+                        &config,
+                        &downloaded_checkpoint_dir,
+                        &metrics,
+                        contract_package_id,
+                        admin_cap_object_id,
+                    )
+                    .await;
+
+                    // If error occurs, return immediately.
+                    if let Err(e) = result {
+                        tracing::error!("worker {} failed to build and upload blob: {}", i, e);
+                        return Err(e);
+                    }
+                }
+
+                tracing::info!("worker {} stopped", i);
+                Ok::<(), anyhow::Error>(())
+            });
+
+            worker_handles.push(handle);
+        }
+
+        // Forward requests from mpsc channel to shared async_channel.
+        loop {
+            tokio::select! {
+                // Check if any worker has failed.
+                Some(result) = async {
+                    for handle in &mut worker_handles {
+                        if handle.is_finished() {
+                            return Some(handle.await);
+                        }
+                    }
+                    // Yield to avoid busy loop.
+                    tokio::task::yield_now().await;
+                    None
+                } => {
+                    match result {
+                        Ok(worker_result) => {
+                            if let Err(e) = worker_result {
+                                tracing::error!(
+                                    "worker failed: {}, stopping checkpoint blob publisher",
+                                    e
+                                );
+                                return Err(e);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("worker join error: {}", e);
+                            return Err(anyhow::anyhow!("worker join error: {}", e));
+                        }
+                    }
+                }
+
+                // Receive new requests and forward to shared channel.
+                Some(request) = request_rx.recv() => {
+                    tracing::info!(
+                        "received blob build request for checkpoints {} to {}",
+                        request.start_checkpoint,
+                        request.end_checkpoint,
+                    );
+
+                    // Send to shared channel (this will block if buffer is full).
+                    shared_tx.send(request).await?;
+                }
+
+                // All requests processed.
+                else => {
+                    break;
+                }
+            }
+        }
+
+        // Close the shared channel.
+        shared_tx.close();
+
+        // Wait for all workers to finish.
+        for handle in worker_handles {
+            handle.await??;
+        }
+
+        tracing::info!("checkpoint blob publisher v2 stopped");
+        Ok(())
+    }
+
+    async fn build_and_upload_blob(
+        request: BlobBuildRequest,
+        archival_state: &Arc<ArchivalState>,
+        sui_interactive_client: SuiInteractiveClient,
+        n_shards: NonZeroU16,
+        config: &CheckpointBlobPublisherConfig,
+        downloaded_checkpoint_dir: &PathBuf,
+        metrics: &Arc<Metrics>,
+        contract_package_id: ObjectID,
+        admin_cap_object_id: ObjectID,
+    ) -> Result<()> {
         // Track the latency of building blobs.
-        let build_timer = self.metrics.blob_build_latency_seconds.start_timer();
+        let build_timer = metrics.blob_build_latency_seconds.start_timer();
         let start_checkpoint = request.start_checkpoint;
         let end_checkpoint = request.end_checkpoint;
 
@@ -176,9 +355,7 @@ impl CheckpointBlobPublisher {
         // Collect checkpoint file paths.
         let mut file_paths = Vec::new();
         for checkpoint_num in start_checkpoint..=end_checkpoint {
-            let checkpoint_file = self
-                .downloaded_checkpoint_dir
-                .join(format!("{checkpoint_num}"));
+            let checkpoint_file = downloaded_checkpoint_dir.join(format!("{checkpoint_num}"));
 
             // Check if the checkpoint file exists.
             if !checkpoint_file.exists() {
@@ -199,14 +376,14 @@ impl CheckpointBlobPublisher {
         tracing::info!("bundling {} checkpoint files into a blob", file_paths.len());
 
         // Create the blob bundle.
-        let builder = BlobBundleBuilder::new(self.n_shards);
+        let builder = BlobBundleBuilder::new(n_shards);
 
         // Generate output filename.
         let blob_filename = format!(
             "checkpoint_blob_{}_{}.blob",
             start_checkpoint, end_checkpoint
         );
-        let output_path = self.config.checkpoint_blobs_dir.join(&blob_filename);
+        let output_path = config.checkpoint_blobs_dir.join(&blob_filename);
         let file_num = file_paths.len();
 
         // Build the blob bundle in a blocking thread.
@@ -223,22 +400,37 @@ impl CheckpointBlobPublisher {
 
         // Track blob size metrics.
         let blob_size = result.total_size as i64;
-        self.metrics.blob_size_bytes.observe(blob_size as f64);
-        self.metrics.latest_blob_size_bytes.set(blob_size);
+        metrics.blob_size_bytes.observe(blob_size as f64);
+        metrics.latest_blob_size_bytes.set(blob_size);
 
         // Stop the build timer before starting upload.
         build_timer.observe_duration();
 
-        self.upload_blob_to_walrus(&request, &result).await?;
+        Self::upload_blob_to_walrus(
+            &request,
+            &result,
+            sui_interactive_client,
+            archival_state,
+            config,
+            metrics,
+            contract_package_id,
+            admin_cap_object_id,
+        )
+        .await?;
 
         // Track the latest checkpoint included in uploaded blob.
-        self.metrics
+        metrics
             .latest_uploaded_checkpoint
             .set(request.end_checkpoint as i64);
 
         // Clean up the downloaded checkpoints and uploaded blobs.
-        self.clean_up_downloaded_checkpoints_and_uploaded_blobs(&request, &result)
-            .await?;
+        Self::clean_up_downloaded_checkpoints_and_uploaded_blobs(
+            &request,
+            &result,
+            downloaded_checkpoint_dir,
+            metrics,
+        )
+        .await?;
 
         tracing::info!(
             "successfully cleaned up downloaded checkpoints and uploaded blobs for checkpoints {} to {}",
@@ -250,21 +442,57 @@ impl CheckpointBlobPublisher {
     }
 
     async fn upload_blob_to_walrus(
-        &self,
         request: &BlobBuildRequest,
         result: &BlobBundleBuildResult,
+        sui_interactive_client: SuiInteractiveClient,
+        archival_state: &Arc<ArchivalState>,
+        config: &CheckpointBlobPublisherConfig,
+        metrics: &Arc<Metrics>,
+        contract_package_id: ObjectID,
+        admin_cap_object_id: ObjectID,
+    ) -> Result<()> {
+        // Increment active uploads counter on entry.
+        metrics.active_blob_uploads.inc();
+
+        // Execute the upload and ensure we decrement on exit (both success and error).
+        let result = Self::upload_blob_to_walrus_inner(
+            request,
+            result,
+            sui_interactive_client,
+            archival_state,
+            config,
+            metrics,
+            contract_package_id,
+            admin_cap_object_id,
+        )
+        .await;
+
+        // Decrement active uploads counter on exit.
+        metrics.active_blob_uploads.dec();
+
+        result
+    }
+
+    async fn upload_blob_to_walrus_inner(
+        request: &BlobBuildRequest,
+        result: &BlobBundleBuildResult,
+        sui_interactive_client: SuiInteractiveClient,
+        archival_state: &Arc<ArchivalState>,
+        config: &CheckpointBlobPublisherConfig,
+        metrics: &Arc<Metrics>,
+        contract_package_id: ObjectID,
+        admin_cap_object_id: ObjectID,
     ) -> Result<()> {
         // Track the latency of uploading blobs.
-        let upload_timer = self.metrics.blob_upload_latency_seconds.start_timer();
+        let upload_timer = metrics.blob_upload_latency_seconds.start_timer();
 
         let blob_file_path = result.file_path.clone();
-        let min_retry_duration = self.config.min_retry_duration;
-        let max_retry_duration = self.config.max_retry_duration;
-        let store_epoch_length = self.config.store_epoch_length;
-        let metrics = self.metrics.clone();
+        let min_retry_duration = config.min_retry_duration;
+        let max_retry_duration = config.max_retry_duration;
+        let store_epoch_length = config.store_epoch_length;
+        let metrics_clone = metrics.clone();
 
-        let (blob_id, object_id, end_epoch) = self
-            .sui_interactive_client
+        let (blob_id, object_id, end_epoch) = sui_interactive_client
             .with_walrus_client_async(|client| {
                 Box::pin(async move {
                     upload_blob_to_walrus_with_retry(
@@ -274,7 +502,7 @@ impl CheckpointBlobPublisher {
                         max_retry_duration,
                         store_epoch_length,
                         false,
-                        &metrics,
+                        &metrics_clone,
                     )
                     .await
                 })
@@ -290,14 +518,13 @@ impl CheckpointBlobPublisher {
         }
 
         // Optionally create a shared blob if configured.
-        let (final_object_id, is_shared_blob) = if self.config.create_shared_blobs {
+        let (final_object_id, is_shared_blob) = if config.create_shared_blobs {
             tracing::info!("creating shared blob for blob_id: {}", blob_id);
 
-            let shared_blob_id = self
-                .sui_interactive_client
+            let shared_blob_id = sui_interactive_client
                 .with_wallet_mut_async(|wallet| {
-                    let package_id = self.contract_package_id;
-                    let admin_cap_object_id = self.admin_cap_object_id;
+                    let package_id = contract_package_id;
+                    let admin_cap_object_id_clone = admin_cap_object_id;
                     let blob_object_id = object_id;
 
                     Box::pin(async move {
@@ -308,7 +535,7 @@ impl CheckpointBlobPublisher {
                         let admin_cap_obj = sui_client
                             .read_api()
                             .get_object_with_options(
-                                admin_cap_object_id,
+                                admin_cap_object_id_clone,
                                 sui_sdk::rpc_types::SuiObjectDataOptions::default(),
                             )
                             .await?;
@@ -434,7 +661,7 @@ impl CheckpointBlobPublisher {
         // Wait until all prior checkpoint blobs are created.
         let start_wait_time = std::time::Instant::now();
         loop {
-            let latest_checkpoint = self.archival_state.get_latest_stored_checkpoint()?;
+            let latest_checkpoint = archival_state.get_latest_stored_checkpoint()?;
             if latest_checkpoint.is_none() {
                 // First checkpoint blob, just create it.
                 break;
@@ -453,7 +680,7 @@ impl CheckpointBlobPublisher {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
 
-        self.archival_state.create_new_checkpoint_blob(
+        archival_state.create_new_checkpoint_blob(
             request.start_checkpoint,
             request.end_checkpoint,
             &result.index_map,
@@ -463,13 +690,15 @@ impl CheckpointBlobPublisher {
             request.end_of_epoch,
             is_shared_blob,
         )?;
+
         Ok(())
     }
 
     async fn clean_up_downloaded_checkpoints_and_uploaded_blobs(
-        &self,
         request: &BlobBuildRequest,
         result: &BlobBundleBuildResult,
+        downloaded_checkpoint_dir: &PathBuf,
+        metrics: &Arc<Metrics>,
     ) -> Result<()> {
         tracing::info!(
             "cleaning up downloaded checkpoints and uploaded blobs for checkpoints {} to {}",
@@ -479,12 +708,10 @@ impl CheckpointBlobPublisher {
 
         // Track checkpoints being cleaned up.
         let checkpoints_count = request.end_checkpoint - request.start_checkpoint + 1;
-        self.metrics.checkpoints_cleaned.inc_by(checkpoints_count);
+        metrics.checkpoints_cleaned.inc_by(checkpoints_count);
 
         for checkpoint_num in request.start_checkpoint..=request.end_checkpoint {
-            let checkpoint_file = self
-                .downloaded_checkpoint_dir
-                .join(format!("{checkpoint_num}"));
+            let checkpoint_file = downloaded_checkpoint_dir.join(format!("{checkpoint_num}"));
 
             if let Err(e) = std::fs::remove_file(&checkpoint_file) {
                 // Do not stop if file removal fails.
@@ -497,7 +724,7 @@ impl CheckpointBlobPublisher {
         }
 
         // Track latest checkpoint cleaned up.
-        self.metrics
+        metrics
             .latest_cleaned_checkpoint
             .set(request.end_checkpoint as i64);
 
@@ -510,7 +737,7 @@ impl CheckpointBlobPublisher {
                 e
             );
         } else {
-            self.metrics.local_blobs_removed.inc();
+            metrics.local_blobs_removed.inc();
             tracing::info!("removed uploaded blob: {}", result.file_path.display());
         }
 

@@ -1,6 +1,9 @@
 # Configuration for walrus-sui-archival.
 context: testnet
 client_config_path: ./config/local_testnet_client_config.yaml
+uploader_client_config_path:
+  - ./config/local_testnet_client_config_sub1.yaml
+  - ./config/local_testnet_client_config_sub2.yaml
 thread_pool_size: 8
 rest_api_address: "0.0.0.0:9185"
 metrics_address: "0.0.0.0:9184"

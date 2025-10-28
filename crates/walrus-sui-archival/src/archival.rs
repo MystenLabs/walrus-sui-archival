@@ -104,6 +104,23 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     let walrus_read_client =
         Arc::new(initialize_walrus_read_client(client_config.clone(), &walrus_client).await?);
 
+    let mut uploader_interactive_clients = Vec::new();
+    for uploader_client_config_path in config.uploader_client_config_path.clone() {
+        let (uploader_client_config, _) =
+            ClientConfig::load_from_multi_config(uploader_client_config_path.clone(), None)?;
+        let uploader_walrus_client =
+            initialize_walrus_client(uploader_client_config.clone()).await?;
+        let wallet = WalletContext::new(
+            uploader_client_config
+                .wallet_config
+                .expect("wallet config is required")
+                .path()
+                .expect("wallet config path is required"),
+        )?;
+        let uploader_interactive_client = SuiInteractiveClient::new(uploader_walrus_client, wallet);
+        uploader_interactive_clients.push(uploader_interactive_client);
+    }
+
     // Set walrus read client on archival state for lazy index fetching.
     archival_state.set_walrus_read_client(walrus_read_client.clone());
 
@@ -161,6 +178,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     let blob_publisher = checkpoint_blob_publisher::CheckpointBlobPublisher::new(
         archival_state.clone(),
         sui_interactive_client.clone(),
+        uploader_interactive_clients,
         config.checkpoint_blob_publisher.clone(),
         config
             .checkpoint_downloader
@@ -172,7 +190,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     )
     .await?;
     let blob_publisher_handle =
-        tokio::spawn(async move { blob_publisher.start(blob_publisher_rx).await });
+        tokio::spawn(async move { blob_publisher.start_v2(blob_publisher_rx).await });
 
     // Start the checkpoint downloader based on the configured type.
     let (

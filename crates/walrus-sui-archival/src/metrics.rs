@@ -51,6 +51,8 @@ pub struct Metrics {
     pub latest_cleaned_checkpoint: IntGauge,
     /// Total local blobs removed.
     pub local_blobs_removed: IntCounter,
+    /// Number of active blob uploads in progress.
+    pub active_blob_uploads: IntGauge,
 
     // Blob extension metrics.
     /// Total blob extensions attempted.
@@ -203,6 +205,12 @@ impl Metrics {
             IntCounter::new("local_blobs_removed", "Total local blobs removed")
                 .expect("metrics defined at compile time must be valid");
 
+        let active_blob_uploads = IntGauge::new(
+            "active_blob_uploads",
+            "Number of active blob uploads in progress",
+        )
+        .expect("metrics defined at compile time must be valid");
+
         // Blob extension metrics.
         let blob_extensions_attempted = IntCounter::new(
             "blob_extensions_attempted",
@@ -327,6 +335,9 @@ impl Metrics {
             .register(Box::new(local_blobs_removed.clone()))
             .expect("metrics defined at compile time must be valid");
         registry
+            .register(Box::new(active_blob_uploads.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
             .register(Box::new(blob_extensions_attempted.clone()))
             .expect("metrics defined at compile time must be valid");
         registry
@@ -379,6 +390,7 @@ impl Metrics {
             checkpoints_cleaned,
             latest_cleaned_checkpoint,
             local_blobs_removed,
+            active_blob_uploads,
             blob_extensions_attempted,
             blob_extensions_succeeded,
             blob_extensions_failed,
