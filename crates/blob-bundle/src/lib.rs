@@ -452,7 +452,7 @@ impl BlobBundleBuilder {
 
             // Calculate CRC32 while copying
             let mut hasher = Hasher::new();
-            let mut buffer = [0u8; 8192]; // 8KB buffer for streaming
+            let mut buffer = [0u8; 256 * 1024]; // 256KB buffer for streaming
             let mut bytes_copied = 0u64;
 
             loop {

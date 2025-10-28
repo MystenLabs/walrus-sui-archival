@@ -22,6 +22,15 @@ use crate::{
     util::upload_blob_to_walrus_with_retry,
 };
 
+// Global semaphore to limit concurrent blob builds to 1.
+// This prevents disk I/O contention when building multiple blobs concurrently.
+static BLOB_BUILD_SEMAPHORE: std::sync::OnceLock<tokio::sync::Semaphore> =
+    std::sync::OnceLock::new();
+
+fn get_blob_build_semaphore() -> &'static tokio::sync::Semaphore {
+    BLOB_BUILD_SEMAPHORE.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
+
 /// Message sent from CheckpointMonitor to CheckpointBlobPublisher.
 #[derive(Debug, Clone)]
 pub struct BlobBuildRequest {
@@ -377,8 +386,6 @@ impl CheckpointBlobPublisher {
             return Ok(());
         }
 
-        tracing::info!("bundling {} checkpoint files into a blob", file_paths.len());
-
         // Create the blob bundle.
         let builder = BlobBundleBuilder::new(n_shards);
 
@@ -387,13 +394,32 @@ impl CheckpointBlobPublisher {
             "checkpoint_blob_{}_{}.blob",
             start_checkpoint, end_checkpoint
         );
+
+        tracing::info!(
+            "bundling {} checkpoint files into a blob: {}",
+            file_paths.len(),
+            blob_filename
+        );
+
         let output_path = config.checkpoint_blobs_dir.join(&blob_filename);
         let file_num = file_paths.len();
 
+        // Acquire blob build semaphore to prevent concurrent builds (disk I/O contention).
+        tracing::info!("waiting for blob build semaphore");
+        let _build_permit = get_blob_build_semaphore().acquire().await.unwrap();
+        tracing::info!("acquired blob build semaphore");
+
         // Build the blob bundle in a blocking thread.
-        let result = tokio::task::spawn_blocking(move || builder.build(&file_paths, &output_path))
-            .await
-            .map_err(|e| anyhow::anyhow!("blob build task failed: {}", e))??;
+        let build_result =
+            tokio::task::spawn_blocking(move || builder.build(&file_paths, &output_path)).await;
+
+        // Release the semaphore immediately after build task completes (success or failure).
+        drop(_build_permit);
+        tracing::info!("released blob build semaphore");
+
+        // Now handle the result.
+        let result =
+            build_result.map_err(|e| anyhow::anyhow!("blob build task failed: {}", e))??;
 
         tracing::info!(
             "successfully built blob {} with {} checkpoints, total size {} bytes",
