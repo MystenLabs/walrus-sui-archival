@@ -426,7 +426,7 @@ impl CheckpointBlobPublisher {
 
             // Release the semaphore immediately after build completes.
             drop(_build_permit);
-            tracing::info!("{} released blob build semaphore", worker_name);
+            tracing::info!("{} released in memory blob build semaphore", worker_name);
 
             let result = build_result?;
             let total_size = result.get_total_size();
@@ -440,7 +440,7 @@ impl CheckpointBlobPublisher {
 
             // Release the semaphore immediately after build completes.
             drop(_build_permit);
-            tracing::info!("{} released blob build semaphore", worker_name);
+            tracing::info!("{} released on disk blob build semaphore", worker_name);
 
             let result = build_result?;
             let total_size = result.get_total_size();
@@ -485,16 +485,18 @@ impl CheckpointBlobPublisher {
             .latest_uploaded_checkpoint
             .set(request.end_checkpoint as i64);
 
-        if !config.in_memory_build {
-            // Clean up the downloaded checkpoints and uploaded blobs.
-            Self::clean_up_downloaded_checkpoints_and_uploaded_blobs(
-                &request,
-                &output_path,
-                downloaded_checkpoint_dir,
-                metrics,
-            )
-            .await?;
-        }
+        // Clean up the downloaded checkpoints and uploaded blobs.
+        Self::clean_up_downloaded_checkpoints_and_uploaded_blobs(
+            &request,
+            if !config.in_memory_build {
+                Some(&output_path)
+            } else {
+                None
+            },
+            downloaded_checkpoint_dir,
+            metrics,
+        )
+        .await?;
 
         tracing::info!(
             "{} successfully cleaned up downloaded checkpoints and uploaded blobs for checkpoints {} to {}",
@@ -811,7 +813,7 @@ impl CheckpointBlobPublisher {
 
     async fn clean_up_downloaded_checkpoints_and_uploaded_blobs(
         request: &BlobBuildRequest,
-        file_path: &PathBuf,
+        file_path: Option<&PathBuf>,
         downloaded_checkpoint_dir: &PathBuf,
         metrics: &Arc<Metrics>,
     ) -> Result<()> {
@@ -843,17 +845,19 @@ impl CheckpointBlobPublisher {
             .latest_cleaned_checkpoint
             .set(request.end_checkpoint as i64);
 
-        // Remove the uploaded blob.
-        if let Err(e) = std::fs::remove_file(&file_path) {
-            // Do not stop if file removal fails.
-            tracing::warn!(
-                "failed to remove uploaded blob {}: {}",
-                file_path.display(),
-                e
-            );
-        } else {
-            metrics.local_blobs_removed.inc();
-            tracing::info!("removed uploaded blob: {}", file_path.display());
+        if let Some(file_path) = file_path {
+            // Remove the uploaded blob.
+            if let Err(e) = std::fs::remove_file(&file_path) {
+                // Do not stop if file removal fails.
+                tracing::warn!(
+                    "failed to remove uploaded blob {}: {}",
+                    file_path.display(),
+                    e
+                );
+            } else {
+                metrics.local_blobs_removed.inc();
+                tracing::info!("removed uploaded blob: {}", file_path.display());
+            }
         }
 
         Ok(())

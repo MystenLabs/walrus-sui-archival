@@ -9,6 +9,7 @@ bytes = "1.5"
 crc32fast = "1.3"
 thiserror = "2.0.16"
 tokio.workspace = true
+tracing.workspace = true
 walrus-core.workspace = true
 
 [dev-dependencies]

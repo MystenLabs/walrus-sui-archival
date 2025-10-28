@@ -337,7 +337,7 @@ impl CheckpointBlobExtender {
 
             match result {
                 Ok(end_epoch) => {
-                    tracing::info!(
+                    tracing::debug!(
                         "successfully retrieved extended {} blob {} with new end_epoch: {}",
                         if is_shared_blob { "shared" } else { "regular" },
                         object_id,

@@ -589,8 +589,17 @@ impl BlobBundleBuilder {
         self,
         file_paths: &[P],
     ) -> Result<BlobBundleInMemoryBuildResult> {
+        tracing::info!(
+            "building blob bundle in memory with {} files",
+            file_paths.len()
+        );
         // First, estimate the total size to check against max blob size.
         let estimated_size = Self::estimate_size(file_paths)?;
+
+        tracing::info!(
+            "estimated size of blob bundle in memory: {} bytes",
+            estimated_size
+        );
 
         // Check against max blob size for RS2 encoding.
         let max_size = walrus_core::encoding::max_blob_size_for_n_shards(
@@ -609,6 +618,8 @@ impl BlobBundleBuilder {
         // Pre-allocate a buffer with estimated size.
         let mut output_buffer = Vec::with_capacity(estimated_size as usize);
         let mut cursor = Cursor::new(&mut output_buffer);
+
+        tracing::info!("allocated buffer for blob bundle in memory");
 
         let mut index_entries = Vec::new();
         let mut index_map = Vec::new();
@@ -679,6 +690,8 @@ impl BlobBundleBuilder {
             index_entries.push(entry);
         }
 
+        tracing::info!("built index entries for blob bundle in memory");
+
         // Record where the index starts.
         let index_offset = cursor.position();
 
@@ -693,11 +706,15 @@ impl BlobBundleBuilder {
         let footer = Footer::new(index_offset, index_entries_count);
         footer.write_to(&mut cursor)?;
 
+        tracing::info!("wrote footer for blob bundle in memory");
+
         // Drop the cursor to release the borrow on output_buffer.
         drop(cursor);
 
         // Shrink the buffer to the exact size (remove any extra capacity).
         output_buffer.shrink_to_fit();
+
+        tracing::info!("shrinked buffer for blob bundle in memory");
 
         Ok(BlobBundleInMemoryBuildResult {
             bundle: output_buffer,
