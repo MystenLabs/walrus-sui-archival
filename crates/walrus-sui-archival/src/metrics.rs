@@ -47,6 +47,8 @@ pub struct Metrics {
     pub blobs_uploaded_not_stored: IntCounter,
     /// Total checkpoints cleaned up.
     pub checkpoints_cleaned: IntCounter,
+    /// Total checkpoints cleaned up in memory.
+    pub checkpoints_cleaned_in_memory: IntCounter,
     /// Latest checkpoint cleaned up.
     pub latest_cleaned_checkpoint: IntGauge,
     /// Total local blobs removed.
@@ -197,6 +199,12 @@ impl Metrics {
             IntCounter::new("checkpoints_cleaned", "Total checkpoints cleaned up")
                 .expect("metrics defined at compile time must be valid");
 
+        let checkpoints_cleaned_in_memory = IntCounter::new(
+            "checkpoints_cleaned_in_memory",
+            "Total checkpoints cleaned up in memory",
+        )
+        .expect("metrics defined at compile time must be valid");
+
         let latest_cleaned_checkpoint =
             IntGauge::new("latest_cleaned_checkpoint", "Latest checkpoint cleaned up")
                 .expect("metrics defined at compile time must be valid");
@@ -329,6 +337,9 @@ impl Metrics {
             .register(Box::new(checkpoints_cleaned.clone()))
             .expect("metrics defined at compile time must be valid");
         registry
+            .register(Box::new(checkpoints_cleaned_in_memory.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
             .register(Box::new(latest_cleaned_checkpoint.clone()))
             .expect("metrics defined at compile time must be valid");
         registry
@@ -388,6 +399,7 @@ impl Metrics {
             blobs_uploaded_failed,
             blobs_uploaded_not_stored,
             checkpoints_cleaned,
+            checkpoints_cleaned_in_memory,
             latest_cleaned_checkpoint,
             local_blobs_removed,
             active_blob_uploads,

@@ -4,6 +4,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
+use in_memory_checkpoint_holder::InMemoryCheckpointHolder;
 use sui_sdk::wallet_context::WalletContext;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{select, sync::mpsc};
@@ -174,6 +175,14 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     // Create channel for blob build requests.
     let (blob_publisher_tx, blob_publisher_rx) = mpsc::channel::<BlobBuildRequest>(2);
 
+    // Create in-memory checkpoint holder if download_to_memory is enabled.
+    let in_memory_holder = if config.download_to_memory {
+        tracing::info!("download_to_memory is enabled, creating in-memory checkpoint holder");
+        Some(InMemoryCheckpointHolder::new())
+    } else {
+        None
+    };
+
     // Start the checkpoint blob publisher.
     let blob_publisher = checkpoint_blob_publisher::CheckpointBlobPublisher::new(
         archival_state.clone(),
@@ -187,6 +196,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         metrics.clone(),
         config.archival_state_snapshot.contract_package_id,
         config.archival_state_snapshot.admin_cap_object_id,
+        in_memory_holder.clone(),
     )
     .await?;
     let blob_publisher_handle =
@@ -203,6 +213,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
             let downloader = checkpoint_downloader::CheckpointDownloader::new(
                 downloader_config.clone(),
                 metrics.clone(),
+                in_memory_holder.clone(),
             );
             let (receiver, pause_tx, handle) = downloader.start(initial_checkpoint).await?;
             (receiver, Some(pause_tx), None, handle)
@@ -212,6 +223,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
                 ingestion_service_checkpoint_downloader::IngestionServiceCheckpointDownloader::new(
                     downloader_config.clone(),
                     metrics.clone(),
+                    in_memory_holder.clone(),
                 );
             let (receiver, watermark_tx, handle) = downloader.start(initial_checkpoint).await?;
             (receiver, None, Some(watermark_tx), handle)

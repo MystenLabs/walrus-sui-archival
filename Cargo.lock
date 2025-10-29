@@ -1386,6 +1386,8 @@ dependencies = [
  "anyhow",
  "bytes",
  "crc32fast",
+ "in-memory-checkpoint-holder",
+ "sui-types",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
@@ -3943,6 +3945,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.106",
+]
+
+[[package]]
+name = "in-memory-checkpoint-holder"
+version = "0.1.0"
+dependencies = [
+ "sui-types",
+ "tokio",
 ]
 
 [[package]]
@@ -10687,6 +10697,7 @@ dependencies = [
  "const-str 0.5.7",
  "git-version",
  "humantime-serde",
+ "in-memory-checkpoint-holder",
  "mockito",
  "mysten-metrics",
  "parquet",

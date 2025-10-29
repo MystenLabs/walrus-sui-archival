@@ -10,6 +10,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use blob_bundle::{BlobBundleBuilder, BlobBundleBuilderTrait};
+use in_memory_checkpoint_holder::InMemoryCheckpointHolder;
 use sui_types::{
     Identifier,
     base_types::ObjectID,
@@ -58,6 +59,7 @@ pub struct CheckpointBlobPublisher {
     metrics: Arc<Metrics>,
     contract_package_id: ObjectID,
     admin_cap_object_id: ObjectID,
+    in_memory_checkpoint_holder: Option<InMemoryCheckpointHolder>,
 }
 
 impl CheckpointBlobPublisher {
@@ -71,6 +73,7 @@ impl CheckpointBlobPublisher {
         metrics: Arc<Metrics>,
         contract_package_id: ObjectID,
         admin_cap_object_id: ObjectID,
+        in_memory_checkpoint_holder: Option<InMemoryCheckpointHolder>,
     ) -> Result<Self> {
         let n_shards = sui_interactive_client
             .with_walrus_client_async(|client| {
@@ -90,6 +93,7 @@ impl CheckpointBlobPublisher {
             metrics,
             contract_package_id,
             admin_cap_object_id,
+            in_memory_checkpoint_holder,
         })
     }
 
@@ -171,6 +175,7 @@ impl CheckpointBlobPublisher {
                             &self_clone.metrics,
                             self_clone.contract_package_id,
                             self_clone.admin_cap_object_id,
+                            self_clone.in_memory_checkpoint_holder.clone(),
                         )
                         .await;
 
@@ -244,6 +249,7 @@ impl CheckpointBlobPublisher {
             let n_shards = self.n_shards;
             let worker_rx = shared_rx.clone();
             let main_sui_interactive_client = self.sui_interactive_client.clone();
+            let in_memory_checkpoint_holder = self.in_memory_checkpoint_holder.clone();
 
             // Spawn worker task.
             worker_handles.spawn(async move {
@@ -271,6 +277,7 @@ impl CheckpointBlobPublisher {
                         &metrics,
                         contract_package_id,
                         admin_cap_object_id,
+                        in_memory_checkpoint_holder.clone(),
                     )
                     .await;
 
@@ -367,6 +374,7 @@ impl CheckpointBlobPublisher {
         metrics: &Arc<Metrics>,
         contract_package_id: ObjectID,
         admin_cap_object_id: ObjectID,
+        in_memory_checkpoint_holder: Option<InMemoryCheckpointHolder>,
     ) -> Result<()> {
         // Track the latency of building blobs.
         let build_timer = metrics.blob_build_latency_seconds.start_timer();
@@ -426,35 +434,54 @@ impl CheckpointBlobPublisher {
         tracing::info!("{} acquired blob build semaphore", worker_name);
 
         // Build the blob bundle and extract common data.
-        let (total_size, index_map, data) = if config.in_memory_build {
-            let build_result = builder
-                .build_in_memory(&file_paths)
-                .context("build blob bundle in memory");
+        let (total_size, index_map, data) =
+            if let Some(ref in_memory_checkpoint_holder) = in_memory_checkpoint_holder {
+                let build_result = builder
+                    .build_in_memory_from_holder(
+                        in_memory_checkpoint_holder,
+                        start_checkpoint,
+                        end_checkpoint,
+                    )
+                    .await
+                    .context("build blob bundle in memory from holder");
 
-            // Release the semaphore immediately after build completes.
-            drop(_build_permit);
-            tracing::info!("{} released in memory blob build semaphore", worker_name);
+                // Release the semaphore immediately after build completes.
+                drop(_build_permit);
+                tracing::info!("{} released in memory blob build semaphore", worker_name);
+                let result = build_result?;
+                let total_size = result.get_total_size();
+                let index_map = result.get_index_map();
+                let data = result.get_data().await?;
+                (total_size, index_map, data)
+            } else if config.in_memory_build {
+                let build_result = builder
+                    .build_in_memory(&file_paths)
+                    .context("build blob bundle in memory");
 
-            let result = build_result?;
-            let total_size = result.get_total_size();
-            let index_map = result.get_index_map();
-            let data = result.get_data().await?;
-            (total_size, index_map, data)
-        } else {
-            let build_result = builder
-                .build(&file_paths, &output_path)
-                .context("build blob bundle on disk");
+                // Release the semaphore immediately after build completes.
+                drop(_build_permit);
+                tracing::info!("{} released in memory blob build semaphore", worker_name);
 
-            // Release the semaphore immediately after build completes.
-            drop(_build_permit);
-            tracing::info!("{} released on disk blob build semaphore", worker_name);
+                let result = build_result?;
+                let total_size = result.get_total_size();
+                let index_map = result.get_index_map();
+                let data = result.get_data().await?;
+                (total_size, index_map, data)
+            } else {
+                let build_result = builder
+                    .build(&file_paths, &output_path)
+                    .context("build blob bundle on disk");
 
-            let result = build_result?;
-            let total_size = result.get_total_size();
-            let index_map = result.get_index_map();
-            let data = result.get_data().await?;
-            (total_size, index_map, data)
-        };
+                // Release the semaphore immediately after build completes.
+                drop(_build_permit);
+                tracing::info!("{} released on disk blob build semaphore", worker_name);
+
+                let result = build_result?;
+                let total_size = result.get_total_size();
+                let index_map = result.get_index_map();
+                let data = result.get_data().await?;
+                (total_size, index_map, data)
+            };
 
         tracing::info!(
             "{} successfully built blob {} with {} checkpoints, total size {} bytes",
@@ -502,6 +529,7 @@ impl CheckpointBlobPublisher {
             },
             downloaded_checkpoint_dir,
             metrics,
+            in_memory_checkpoint_holder.clone(),
         )
         .await?;
 
@@ -825,6 +853,7 @@ impl CheckpointBlobPublisher {
         file_path: Option<&PathBuf>,
         downloaded_checkpoint_dir: &Path,
         metrics: &Arc<Metrics>,
+        in_memory_checkpoint_holder: Option<InMemoryCheckpointHolder>,
     ) -> Result<()> {
         tracing::info!(
             "cleaning up downloaded checkpoints and uploaded blobs for checkpoints {} to {}",
@@ -832,20 +861,29 @@ impl CheckpointBlobPublisher {
             request.end_checkpoint
         );
 
-        // Track checkpoints being cleaned up.
         let checkpoints_count = request.end_checkpoint - request.start_checkpoint + 1;
-        metrics.checkpoints_cleaned.inc_by(checkpoints_count);
+        if let Some(in_memory_checkpoint_holder) = in_memory_checkpoint_holder {
+            metrics
+                .checkpoints_cleaned_in_memory
+                .inc_by(checkpoints_count);
+            for checkpoint_num in request.start_checkpoint..=request.end_checkpoint {
+                in_memory_checkpoint_holder.remove(checkpoint_num).await;
+            }
+        } else {
+            // Track checkpoints being cleaned up.
+            metrics.checkpoints_cleaned.inc_by(checkpoints_count);
 
-        for checkpoint_num in request.start_checkpoint..=request.end_checkpoint {
-            let checkpoint_file = downloaded_checkpoint_dir.join(format!("{checkpoint_num}"));
+            for checkpoint_num in request.start_checkpoint..=request.end_checkpoint {
+                let checkpoint_file = downloaded_checkpoint_dir.join(format!("{checkpoint_num}"));
 
-            if let Err(e) = std::fs::remove_file(&checkpoint_file) {
-                // Do not stop if file removal fails.
-                tracing::warn!(
-                    "failed to remove checkpoint file {}: {}",
-                    checkpoint_file.display(),
-                    e
-                );
+                if let Err(e) = std::fs::remove_file(&checkpoint_file) {
+                    // Do not stop if file removal fails.
+                    tracing::warn!(
+                        "failed to remove checkpoint file {}: {}",
+                        checkpoint_file.display(),
+                        e
+                    );
+                }
             }
         }
 

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_channel::Receiver;
+use in_memory_checkpoint_holder::InMemoryCheckpointHolder;
 use sui_indexer_alt_framework::ingestion::IngestionService;
 use sui_storage::blob::Blob;
 use sui_types::{
@@ -37,6 +38,7 @@ pub struct IngestionServiceCheckpointDownloadWorker {
     tx: sync::mpsc::Sender<CheckpointInfo>,
     config: IngestionServiceCheckpointDownloaderConfig,
     metrics: Arc<Metrics>,
+    in_memory_holder: Option<InMemoryCheckpointHolder>,
 }
 
 impl IngestionServiceCheckpointDownloadWorker {
@@ -46,6 +48,7 @@ impl IngestionServiceCheckpointDownloadWorker {
         tx: sync::mpsc::Sender<CheckpointInfo>,
         config: IngestionServiceCheckpointDownloaderConfig,
         metrics: Arc<Metrics>,
+        in_memory_holder: Option<InMemoryCheckpointHolder>,
     ) -> Self {
         Self {
             worker_id,
@@ -53,6 +56,7 @@ impl IngestionServiceCheckpointDownloadWorker {
             tx,
             config,
             metrics,
+            in_memory_holder,
         }
     }
 
@@ -154,28 +158,37 @@ impl IngestionServiceCheckpointDownloadWorker {
         // Drop checkpoint data to free memory.
         drop(checkpoint_data);
 
-        // Write checkpoint to disk atomically.
-        // First write to a temporary file, then rename to final name.
-        let checkpoint_file = self
-            .config
-            .downloaded_checkpoint_dir
-            .join(format!("{checkpoint_number}"));
-        let temp_file = self
-            .config
-            .downloaded_checkpoint_dir
-            .join(format!("{checkpoint_number}.tmp"));
+        // Store checkpoint either in memory or on disk.
+        if let Some(ref holder) = self.in_memory_holder {
+            // Store in memory.
+            holder.store(checkpoint_number, bytes.to_vec()).await;
+            tracing::debug!(checkpoint_number, "checkpoint stored in memory");
+        } else {
+            // Write checkpoint to disk atomically.
+            // First write to a temporary file, then rename to final name.
+            let checkpoint_file = self
+                .config
+                .downloaded_checkpoint_dir
+                .join(format!("{checkpoint_number}"));
+            let temp_file = self
+                .config
+                .downloaded_checkpoint_dir
+                .join(format!("{checkpoint_number}.tmp"));
 
-        // Write to temporary file.
-        fs::write(&temp_file, &bytes).await?;
+            // Write to temporary file.
+            fs::write(&temp_file, &bytes).await?;
 
-        // Atomically rename to final file.
-        // This ensures the file is either fully written or not present at all.
-        fs::rename(&temp_file, &checkpoint_file).await?;
+            // Atomically rename to final file.
+            // This ensures the file is either fully written or not present at all.
+            fs::rename(&temp_file, &checkpoint_file).await?;
+
+            tracing::debug!(checkpoint_number, "checkpoint written to disk");
+        }
 
         // Update metrics.
         self.metrics.total_downloaded_checkpoints.inc();
 
-        tracing::debug!(checkpoint_number, "checkpoint write to disk successful");
+        tracing::debug!(checkpoint_number, "checkpoint write successful");
         Ok(checkpoint_info)
     }
 }
@@ -185,15 +198,21 @@ pub struct IngestionServiceCheckpointDownloader {
     worker_handles: Vec<task::JoinHandle<()>>,
     config: IngestionServiceCheckpointDownloaderConfig,
     metrics: Arc<Metrics>,
+    in_memory_holder: Option<InMemoryCheckpointHolder>,
 }
 
 impl IngestionServiceCheckpointDownloader {
-    pub fn new(config: IngestionServiceCheckpointDownloaderConfig, metrics: Arc<Metrics>) -> Self {
+    pub fn new(
+        config: IngestionServiceCheckpointDownloaderConfig,
+        metrics: Arc<Metrics>,
+        in_memory_holder: Option<InMemoryCheckpointHolder>,
+    ) -> Self {
         Self {
             num_workers: config.num_workers,
             worker_handles: Vec::new(),
             config,
             metrics,
+            in_memory_holder,
         }
     }
 
@@ -272,6 +291,7 @@ impl IngestionServiceCheckpointDownloader {
             let worker_rx = download_rx.clone();
             let worker_tx = result_tx.clone();
             let metrics = self.metrics.clone();
+            let in_memory_holder = self.in_memory_holder.clone();
 
             let worker = IngestionServiceCheckpointDownloadWorker::new(
                 worker_id,
@@ -279,6 +299,7 @@ impl IngestionServiceCheckpointDownloader {
                 worker_tx,
                 self.config.clone(),
                 metrics,
+                in_memory_holder,
             );
 
             let handle = tokio::spawn(async move {
@@ -373,7 +394,7 @@ mod tests {
             ingestion_config: IngestionConfig::default(),
         };
         let downloader =
-            IngestionServiceCheckpointDownloader::new(config.clone(), create_test_metrics());
+            IngestionServiceCheckpointDownloader::new(config.clone(), create_test_metrics(), None);
 
         assert_eq!(downloader.num_workers, 4);
         assert_eq!(

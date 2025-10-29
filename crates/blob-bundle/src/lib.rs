@@ -721,6 +721,116 @@ impl BlobBundleBuilder {
             index_map,
         })
     }
+
+    /// Build the blob bundle entirely in memory from checkpoints stored in an InMemoryCheckpointHolder.
+    /// Returns the complete blob bundle as a Vec<u8> along with the index map.
+    ///
+    /// # Arguments
+    /// * `holder` - The in-memory checkpoint holder containing BCS-encoded checkpoint data
+    /// * `begin_checkpoint` - The starting checkpoint number (inclusive)
+    /// * `end_checkpoint` - The ending checkpoint number (inclusive)
+    ///
+    /// # Returns
+    /// * `BlobBundleInMemoryBuildResult` - The blob bundle bytes and index map
+    pub async fn build_in_memory_from_holder(
+        self,
+        holder: &in_memory_checkpoint_holder::InMemoryCheckpointHolder,
+        begin_checkpoint: sui_types::messages_checkpoint::CheckpointSequenceNumber,
+        end_checkpoint: sui_types::messages_checkpoint::CheckpointSequenceNumber,
+    ) -> Result<BlobBundleInMemoryBuildResult> {
+        tracing::info!(
+            "building blob bundle in memory from holder with checkpoints {} to {}",
+            begin_checkpoint,
+            end_checkpoint
+        );
+
+        // TODO: add back size check so that we don't end up creating blobs larger than walrus can
+        // support.
+
+        // Pre-allocate a buffer with fixed size of 3.5GB.
+        const BUFFER_SIZE: usize = 3_500_000_000; // 3.5GB
+        let mut output_buffer = Vec::with_capacity(BUFFER_SIZE);
+        let mut cursor = Cursor::new(&mut output_buffer);
+
+        tracing::info!("allocated 3.5GB buffer for blob bundle in memory from holder");
+
+        let mut index_entries = Vec::new();
+        let mut index_map = Vec::new();
+
+        // Write header.
+        let header = Header::new();
+        header.write_to(&mut cursor)?;
+
+        // Write each checkpoint data to the buffer, building index as we go.
+        for checkpoint_num in begin_checkpoint..=end_checkpoint {
+            // Get the current position in the output buffer (this is the offset for this entry).
+            let offset = cursor.position();
+
+            // Get checkpoint data from holder.
+            let data = holder.get(checkpoint_num).await.ok_or_else(|| {
+                BlobBundleError::Io(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("checkpoint {} not found in holder", checkpoint_num),
+                ))
+            })?;
+
+            let data_size = data.len() as u64;
+
+            // Calculate CRC32.
+            let mut hasher = Hasher::new();
+            hasher.update(&data);
+            let crc32 = hasher.finalize();
+
+            // Write data to cursor.
+            cursor.write_all(&data)?;
+
+            // Create ID from checkpoint number.
+            let id = checkpoint_num.to_string();
+
+            // Add to index map.
+            index_map.push((id.clone(), (offset, data_size)));
+
+            // Create index entry.
+            let entry = IndexEntry {
+                id,
+                offset,
+                length: data_size,
+                crc32,
+            };
+            index_entries.push(entry);
+        }
+
+        tracing::info!("built index entries for blob bundle in memory from holder");
+
+        // Record where the index starts.
+        let index_offset = cursor.position();
+
+        // Write index entries.
+        for entry in &index_entries {
+            entry.write_to(&mut cursor)?;
+        }
+
+        // Write footer.
+        let index_entries_count =
+            u32::try_from(index_entries.len()).map_err(|_| BlobBundleError::InvalidFormat)?;
+        let footer = Footer::new(index_offset, index_entries_count);
+        footer.write_to(&mut cursor)?;
+
+        tracing::info!("wrote footer for blob bundle in memory from holder");
+
+        // Drop the cursor to release the borrow on output_buffer.
+        // drop(cursor);
+
+        // Shrink the buffer to the exact size (remove any extra capacity).
+        output_buffer.shrink_to_fit();
+
+        tracing::info!("shrinked buffer for blob bundle in memory from holder");
+
+        Ok(BlobBundleInMemoryBuildResult {
+            bundle: output_buffer,
+            index_map,
+        })
+    }
 }
 
 impl Default for BlobBundleBuilder {
@@ -1929,5 +2039,232 @@ mod tests {
                 file_name
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_build_in_memory_from_holder() {
+        // Create in-memory checkpoint holder.
+        let holder = in_memory_checkpoint_holder::InMemoryCheckpointHolder::new();
+
+        // Store some test checkpoint data.
+        let checkpoint_1_data = b"checkpoint 1 data with some content";
+        let checkpoint_2_data = b"checkpoint 2 data with different content";
+        let checkpoint_3_data = b"checkpoint 3 data with even more content here";
+
+        holder.store(100, checkpoint_1_data.to_vec()).await;
+        holder.store(101, checkpoint_2_data.to_vec()).await;
+        holder.store(102, checkpoint_3_data.to_vec()).await;
+
+        // Build blob bundle from holder.
+        let builder = BlobBundleBuilder::new(NonZeroU16::new(10).expect("10 is non-zero"));
+        let result = builder
+            .build_in_memory_from_holder(&holder, 100, 102)
+            .await
+            .expect("Failed to build bundle from holder");
+
+        // Verify index map.
+        assert_eq!(result.index_map.len(), 3);
+        assert_eq!(result.index_map[0].0, "100");
+        assert_eq!(result.index_map[1].0, "101");
+        assert_eq!(result.index_map[2].0, "102");
+
+        // Verify bundle bytes are not empty.
+        assert!(!result.bundle.is_empty());
+
+        // Read blob bundle from memory.
+        let reader = BlobBundleReader::new(Bytes::from(result.bundle))
+            .expect("Failed to create reader from bundle");
+
+        // Verify all entries.
+        assert_eq!(
+            reader.get("100").expect("Failed to get checkpoint 100"),
+            Bytes::from(checkpoint_1_data.to_vec())
+        );
+        assert_eq!(
+            reader.get("101").expect("Failed to get checkpoint 101"),
+            Bytes::from(checkpoint_2_data.to_vec())
+        );
+        assert_eq!(
+            reader.get("102").expect("Failed to get checkpoint 102"),
+            Bytes::from(checkpoint_3_data.to_vec())
+        );
+
+        // Verify IDs.
+        let mut ids = reader.list_ids().expect("Failed to list IDs");
+        ids.sort();
+        assert_eq!(ids, vec!["100", "101", "102"]);
+    }
+
+    #[tokio::test]
+    async fn test_build_in_memory_from_holder_missing_checkpoint() {
+        // Create in-memory checkpoint holder.
+        let holder = in_memory_checkpoint_holder::InMemoryCheckpointHolder::new();
+
+        // Store only some checkpoints.
+        holder.store(100, b"checkpoint 100".to_vec()).await;
+        holder.store(102, b"checkpoint 102".to_vec()).await;
+        // Missing checkpoint 101
+
+        // Try to build blob bundle from holder (should fail).
+        let builder = BlobBundleBuilder::new(NonZeroU16::new(10).expect("10 is non-zero"));
+        let result = builder.build_in_memory_from_holder(&holder, 100, 102).await;
+
+        // Should fail because checkpoint 101 is missing.
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            BlobBundleError::Io(io_err) => {
+                assert_eq!(io_err.kind(), std::io::ErrorKind::NotFound);
+                assert!(io_err.to_string().contains("checkpoint 101 not found"));
+            }
+            _ => panic!("Expected IO error for missing checkpoint"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_in_memory_from_holder_no_padding() {
+        // Create in-memory checkpoint holder.
+        let holder = in_memory_checkpoint_holder::InMemoryCheckpointHolder::new();
+
+        // Store test checkpoint data.
+        holder.store(50, b"test data 1".to_vec()).await;
+        holder.store(51, b"test data 2".to_vec()).await;
+
+        // Build blob bundle from holder.
+        let builder = BlobBundleBuilder::new(NonZeroU16::new(100).unwrap());
+        let result = builder
+            .build_in_memory_from_holder(&holder, 50, 51)
+            .await
+            .expect("Failed to build bundle from holder");
+
+        // Verify that the buffer has no padding: capacity should equal length.
+        assert_eq!(
+            result.bundle.capacity(),
+            result.bundle.len(),
+            "buffer capacity ({}) should equal length ({}) with no padding",
+            result.bundle.capacity(),
+            result.bundle.len()
+        );
+
+        // Verify the bundle is valid and can be read.
+        let reader = BlobBundleReader::new(Bytes::from(result.bundle))
+            .expect("Failed to create reader from memory");
+
+        assert_eq!(
+            reader.get("50").expect("Failed to get checkpoint 50"),
+            Bytes::from("test data 1")
+        );
+        assert_eq!(
+            reader.get("51").expect("Failed to get checkpoint 51"),
+            Bytes::from("test data 2")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_in_memory_from_holder_vs_build_to_file() {
+        // Test that build_in_memory_from_holder produces the same output as building to file.
+
+        // Create temporary directory for test files.
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create test checkpoint data files.
+        let checkpoint_1_data = b"checkpoint 1 data content here";
+        let checkpoint_2_data = b"checkpoint 2 data with different content";
+        let checkpoint_3_data = b"checkpoint 3 data with even more content";
+
+        let file1_path = temp_dir.path().join("100");
+        let file2_path = temp_dir.path().join("101");
+        let file3_path = temp_dir.path().join("102");
+
+        fs::write(&file1_path, checkpoint_1_data).expect("Failed to write file1");
+        fs::write(&file2_path, checkpoint_2_data).expect("Failed to write file2");
+        fs::write(&file3_path, checkpoint_3_data).expect("Failed to write file3");
+
+        // Build blob bundle to file.
+        let builder1 = BlobBundleBuilder::new(NonZeroU16::new(10).expect("10 is non-zero"));
+        let output_path = temp_dir.path().join("bundle.blob");
+        let file_result = builder1
+            .build(&[file1_path, file2_path, file3_path], &output_path)
+            .expect("Failed to build to file");
+
+        // Read file bundle.
+        let file_bundle = fs::read(&output_path).expect("Failed to read file bundle");
+
+        // Create in-memory checkpoint holder and store the same data.
+        let holder = in_memory_checkpoint_holder::InMemoryCheckpointHolder::new();
+        holder.store(100, checkpoint_1_data.to_vec()).await;
+        holder.store(101, checkpoint_2_data.to_vec()).await;
+        holder.store(102, checkpoint_3_data.to_vec()).await;
+
+        // Build blob bundle from holder.
+        let builder2 = BlobBundleBuilder::new(NonZeroU16::new(10).expect("10 is non-zero"));
+        let memory_result = builder2
+            .build_in_memory_from_holder(&holder, 100, 102)
+            .await
+            .expect("Failed to build from holder");
+
+        // Verify bundles are identical.
+        assert_eq!(
+            memory_result.bundle, file_bundle,
+            "in-memory bundle should match file bundle"
+        );
+
+        // Verify index maps are identical.
+        assert_eq!(
+            memory_result.index_map, file_result.index_map,
+            "index maps should match"
+        );
+
+        // Verify both can be read correctly.
+        let memory_reader = BlobBundleReader::new(Bytes::from(memory_result.bundle))
+            .expect("Failed to create reader from memory");
+        let file_reader = BlobBundleReader::new(Bytes::from(file_bundle))
+            .expect("Failed to create reader from file");
+
+        // Verify all entries match.
+        assert_eq!(
+            memory_reader
+                .get("100")
+                .expect("Failed to get checkpoint 100"),
+            file_reader
+                .get("100")
+                .expect("Failed to get checkpoint 100")
+        );
+        assert_eq!(
+            memory_reader
+                .get("101")
+                .expect("Failed to get checkpoint 101"),
+            file_reader
+                .get("101")
+                .expect("Failed to get checkpoint 101")
+        );
+        assert_eq!(
+            memory_reader
+                .get("102")
+                .expect("Failed to get checkpoint 102"),
+            file_reader
+                .get("102")
+                .expect("Failed to get checkpoint 102")
+        );
+
+        // Verify the data content is correct.
+        assert_eq!(
+            memory_reader
+                .get("100")
+                .expect("Failed to get checkpoint 100"),
+            Bytes::from(checkpoint_1_data.to_vec())
+        );
+        assert_eq!(
+            memory_reader
+                .get("101")
+                .expect("Failed to get checkpoint 101"),
+            Bytes::from(checkpoint_2_data.to_vec())
+        );
+        assert_eq!(
+            memory_reader
+                .get("102")
+                .expect("Failed to get checkpoint 102"),
+            Bytes::from(checkpoint_3_data.to_vec())
+        );
     }
 }

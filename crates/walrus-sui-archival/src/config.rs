@@ -62,6 +62,11 @@ pub struct Config {
 
     /// Configuration for the archival state snapshot.
     pub archival_state_snapshot: ArchivalStateSnapshotConfig,
+
+    /// Whether to store checkpoints in memory instead of writing to disk.
+    /// Default: false.
+    #[serde(default = "default_download_to_memory")]
+    pub download_to_memory: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,6 +301,10 @@ fn default_metrics_address() -> SocketAddr {
 
 fn default_in_memory_build() -> bool {
     true
+}
+
+fn default_download_to_memory() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

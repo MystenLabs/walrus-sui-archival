@@ -5,6 +5,7 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use async_channel::Receiver;
+use in_memory_checkpoint_holder::InMemoryCheckpointHolder;
 use reqwest::Url;
 use sui_storage::blob::Blob;
 use sui_types::{
@@ -43,6 +44,7 @@ pub struct CheckpointDownloadWorker {
     config: CheckpointDownloaderConfig,
     client: reqwest::Client,
     metrics: Arc<Metrics>,
+    in_memory_holder: Option<InMemoryCheckpointHolder>,
 }
 
 impl CheckpointDownloadWorker {
@@ -53,6 +55,7 @@ impl CheckpointDownloadWorker {
         bucket_base_url: Url,
         config: CheckpointDownloaderConfig,
         metrics: Arc<Metrics>,
+        in_memory_holder: Option<InMemoryCheckpointHolder>,
     ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -66,6 +69,7 @@ impl CheckpointDownloadWorker {
             config,
             client,
             metrics,
+            in_memory_holder,
         }
     }
 
@@ -152,23 +156,32 @@ impl CheckpointDownloadWorker {
                         checkpoint_byte_size: bytes.len(),
                     };
 
-                    // Write checkpoint to disk atomically.
-                    // First write to a temporary file, then rename to final name.
-                    let checkpoint_file = self
-                        .config
-                        .downloaded_checkpoint_dir
-                        .join(format!("{checkpoint_number}"));
-                    let temp_file = self
-                        .config
-                        .downloaded_checkpoint_dir
-                        .join(format!("{checkpoint_number}.tmp"));
+                    // Store checkpoint either in memory or on disk.
+                    if let Some(ref holder) = self.in_memory_holder {
+                        // Store in memory.
+                        holder.store(checkpoint_number, bytes).await;
+                        tracing::debug!(checkpoint_number, "checkpoint stored in memory");
+                    } else {
+                        // Write checkpoint to disk atomically.
+                        // First write to a temporary file, then rename to final name.
+                        let checkpoint_file = self
+                            .config
+                            .downloaded_checkpoint_dir
+                            .join(format!("{checkpoint_number}"));
+                        let temp_file = self
+                            .config
+                            .downloaded_checkpoint_dir
+                            .join(format!("{checkpoint_number}.tmp"));
 
-                    // Write to temporary file.
-                    fs::write(&temp_file, &bytes).await?;
+                        // Write to temporary file.
+                        fs::write(&temp_file, &bytes).await?;
 
-                    // Atomically rename to final file.
-                    // This ensures the file is either fully written or not present at all.
-                    fs::rename(&temp_file, &checkpoint_file).await?;
+                        // Atomically rename to final file.
+                        // This ensures the file is either fully written or not present at all.
+                        fs::rename(&temp_file, &checkpoint_file).await?;
+
+                        tracing::debug!(checkpoint_number, "checkpoint written to disk");
+                    }
 
                     // Update metrics.
                     self.metrics.total_downloaded_checkpoints.inc();
@@ -235,16 +248,22 @@ pub struct CheckpointDownloader {
     bucket_base_url: Url,
     config: CheckpointDownloaderConfig,
     metrics: Arc<Metrics>,
+    in_memory_holder: Option<InMemoryCheckpointHolder>,
 }
 
 impl CheckpointDownloader {
-    pub fn new(config: CheckpointDownloaderConfig, metrics: Arc<Metrics>) -> Self {
+    pub fn new(
+        config: CheckpointDownloaderConfig,
+        metrics: Arc<Metrics>,
+        in_memory_holder: Option<InMemoryCheckpointHolder>,
+    ) -> Self {
         Self {
             num_workers: config.num_workers,
             worker_handles: Vec::new(),
             bucket_base_url: Url::parse(&config.bucket_base_url).expect("invalid bucket base URL"),
             config,
             metrics,
+            in_memory_holder,
         }
     }
 
@@ -304,6 +323,7 @@ impl CheckpointDownloader {
             let worker_tx = result_tx.clone();
             let bucket_base_url = self.bucket_base_url.clone();
             let metrics = self.metrics.clone();
+            let in_memory_holder = self.in_memory_holder.clone();
 
             let worker = CheckpointDownloadWorker::new(
                 worker_id,
@@ -312,6 +332,7 @@ impl CheckpointDownloader {
                 bucket_base_url,
                 self.config.clone(),
                 metrics,
+                in_memory_holder,
             );
 
             let handle = tokio::spawn(async move {
@@ -466,6 +487,7 @@ mod tests {
             Url::parse(&server.url()).unwrap(),
             config,
             create_test_metrics(),
+            None,
         );
 
         // Send checkpoint number to download.
@@ -540,6 +562,7 @@ mod tests {
             Url::parse(&server.url()).unwrap(),
             config,
             create_test_metrics(),
+            None,
         );
 
         // Send checkpoint number to download.
@@ -605,6 +628,7 @@ mod tests {
             Url::parse(&server.url()).unwrap(),
             config,
             create_test_metrics(),
+            None,
         );
 
         // Send multiple checkpoint numbers.
@@ -641,7 +665,7 @@ mod tests {
             min_download_retry_wait: Duration::from_millis(100),
             max_download_retry_wait: Duration::from_secs(10),
         };
-        let downloader = CheckpointDownloader::new(config, create_test_metrics());
+        let downloader = CheckpointDownloader::new(config, create_test_metrics(), None);
 
         assert_eq!(downloader.num_workers, 4);
         assert_eq!(
@@ -691,7 +715,7 @@ mod tests {
             min_download_retry_wait: Duration::from_millis(10),
             max_download_retry_wait: Duration::from_millis(100),
         };
-        let downloader = CheckpointDownloader::new(config, create_test_metrics());
+        let downloader = CheckpointDownloader::new(config, create_test_metrics(), None);
 
         // Start downloader (it will stop after checkpoint 5 based on the receiver logic).
         let (_result_rx, _pause_tx, driver_handle) = downloader
@@ -778,6 +802,7 @@ mod tests {
             Url::parse(&server.url()).unwrap(),
             config,
             create_test_metrics(),
+            None,
         );
 
         // Send checkpoint number to download.
@@ -832,7 +857,7 @@ mod tests {
             min_download_retry_wait: Duration::from_millis(10),
             max_download_retry_wait: Duration::from_millis(100),
         };
-        let downloader = CheckpointDownloader::new(config, create_test_metrics());
+        let downloader = CheckpointDownloader::new(config, create_test_metrics(), None);
 
         // Start downloader.
         let (_result_rx, _pause_tx, driver_handle) = downloader
