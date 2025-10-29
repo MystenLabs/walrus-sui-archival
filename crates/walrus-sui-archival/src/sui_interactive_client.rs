@@ -135,7 +135,7 @@ impl Clone for SuiInteractiveClient {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            active_address: self.active_address.clone(),
+            active_address: self.active_address,
         }
     }
 }

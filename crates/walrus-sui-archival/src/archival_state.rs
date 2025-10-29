@@ -478,9 +478,7 @@ impl ArchivalState {
         from_checkpoint: CheckpointSequenceNumber,
     ) -> Result<usize> {
         if self.read_only {
-            return Err(anyhow::anyhow!(
-                "cannot remove entries in read-only mode"
-            ));
+            return Err(anyhow::anyhow!("cannot remove entries in read-only mode"));
         }
 
         tracing::info!(

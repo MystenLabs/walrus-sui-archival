@@ -349,7 +349,7 @@ impl BlobBundleBuilderTrait for BlobBundleBuildResult {
     async fn get_data(self) -> Result<Vec<u8>> {
         tokio::fs::read(self.file_path.clone())
             .await
-            .map_err(|e| BlobBundleError::Io(e))
+            .map_err(BlobBundleError::Io)
     }
 }
 
@@ -709,7 +709,7 @@ impl BlobBundleBuilder {
         tracing::info!("wrote footer for blob bundle in memory");
 
         // Drop the cursor to release the borrow on output_buffer.
-        drop(cursor);
+        // drop(cursor);
 
         // Shrink the buffer to the exact size (remove any extra capacity).
         output_buffer.shrink_to_fit();

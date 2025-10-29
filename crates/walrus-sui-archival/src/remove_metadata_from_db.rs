@@ -27,12 +27,12 @@ pub fn remove_metadata_from_db(
     // Remove entries.
     let num_removed = archival_state.remove_entries_from_checkpoint(from_checkpoint)?;
 
-    tracing::info!(
-        "successfully removed {} entries from database",
-        num_removed
-    );
+    tracing::info!("successfully removed {} entries from database", num_removed);
 
-    println!("removed {} checkpoint blob entries with start_checkpoint >= {}", num_removed, from_checkpoint);
+    println!(
+        "removed {} checkpoint blob entries with start_checkpoint >= {}",
+        num_removed, from_checkpoint
+    );
     println!("database path: {}", db_path.display());
 
     Ok(())

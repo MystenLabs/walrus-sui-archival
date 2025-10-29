@@ -86,6 +86,7 @@ macro_rules! git_revision {
 /// Uploads a blob file to Walrus with exponential backoff retry logic.
 ///
 /// Returns tuple of (blob_id, object_id, end_epoch) on success.
+#[allow(clippy::too_many_arguments)]
 pub async fn upload_blob_to_walrus_with_retry(
     worker_name: &str,
     walrus_client: &WalrusNodeClient<SuiContractClient>,

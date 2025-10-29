@@ -1,7 +1,12 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{num::NonZeroU16, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    num::NonZeroU16,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use blob_bundle::{BlobBundleBuilder, BlobBundleBuilderTrait};
@@ -56,6 +61,7 @@ pub struct CheckpointBlobPublisher {
 }
 
 impl CheckpointBlobPublisher {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         archival_state: Arc<ArchivalState>,
         sui_interactive_client: SuiInteractiveClient,
@@ -348,6 +354,7 @@ impl CheckpointBlobPublisher {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn build_and_upload_blob(
         worker_name: &str,
         request: BlobBuildRequest,
@@ -356,7 +363,7 @@ impl CheckpointBlobPublisher {
         sui_interactive_client: SuiInteractiveClient,
         n_shards: NonZeroU16,
         config: &CheckpointBlobPublisherConfig,
-        downloaded_checkpoint_dir: &PathBuf,
+        downloaded_checkpoint_dir: &Path,
         metrics: &Arc<Metrics>,
         contract_package_id: ObjectID,
         admin_cap_object_id: ObjectID,
@@ -508,6 +515,7 @@ impl CheckpointBlobPublisher {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn upload_blob_to_walrus(
         worker_name: &str,
         request: &BlobBuildRequest,
@@ -546,6 +554,7 @@ impl CheckpointBlobPublisher {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn upload_blob_to_walrus_inner(
         worker_name: &str,
         request: &BlobBuildRequest,
@@ -814,7 +823,7 @@ impl CheckpointBlobPublisher {
     async fn clean_up_downloaded_checkpoints_and_uploaded_blobs(
         request: &BlobBuildRequest,
         file_path: Option<&PathBuf>,
-        downloaded_checkpoint_dir: &PathBuf,
+        downloaded_checkpoint_dir: &Path,
         metrics: &Arc<Metrics>,
     ) -> Result<()> {
         tracing::info!(
@@ -847,7 +856,7 @@ impl CheckpointBlobPublisher {
 
         if let Some(file_path) = file_path {
             // Remove the uploaded blob.
-            if let Err(e) = std::fs::remove_file(&file_path) {
+            if let Err(e) = std::fs::remove_file(file_path) {
                 // Do not stop if file removal fails.
                 tracing::warn!(
                     "failed to remove uploaded blob {}: {}",
