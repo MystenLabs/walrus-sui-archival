@@ -173,7 +173,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         .set(initial_checkpoint as i64 - 1);
 
     // Create channel for blob build requests.
-    let (blob_publisher_tx, blob_publisher_rx) = mpsc::channel::<BlobBuildRequest>(2);
+    let (blob_publisher_tx, blob_publisher_rx) = mpsc::channel::<BlobBuildRequest>(1);
 
     // Create in-memory checkpoint holder if download_to_memory is enabled.
     let in_memory_holder = if config.download_to_memory {
