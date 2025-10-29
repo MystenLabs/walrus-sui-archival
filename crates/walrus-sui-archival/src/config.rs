@@ -69,8 +69,8 @@ pub struct Config {
 pub enum CheckpointDownloaderType {
     /// Use the original checkpoint downloader that downloads from a bucket URL.
     Bucket(CheckpointDownloaderConfig),
-    /// Use the injection service checkpoint downloader.
-    InjectionService(InjectionServiceCheckpointDownloaderConfig),
+    /// Use the ingestion service checkpoint downloader.
+    IngestionService(IngestionServiceCheckpointDownloaderConfig),
 }
 
 impl CheckpointDownloaderType {
@@ -78,7 +78,7 @@ impl CheckpointDownloaderType {
     pub fn downloaded_checkpoint_dir(&self) -> &PathBuf {
         match self {
             CheckpointDownloaderType::Bucket(config) => &config.downloaded_checkpoint_dir,
-            CheckpointDownloaderType::InjectionService(config) => &config.downloaded_checkpoint_dir,
+            CheckpointDownloaderType::IngestionService(config) => &config.downloaded_checkpoint_dir,
         }
     }
 }
@@ -106,7 +106,7 @@ pub struct CheckpointDownloaderConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InjectionServiceCheckpointDownloaderConfig {
+pub struct IngestionServiceCheckpointDownloaderConfig {
     /// Number of worker threads for processing checkpoints.
     #[serde(default = "default_num_workers")]
     pub num_workers: usize,
@@ -123,7 +123,7 @@ pub struct InjectionServiceCheckpointDownloaderConfig {
     pub ingestion_config: IngestionConfig,
 }
 
-impl InjectionServiceCheckpointDownloaderConfig {
+impl IngestionServiceCheckpointDownloaderConfig {
     /// Convert this config into ClientArgs for the ingestion service.
     pub fn to_client_args(&self) -> ClientArgs {
         ClientArgs {

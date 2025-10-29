@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     checkpoint_downloader::CheckpointInfo,
-    config::InjectionServiceCheckpointDownloaderConfig,
+    config::IngestionServiceCheckpointDownloaderConfig,
     metrics::Metrics,
 };
 
@@ -31,20 +31,20 @@ impl Drop for WorkerGuard {
     }
 }
 
-pub struct InjectionServiceCheckpointDownloadWorker {
+pub struct IngestionServiceCheckpointDownloadWorker {
     worker_id: usize,
     rx: Receiver<Arc<CheckpointData>>,
     tx: sync::mpsc::Sender<CheckpointInfo>,
-    config: InjectionServiceCheckpointDownloaderConfig,
+    config: IngestionServiceCheckpointDownloaderConfig,
     metrics: Arc<Metrics>,
 }
 
-impl InjectionServiceCheckpointDownloadWorker {
+impl IngestionServiceCheckpointDownloadWorker {
     pub fn new(
         worker_id: usize,
         rx: Receiver<Arc<CheckpointData>>,
         tx: sync::mpsc::Sender<CheckpointInfo>,
-        config: InjectionServiceCheckpointDownloaderConfig,
+        config: IngestionServiceCheckpointDownloaderConfig,
         metrics: Arc<Metrics>,
     ) -> Self {
         Self {
@@ -180,15 +180,15 @@ impl InjectionServiceCheckpointDownloadWorker {
     }
 }
 
-pub struct InjectionServiceCheckpointDownloader {
+pub struct IngestionServiceCheckpointDownloader {
     num_workers: usize,
     worker_handles: Vec<task::JoinHandle<()>>,
-    config: InjectionServiceCheckpointDownloaderConfig,
+    config: IngestionServiceCheckpointDownloaderConfig,
     metrics: Arc<Metrics>,
 }
 
-impl InjectionServiceCheckpointDownloader {
-    pub fn new(config: InjectionServiceCheckpointDownloaderConfig, metrics: Arc<Metrics>) -> Self {
+impl IngestionServiceCheckpointDownloader {
+    pub fn new(config: IngestionServiceCheckpointDownloaderConfig, metrics: Arc<Metrics>) -> Self {
         Self {
             num_workers: config.num_workers,
             worker_handles: Vec::new(),
@@ -232,7 +232,7 @@ impl InjectionServiceCheckpointDownloader {
         task::JoinHandle<()>,
     )> {
         tracing::info!(
-            "starting injection service checkpoint downloader from checkpoint {} with {} workers",
+            "starting ingestion service checkpoint downloader from checkpoint {} with {} workers",
             initial_checkpoint,
             self.num_workers
         );
@@ -273,7 +273,7 @@ impl InjectionServiceCheckpointDownloader {
             let worker_tx = result_tx.clone();
             let metrics = self.metrics.clone();
 
-            let worker = InjectionServiceCheckpointDownloadWorker::new(
+            let worker = IngestionServiceCheckpointDownloadWorker::new(
                 worker_id,
                 worker_rx,
                 worker_tx,
@@ -362,18 +362,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_injection_service_checkpoint_downloader_initialization() {
+    async fn test_ingestion_service_checkpoint_downloader_initialization() {
         tracing_subscriber::fmt::init();
 
         let temp_dir = TempDir::new().unwrap();
-        let config = InjectionServiceCheckpointDownloaderConfig {
+        let config = IngestionServiceCheckpointDownloaderConfig {
             num_workers: 4,
             downloaded_checkpoint_dir: temp_dir.path().to_path_buf(),
             remote_store_url: Url::parse("https://example.com/bucket/").unwrap(),
             ingestion_config: IngestionConfig::default(),
         };
         let downloader =
-            InjectionServiceCheckpointDownloader::new(config.clone(), create_test_metrics());
+            IngestionServiceCheckpointDownloader::new(config.clone(), create_test_metrics());
 
         assert_eq!(downloader.num_workers, 4);
         assert_eq!(

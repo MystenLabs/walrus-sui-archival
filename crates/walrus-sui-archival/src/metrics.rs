@@ -9,7 +9,7 @@ use walrus_sdk::{client::metrics::ClientMetrics, core_utils::metrics::Registry a
 
 /// Metrics for the walrus-sui-archival service.
 pub struct Metrics {
-    // Indexer metrics for injection service.
+    // Indexer metrics for ingestion service.
     pub indexer_metrics: Arc<IndexerMetrics>,
 
     // Checkpoint downloader metrics.
@@ -87,7 +87,7 @@ pub struct Metrics {
 impl Metrics {
     /// Create and register metrics with the provided registry.
     pub fn new(registry: &Registry) -> Self {
-        // Indexer metrics for injection service.
+        // Indexer metrics for ingestion service.
         let indexer_metrics = IndexerMetrics::new(None, registry);
 
         // Checkpoint downloader metrics.

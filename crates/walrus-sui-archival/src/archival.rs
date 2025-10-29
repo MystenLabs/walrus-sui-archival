@@ -22,7 +22,7 @@ use crate::{
     checkpoint_downloader,
     checkpoint_monitor,
     config::{CheckpointDownloaderType, Config},
-    injection_service_checkpoint_downloader,
+    ingestion_service_checkpoint_downloader,
     metrics::Metrics,
     rest_api::RestApiServer,
     sui_interactive_client::SuiInteractiveClient,
@@ -207,9 +207,9 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
             let (receiver, pause_tx, handle) = downloader.start(initial_checkpoint).await?;
             (receiver, Some(pause_tx), None, handle)
         }
-        CheckpointDownloaderType::InjectionService(downloader_config) => {
+        CheckpointDownloaderType::IngestionService(downloader_config) => {
             let downloader =
-                injection_service_checkpoint_downloader::InjectionServiceCheckpointDownloader::new(
+                ingestion_service_checkpoint_downloader::IngestionServiceCheckpointDownloader::new(
                     downloader_config.clone(),
                     metrics.clone(),
                 );

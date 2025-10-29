@@ -12,7 +12,7 @@ metrics_address: "0.0.0.0:9184"
 #   bucket_base_url: "https://checkpoints.testnet.sui.io"
 #   downloaded_checkpoint_dir: "downloaded_checkpoint_dir"
 checkpoint_downloader:
-  type: injection_service
+  type: ingestion_service
   remote_store_url: "https://checkpoints.testnet.sui.io"
   downloaded_checkpoint_dir: "downloaded_checkpoint_dir"
   ingestion_config:
