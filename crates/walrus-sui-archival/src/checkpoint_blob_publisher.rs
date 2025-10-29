@@ -332,8 +332,44 @@ impl CheckpointBlobPublisher {
                             request.end_checkpoint,
                         );
 
-                        // Send to shared channel (this will block if buffer is full).
-                        shared_tx.send(request).await?;
+                        // Send to shared channel while continuing to monitor workers.
+                        // This ensures we detect worker failures even if send blocks.
+                        let send_future = shared_tx.send(request);
+                        tokio::pin!(send_future);
+
+                        loop {
+                            tokio::select! {
+                                // Continue monitoring workers during send.
+                                Some(result) = worker_handles.join_next() => {
+                                    match result {
+                                        Ok(worker_result) => {
+                                            match worker_result {
+                                                Ok(()) => {
+                                                    tracing::info!("worker exited successfully");
+                                                }
+                                                Err(e) => {
+                                                    tracing::error!(
+                                                        "worker failed during send: {}, stopping checkpoint blob publisher",
+                                                        e
+                                                    );
+                                                    return Err(e);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("worker join error during send: {}", e);
+                                            return Err(anyhow::anyhow!("worker join error: {}", e));
+                                        }
+                                    }
+                                }
+
+                                // Complete the send operation.
+                                result = &mut send_future => {
+                                    result?;
+                                    break;
+                                }
+                            }
+                        }
                     }
 
                     // All requests processed.
