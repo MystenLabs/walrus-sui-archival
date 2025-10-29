@@ -380,6 +380,7 @@ impl CheckpointBlobPublisher {
         let build_timer = metrics.blob_build_latency_seconds.start_timer();
         let start_checkpoint = request.start_checkpoint;
         let end_checkpoint = request.end_checkpoint;
+        let read_checkpoints_from_memory = in_memory_checkpoint_holder.is_some();
 
         tracing::info!(
             "{} building blob for checkpoints {} to {}",
@@ -390,23 +391,25 @@ impl CheckpointBlobPublisher {
 
         // Collect checkpoint file paths.
         let mut file_paths = Vec::new();
-        for checkpoint_num in start_checkpoint..=end_checkpoint {
-            let checkpoint_file = downloaded_checkpoint_dir.join(format!("{checkpoint_num}"));
+        if !read_checkpoints_from_memory {
+            for checkpoint_num in start_checkpoint..=end_checkpoint {
+                let checkpoint_file = downloaded_checkpoint_dir.join(format!("{checkpoint_num}"));
 
-            // Check if the checkpoint file exists.
-            if !checkpoint_file.exists() {
-                return Err(anyhow::anyhow!(
-                    "checkpoint file {} does not exist",
-                    checkpoint_file.display()
-                ));
+                // Check if the checkpoint file exists.
+                if !checkpoint_file.exists() {
+                    return Err(anyhow::anyhow!(
+                        "checkpoint file {} does not exist",
+                        checkpoint_file.display()
+                    ));
+                }
+
+                file_paths.push(checkpoint_file);
             }
 
-            file_paths.push(checkpoint_file);
-        }
-
-        if file_paths.is_empty() {
-            tracing::warn!("no checkpoint files to bundle");
-            return Ok(());
+            if file_paths.is_empty() {
+                tracing::warn!("no checkpoint files to bundle");
+                return Ok(());
+            }
         }
 
         // Create the blob bundle.
@@ -418,15 +421,16 @@ impl CheckpointBlobPublisher {
             start_checkpoint, end_checkpoint
         );
 
+        let file_num = end_checkpoint - start_checkpoint + 1;
+
         tracing::info!(
             "{} bundling {} checkpoint files into a blob: {}",
             worker_name,
-            file_paths.len(),
+            file_num,
             blob_filename
         );
 
         let output_path = config.checkpoint_blobs_dir.join(&blob_filename);
-        let file_num = file_paths.len();
 
         // Acquire blob build semaphore to prevent concurrent builds (disk I/O contention).
         tracing::info!("{} waiting for blob build semaphore", worker_name);

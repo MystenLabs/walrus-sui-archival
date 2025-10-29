@@ -34,3 +34,4 @@ archival_state_snapshot:
   metadata_pointer_object_id: 0x6d0d5f76151e96e0f7cbad41c256c908bdbbcafdda48e0bd2880c216a5bbdbfe
   metadata_pointer_initial_shared_version: 621454879
   store_epoch_length: 2
+download_to_memory: true
