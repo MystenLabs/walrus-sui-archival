@@ -37,6 +37,12 @@ fn get_blob_build_semaphore() -> &'static tokio::sync::Semaphore {
     BLOB_BUILD_SEMAPHORE.get_or_init(|| tokio::sync::Semaphore::new(1))
 }
 
+static BLOB_UPLOAD_SEMAPHORE: std::sync::OnceLock<tokio::sync::Semaphore> =
+    std::sync::OnceLock::new();
+
+fn get_blob_upload_semaphore() -> &'static tokio::sync::Semaphore {
+    BLOB_UPLOAD_SEMAPHORE.get_or_init(|| tokio::sync::Semaphore::new(2))
+}
 /// Message sent from CheckpointMonitor to CheckpointBlobPublisher.
 #[derive(Debug, Clone)]
 pub struct BlobBuildRequest {
@@ -539,7 +545,24 @@ impl CheckpointBlobPublisher {
         // Stop the build timer before starting upload.
         build_timer.observe_duration();
 
-        Self::upload_blob_to_walrus(
+        let upload_permit_size = if total_size > 1024 * 1024 * 1024 * 15 / 10 {
+            2
+        } else {
+            1
+        };
+
+        let _upload_permit = get_blob_upload_semaphore()
+            .acquire_many(upload_permit_size)
+            .await
+            .unwrap();
+
+        tracing::info!(
+            "{} acquired blob upload semaphore with size {}",
+            worker_name,
+            upload_permit_size
+        );
+
+        let result = Self::upload_blob_to_walrus(
             worker_name,
             &request,
             index_map,
@@ -552,7 +575,12 @@ impl CheckpointBlobPublisher {
             contract_package_id,
             admin_cap_object_id,
         )
-        .await?;
+        .await;
+
+        drop(_upload_permit);
+        tracing::info!("{} released blob upload semaphore", worker_name);
+
+        result?;
 
         // Track the latest checkpoint included in uploaded blob.
         metrics
