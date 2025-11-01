@@ -159,6 +159,7 @@ pub async fn start_server(config: Config) -> Result<()> {
             "/v1/app_refresh_blob_end_epoch",
             post(proxy_refresh_blob_end_epoch),
         )
+        .route("/v1/health", get(health_check))
         .with_state(app_state)
         .layer(CorsLayer::permissive());
 
@@ -346,4 +347,9 @@ async fn proxy_refresh_blob_end_epoch(
             Err(StatusCode::BAD_GATEWAY)
         }
     }
+}
+
+/// Handler for /v1/health endpoint.
+async fn health_check() -> StatusCode {
+    StatusCode::OK
 }

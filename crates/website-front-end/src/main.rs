@@ -15,7 +15,7 @@ struct Args {
     backend: String,
 
     /// Address to bind the server to.
-    #[arg(long, default_value = "0.0.0.0:8080")]
+    #[arg(long, default_value = "0.0.0.0:9185")]
     bind_address: String,
 
     /// Cache freshness duration in seconds.
