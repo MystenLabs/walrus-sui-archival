@@ -283,8 +283,7 @@ impl IngestionServiceCheckpointDownloader {
         let (result_tx, result_rx) = sync::mpsc::channel::<CheckpointInfo>(100);
 
         // Start the ingestion service.
-        let (regulator_handle, broadcaster_handle) =
-            ingestion_service.run(initial_checkpoint..).await?;
+        let ingestion_service_handle = ingestion_service.run(initial_checkpoint.., None).await?;
 
         // Start workers to process checkpoints.
         for worker_id in 0..self.num_workers {
@@ -315,20 +314,14 @@ impl IngestionServiceCheckpointDownloader {
             }
         });
 
-        // Create a joined handle for the regulator, broadcaster, and the drive task.
+        // Create a joined handle for the ingestion service, and the drive task.
         // This waits for any task to complete, allowing fast failure detection.
         let joined_handle = tokio::spawn(async move {
             select! {
-                result = regulator_handle => {
-                    tracing::info!("regulator task completed: {:?}", result);
+                result = ingestion_service_handle => {
+                    tracing::info!("ingestion service task completed: {:?}", result);
                     if let Err(e) = result {
-                        tracing::error!("regulator task failed: {}", e);
-                    }
-                }
-                result = broadcaster_handle => {
-                    tracing::info!("broadcaster task completed: {:?}", result);
-                    if let Err(e) = result {
-                        tracing::error!("broadcaster task failed: {}", e);
+                        tracing::error!("ingestion service task failed: {}", e);
                     }
                 }
                 result = driver_handle => {

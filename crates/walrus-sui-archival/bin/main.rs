@@ -17,6 +17,7 @@ use walrus_sui_archival::{
     inspect_blob::inspect_blob,
     inspect_db::{InspectDbCommand, execute_inspect_db},
     list_blobs::list_owned_blobs,
+    parse_bcs_checkpoint::parse_bcs_checkpoint,
     remove_metadata_from_db::remove_metadata_from_db,
 };
 
@@ -145,6 +146,12 @@ enum Commands {
         /// Checkpoint number - all entries with start_checkpoint >= this value will be removed.
         #[arg(short, long)]
         from_checkpoint: u64,
+    },
+    /// Parse and print a BCS-encoded CheckpointData file.
+    ParseBcsCheckpoint {
+        /// Path to the BCS-encoded checkpoint file.
+        #[arg(short, long)]
+        file: PathBuf,
     },
 }
 
@@ -277,6 +284,10 @@ fn main() -> Result<()> {
                 from_checkpoint
             );
             remove_metadata_from_db(db_path, from_checkpoint)?;
+        }
+        Commands::ParseBcsCheckpoint { file } => {
+            tracing::info!("parsing BCS checkpoint file: {}", file.display());
+            parse_bcs_checkpoint(file)?;
         }
     }
 

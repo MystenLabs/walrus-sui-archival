@@ -8,7 +8,10 @@ use blob_bundle::BlobBundleReader;
 use bytes::Bytes;
 use sui_storage::blob::Blob;
 use sui_types::full_checkpoint_content::CheckpointData;
-use walrus_core::{BlobId, encoding::Primary};
+use walrus_core::{
+    BlobId,
+    encoding::{ConsistencyCheckType, Primary},
+};
 use walrus_sdk::{client::WalrusNodeClient, config::ClientConfig};
 
 /// Inspect a blob - either from a local file or by fetching from Walrus.
@@ -283,7 +286,7 @@ async fn fetch_blob_from_walrus(
     // Fetch the blob.
     tracing::info!("downloading blob {} from walrus...", blob_id);
     let data = walrus_client
-        .read_blob_retry_committees::<Primary>(&blob_id)
+        .read_blob_retry_committees::<Primary>(&blob_id, ConsistencyCheckType::Skip)
         .await
         .context("failed to fetch blob from Walrus")?;
 

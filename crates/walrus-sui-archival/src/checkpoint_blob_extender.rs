@@ -9,7 +9,7 @@ use sui_types::{
     base_types::ObjectID,
     object::Owner,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
-    transaction::{ObjectArg, TransactionData, TransactionKind},
+    transaction::{ObjectArg, SharedObjectMutability, TransactionData, TransactionKind},
 };
 use tokio::time;
 use walrus_sdk::{SuiReadClient, sui::client::ReadClient};
@@ -567,12 +567,12 @@ impl CheckpointBlobExtender {
                     let system_arg = ptb.obj(ObjectArg::SharedObject {
                         id: system_object_id,
                         initial_shared_version: system_initial_shared_version,
-                        mutable: true,
+                        mutability: SharedObjectMutability::Mutable,
                     })?;
                     let shared_blob_arg = ptb.obj(ObjectArg::SharedObject {
                         id: shared_blob_id,
                         initial_shared_version: shared_blob_initial_shared_version,
-                        mutable: true,
+                        mutability: SharedObjectMutability::Mutable,
                     })?;
                     let extend_epochs_arg = ptb.pure(extend_epoch_length)?;
 
@@ -722,7 +722,7 @@ impl CheckpointBlobExtender {
                     let system_arg = ptb.obj(ObjectArg::SharedObject {
                         id: system_object_id,
                         initial_shared_version: system_initial_shared_version,
-                        mutable: true,
+                        mutability: SharedObjectMutability::Mutable,
                     })?;
 
                     // Create payment coin argument (shared once for all calls).
@@ -765,7 +765,7 @@ impl CheckpointBlobExtender {
                         let shared_blob_arg = ptb.obj(ObjectArg::SharedObject {
                             id: *shared_blob_id,
                             initial_shared_version: shared_blob_initial_shared_version,
-                            mutable: true,
+                            mutability: SharedObjectMutability::Mutable,
                         })?;
 
                         // Call extend_shared_blob_using_token function for this blob.

@@ -11,7 +11,7 @@ use sui_types::{
     Identifier,
     base_types::ObjectID,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
-    transaction::{ObjectArg, TransactionData, TransactionKind},
+    transaction::{ObjectArg, SharedObjectMutability, TransactionData, TransactionKind},
 };
 use tokio::fs;
 use walrus_sdk::config::ClientConfig;
@@ -189,7 +189,7 @@ pub async fn delete_all_shared_archival_blobs(
             let shared_blob_arg = ptb.obj(ObjectArg::SharedObject {
                 id: *blob_id,
                 initial_shared_version: *initial_shared_version,
-                mutable: true,
+                mutability: SharedObjectMutability::Mutable,
             })?;
 
             // Call delete_shared_blob function.

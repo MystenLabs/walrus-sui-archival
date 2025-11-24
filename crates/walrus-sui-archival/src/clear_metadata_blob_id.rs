@@ -8,7 +8,7 @@ use sui_sdk::wallet_context::WalletContext;
 use sui_types::{
     Identifier,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
-    transaction::{ObjectArg, TransactionData, TransactionKind},
+    transaction::{ObjectArg, SharedObjectMutability, TransactionData, TransactionKind},
 };
 use walrus_sdk::config::ClientConfig;
 
@@ -57,7 +57,7 @@ pub async fn clear_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()>
         initial_shared_version: config
             .archival_state_snapshot
             .metadata_pointer_initial_shared_version,
-        mutable: true,
+        mutability: SharedObjectMutability::Mutable,
     })?;
 
     // call clear_metadata_blob_pointer function.

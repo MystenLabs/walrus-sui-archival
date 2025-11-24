@@ -299,6 +299,8 @@ struct AppCheckpointInfo {
     index: usize,
     offset: u64,
     length: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<serde_json::Value>,
 }
 
 /// Request structure for refresh blob end epoch endpoint.
@@ -474,6 +476,48 @@ async fn get_app_blobs(
 #[derive(Deserialize)]
 struct AppCheckpointQuery {
     checkpoint: u64,
+    #[serde(default)]
+    show_content: bool,
+}
+
+/// Fetch checkpoint content from aggregator.
+async fn fetch_checkpoint_content(
+    blob_id: &str,
+    offset: u64,
+    length: u64,
+) -> Result<CheckpointData> {
+    let url = format!(
+        "https://34.168.139.178/v1/blobs/{}/byte-range?start={}&length={}",
+        blob_id, offset, length
+    );
+
+    tracing::info!("fetching checkpoint content from: {}", url);
+
+    // Fetch the data from the aggregator.
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to fetch from aggregator: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "aggregator returned error status: {}",
+            response.status()
+        ));
+    }
+
+    let bcs_data = response
+        .bytes()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to read response body: {}", e))?;
+
+    // Decode using BCS.
+    let checkpoint_data = Blob::from_bytes::<CheckpointData>(&bcs_data)
+        .map_err(|e| anyhow::anyhow!("failed to decode checkpoint data: {}", e))?;
+
+    Ok(checkpoint_data)
 }
 
 /// Handler for getting checkpoint information as JSON.
@@ -509,6 +553,25 @@ async fn get_app_checkpoint(
         .map(|id| id.to_string())
         .unwrap_or_else(|_| ObjectID::ZERO.to_string());
 
+    // Fetch content if requested.
+    let content = if params.show_content {
+        match fetch_checkpoint_content(&blob_id, entry.offset, entry.length).await {
+            Ok(checkpoint_data) => match serde_json::to_value(&checkpoint_data) {
+                Ok(value) => Some(value),
+                Err(e) => {
+                    tracing::error!("failed to serialize checkpoint data to json: {}", e);
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::error!("failed to fetch checkpoint content: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let response = AppCheckpointInfo {
         checkpoint_number: params.checkpoint,
         blob_id,
@@ -516,6 +579,7 @@ async fn get_app_checkpoint(
         index,
         offset: entry.offset,
         length: entry.length,
+        content,
     };
 
     Ok(Json(response))

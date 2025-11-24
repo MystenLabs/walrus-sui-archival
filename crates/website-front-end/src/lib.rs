@@ -1,7 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{net::SocketAddr, sync::Arc, time::{Duration, Instant}};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use axum::{
@@ -117,12 +121,16 @@ struct AppCheckpointInfo {
     index: usize,
     offset: u64,
     length: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<serde_json::Value>,
 }
 
 /// Query parameters for app checkpoint endpoint.
 #[derive(Deserialize)]
 struct AppCheckpointQuery {
     checkpoint: u64,
+    #[serde(default)]
+    show_content: bool,
 }
 
 /// Request structure for refresh blob end epoch endpoint.
@@ -152,7 +160,10 @@ pub async fn start_server(config: Config) -> Result<()> {
             "/v1/app_blobs_expired_before_epoch",
             get(proxy_blobs_expired_before_epoch),
         )
-        .route("/v1/app_info_for_homepage", get(proxy_app_info_for_homepage))
+        .route(
+            "/v1/app_info_for_homepage",
+            get(proxy_app_info_for_homepage),
+        )
         .route("/v1/app_blobs", get(proxy_app_blobs))
         .route("/v1/app_checkpoint", get(proxy_app_checkpoint))
         .route(
@@ -171,9 +182,7 @@ pub async fn start_server(config: Config) -> Result<()> {
 
     let listener = tokio::net::TcpListener::bind(config.bind_address)
         .await
-        .map_err(|e| {
-            anyhow::anyhow!("failed to bind to {}: {}", config.bind_address, e)
-        })?;
+        .map_err(|e| anyhow::anyhow!("failed to bind to {}: {}", config.bind_address, e))?;
 
     axum::serve(listener, app)
         .await
@@ -293,7 +302,12 @@ async fn proxy_blobs_expired_before_epoch(
     Query(params): Query<BlobsExpiredQuery>,
 ) -> impl IntoResponse {
     let query_string = format!("epoch={}", params.epoch);
-    proxy_with_cache::<Vec<ExpiredBlobInfo>>(&state, "v1/app_blobs_expired_before_epoch", &query_string).await
+    proxy_with_cache::<Vec<ExpiredBlobInfo>>(
+        &state,
+        "v1/app_blobs_expired_before_epoch",
+        &query_string,
+    )
+    .await
 }
 
 /// Handler for /v1/app_info_for_homepage.
@@ -311,7 +325,11 @@ async fn proxy_app_checkpoint(
     State(state): State<AppState>,
     Query(params): Query<AppCheckpointQuery>,
 ) -> impl IntoResponse {
-    let query_string = format!("checkpoint={}", params.checkpoint);
+    let query_string = if params.show_content {
+        format!("checkpoint={}&show_content=true", params.checkpoint)
+    } else {
+        format!("checkpoint={}", params.checkpoint)
+    };
     proxy_with_cache::<AppCheckpointInfo>(&state, "v1/app_checkpoint", &query_string).await
 }
 

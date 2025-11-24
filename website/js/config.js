@@ -9,7 +9,9 @@ const CONFIG = {
     endpoints: {
         localnet: 'http://localhost:9185',
         testnet: 'https://walrus-sui-archival.testnet.walrus.space',
-        mainnet: 'https://walrus-sui-archival.mainnet.walrus.space',
+        // TODO: remove after mainnet has its own front end server. Currently we are using the
+        // testnet server as the mainnet front end.
+        mainnet: 'https://walrus-sui-archival.testnet.walrus.space',
     },
 
     // Sui RPC endpoints for different networks.

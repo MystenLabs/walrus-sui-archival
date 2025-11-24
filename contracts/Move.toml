@@ -4,12 +4,12 @@ version = "0.0.1"
 edition = "2024.beta"
 
 [dependencies]
-# Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet-v1.58.1" }
-Walrus = { git = "https://github.com/MystenLabs/walrus.git", subdir = "testnet-contracts/walrus", rev = "testnet-v1.35.0" }
-WAL = { git = "https://github.com/MystenLabs/walrus.git", subdir = "testnet-contracts/wal", rev = "testnet-v1.35.0" }
+# Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet-v1.60.0" }
+Walrus = { git = "https://github.com/MystenLabs/walrus.git", subdir = "testnet-contracts/walrus", rev = "testnet-v1.37.0" }
+WAL = { git = "https://github.com/MystenLabs/walrus.git", subdir = "testnet-contracts/wal", rev = "testnet-v1.37.0" }
 # use below for mainnet publishing
-# Walrus = { git = "https://github.com/MystenLabs/walrus.git", subdir = "mainnet-contracts/walrus", rev = "testnet-v1.35.0" }
-# WAL = { git = "https://github.com/MystenLabs/walrus.git", subdir = "mainnet-contracts/wal", rev = "testnet-v1.35.0" }
+# Walrus = { git = "https://github.com/MystenLabs/walrus.git", subdir = "mainnet-contracts/walrus", rev = "testnet-v1.37.0" }
+# WAL = { git = "https://github.com/MystenLabs/walrus.git", subdir = "mainnet-contracts/wal", rev = "testnet-v1.37.0" }
 
 [addresses]
 walrus_sui_archival_metadata = "0x0"

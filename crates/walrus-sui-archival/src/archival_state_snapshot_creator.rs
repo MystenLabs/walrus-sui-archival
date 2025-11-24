@@ -20,7 +20,7 @@ use sui_types::{
     Identifier,
     base_types::SuiAddress,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
-    transaction::{ObjectArg, TransactionData, TransactionKind},
+    transaction::{ObjectArg, SharedObjectMutability, TransactionData, TransactionKind},
 };
 use tokio::time;
 use walrus_core::BlobId;
@@ -153,7 +153,7 @@ impl ArchivalStateSnapshotCreator {
                     let pointer_id_arg = ptb.obj(ObjectArg::SharedObject {
                         id: pointer_id,
                         initial_shared_version: pointer_initial_shared_version,
-                        mutable: true,
+                        mutability: SharedObjectMutability::Mutable,
                     })?;
                     let blob_id_arg = ptb.pure(blob_id_bytes)?;
 
