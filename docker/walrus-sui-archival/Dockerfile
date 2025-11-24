@@ -2,7 +2,7 @@
 #
 # Copy in all crates, Cargo.toml and Cargo.lock unmodified,
 # and build the application.
-FROM rust:1.89-bookworm AS builder
+FROM rust:1.91-bookworm AS builder
 ARG PROFILE=release
 ARG GIT_REVISION
 ENV GIT_REVISION=$GIT_REVISION
@@ -16,7 +16,7 @@ COPY resources resources
 RUN cargo build --profile $PROFILE --bin walrus-sui-archival --bin website-front-end
 
 # Production Image for walrus-sui-archival
-FROM rust:1.89-bookworm AS walrus-sui-archival
+FROM rust:1.91-bookworm AS walrus-sui-archival
 RUN apt-get update && apt-get install -y ca-certificates curl
 # Use jemalloc for better memory management
 RUN apt-get install -y libjemalloc2

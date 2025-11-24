@@ -3,9 +3,12 @@
 /**
  * Fetch checkpoint information from the API.
  */
-async function fetchCheckpoint(checkpointNumber) {
+async function fetchCheckpoint(checkpointNumber, showContent) {
     try {
-        const url = CONFIG.getUrl(`/v1/app_checkpoint?checkpoint=${checkpointNumber}`);
+        let url = CONFIG.getUrl(`/v1/app_checkpoint?checkpoint=${checkpointNumber}`);
+        if (showContent) {
+            url += '&show_content=true';
+        }
         console.log('fetching checkpoint from:', url);
 
         const response = await fetch(url);
@@ -38,6 +41,16 @@ function displayCheckpointResult(data) {
     document.getElementById('result-offset').textContent = data.offset;
     document.getElementById('result-length').textContent = data.length;
 
+    // Display content if available.
+    const contentContainer = document.getElementById('content-container');
+    if (data.content) {
+        const contentPre = document.getElementById('result-content');
+        contentPre.textContent = JSON.stringify(data.content, null, 2);
+        contentContainer.style.display = 'block';
+    } else {
+        contentContainer.style.display = 'none';
+    }
+
     // Show result, hide loading.
     document.getElementById('loading').style.display = 'none';
     document.getElementById('result').style.display = 'block';
@@ -62,6 +75,8 @@ async function handleFormSubmit(event) {
 
     const checkpointInput = document.getElementById('checkpoint');
     const checkpointNumber = parseInt(checkpointInput.value, 10);
+    const showContentCheckbox = document.getElementById('show-content');
+    const showContent = showContentCheckbox ? showContentCheckbox.checked : false;
 
     if (isNaN(checkpointNumber) || checkpointNumber < 0) {
         displayError(new Error('please enter a valid checkpoint number'));
@@ -74,7 +89,7 @@ async function handleFormSubmit(event) {
     document.getElementById('form-error').style.display = 'none';
 
     try {
-        const data = await fetchCheckpoint(checkpointNumber);
+        const data = await fetchCheckpoint(checkpointNumber, showContent);
         displayCheckpointResult(data);
     } catch (error) {
         displayError(error);

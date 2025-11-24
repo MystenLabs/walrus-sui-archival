@@ -70,6 +70,11 @@
                 <label for="checkpoint">Checkpoint Number:</label><br>
                 <input type="number" id="checkpoint" name="checkpoint" min="0" required><br>
                 <br>
+                <div style="margin: 10px 0;">
+                    <input type="checkbox" id="show-content" name="show-content">
+                    <label for="show-content">Show checkpoint content (fetches full checkpoint data)</label>
+                </div>
+                <br>
                 <button type="submit">Lookup Checkpoint</button>
             </form>
             <div id="form-error" class="error-text" style="display: none;"></div>
@@ -115,6 +120,14 @@
                     <td id="result-length"></td>
                 </tr>
             </table>
+
+            <!-- Checkpoint Content (shown only when requested) -->
+            <div id="content-container" style="display: none; margin-top: 30px;">
+                <h3>Checkpoint Content</h3>
+                <div style="background-color: #f9f9f9; border: 1px solid #ddd; padding: 10px; border-radius: 4px; overflow-x: auto; max-height: 600px;">
+                    <pre id="result-content" style="margin: 0; white-space: pre-wrap; word-wrap: break-word;"></pre>
+                </div>
+            </div>
         </div>
     </div>
 
