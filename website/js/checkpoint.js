@@ -29,6 +29,81 @@ async function fetchCheckpoint(checkpointNumber, showContent) {
 }
 
 /**
+ * Create an interactive JSON tree view.
+ */
+function createJsonTree(obj, level = 0) {
+    const indent = '  '.repeat(level);
+    let html = '';
+
+    if (obj === null) {
+        return '<span class="json-null">null</span>';
+    }
+
+    if (typeof obj !== 'object') {
+        if (typeof obj === 'string') {
+            return `<span class="json-string">"${obj}"</span>`;
+        } else if (typeof obj === 'number') {
+            return `<span class="json-number">${obj}</span>`;
+        } else if (typeof obj === 'boolean') {
+            return `<span class="json-boolean">${obj}</span>`;
+        }
+        return String(obj);
+    }
+
+    const isArray = Array.isArray(obj);
+    const entries = Object.entries(obj);
+
+    if (entries.length === 0) {
+        return isArray ? '[]' : '{}';
+    }
+
+    const toggleId = 'toggle-' + Math.random().toString(36).substr(2, 9);
+    const openBracket = isArray ? '[' : '{';
+    const closeBracket = isArray ? ']' : '}';
+
+    html += `<span class="json-toggle" onclick="toggleJsonNode('${toggleId}')">▶</span> ${openBracket}\n`;
+    html += `<div id="${toggleId}" class="json-collapsed">`;
+
+    entries.forEach(([key, value], index) => {
+        const isLast = index === entries.length - 1;
+        const comma = isLast ? '' : ',';
+
+        if (typeof value === 'object' && value !== null && (Array.isArray(value) || Object.keys(value).length > 0)) {
+            // Nested object or array.
+            const keyDisplay = isArray ? `<span class="json-index">[${key}]</span>: ` : `<span class="json-key">"${key}"</span>: `;
+            html += `${indent}  ${keyDisplay}`;
+            html += createJsonTree(value, level + 1);
+            html += `${comma}\n`;
+        } else {
+            // Primitive value.
+            const keyDisplay = isArray ? `<span class="json-index">[${key}]</span>: ` : `<span class="json-key">"${key}"</span>: `;
+            html += `${indent}  ${keyDisplay}${createJsonTree(value, level + 1)}${comma}\n`;
+        }
+    });
+
+    html += `</div>${indent}${closeBracket}`;
+    return html;
+}
+
+/**
+ * Toggle JSON node visibility.
+ */
+function toggleJsonNode(id) {
+    const element = document.getElementById(id);
+    const toggle = element.previousElementSibling;
+
+    if (element.classList.contains('json-collapsed')) {
+        element.classList.remove('json-collapsed');
+        element.classList.add('json-expanded');
+        toggle.textContent = '▼';
+    } else {
+        element.classList.remove('json-expanded');
+        element.classList.add('json-collapsed');
+        toggle.textContent = '▶';
+    }
+}
+
+/**
  * Display checkpoint result.
  */
 function displayCheckpointResult(data) {
@@ -44,8 +119,8 @@ function displayCheckpointResult(data) {
     // Display content if available.
     const contentContainer = document.getElementById('content-container');
     if (data.content) {
-        const contentPre = document.getElementById('result-content');
-        contentPre.textContent = JSON.stringify(data.content, null, 2);
+        const contentDiv = document.getElementById('result-content');
+        contentDiv.innerHTML = createJsonTree(data.content);
         contentContainer.style.display = 'block';
     } else {
         contentContainer.style.display = 'none';

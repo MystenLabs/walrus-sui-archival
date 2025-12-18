@@ -57,6 +57,48 @@
             display: none;
             margin-top: 40px;
         }
+        .json-toggle {
+            cursor: pointer;
+            user-select: none;
+            color: #667eea;
+            font-weight: bold;
+            display: inline-block;
+            width: 1em;
+        }
+        .json-toggle:hover {
+            color: #5568d3;
+        }
+        .json-collapsed {
+            display: none;
+        }
+        .json-expanded {
+            display: block;
+        }
+        .json-key {
+            color: #a71d5d;
+            font-weight: bold;
+        }
+        .json-index {
+            color: #005cc5;
+            font-weight: bold;
+        }
+        .json-string {
+            color: #0086b3;
+        }
+        .json-number {
+            color: #0086b3;
+        }
+        .json-boolean {
+            color: #0086b3;
+        }
+        .json-null {
+            color: #999;
+        }
+        #result-content {
+            font-family: 'Courier New', monospace;
+            line-height: 1.5;
+            white-space: pre;
+        }
     </style>
 </head>
 <body>
@@ -123,9 +165,9 @@
 
             <!-- Checkpoint Content (shown only when requested) -->
             <div id="content-container" style="display: none; margin-top: 30px;">
-                <h3>Checkpoint Content</h3>
+                <h3>Checkpoint Content (click ▶ to expand)</h3>
                 <div style="background-color: #f9f9f9; border: 1px solid #ddd; padding: 10px; border-radius: 4px; overflow-x: auto; max-height: 600px;">
-                    <pre id="result-content" style="margin: 0; white-space: pre-wrap; word-wrap: break-word;"></pre>
+                    <div id="result-content"></div>
                 </div>
             </div>
         </div>
