@@ -487,7 +487,7 @@ async fn fetch_checkpoint_content(
     length: u64,
 ) -> Result<CheckpointData> {
     let url = format!(
-        "http://34.168.139.178/v1/blobs/{}/byte-range?start={}&length={}",
+        "https://aggregator.walrus-mainnet.walrus.space/v1/blobs/{}/byte-range?start={}&length={}",
         blob_id, offset, length
     );
 
