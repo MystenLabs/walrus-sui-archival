@@ -328,7 +328,11 @@ async fn refresh_expired_blobs_cache(state: &AppState, epoch: u32) {
             }
         }
         Err(e) => {
-            tracing::error!("failed to fetch expired blobs for epoch {} from backend: {}", epoch, e);
+            tracing::error!(
+                "failed to fetch expired blobs for epoch {} from backend: {}",
+                epoch,
+                e
+            );
         }
     }
 }
@@ -439,85 +443,27 @@ where
 }
 
 /// Handler for /v1/app_blobs_expired_before_epoch.
-/// This endpoint always serves from cache (populated by background task).
 async fn proxy_blobs_expired_before_epoch(
     State(state): State<AppState>,
     Query(params): Query<BlobsExpiredQuery>,
 ) -> impl IntoResponse {
-    let cache_key = format!("v1/app_blobs_expired_before_epoch?epoch={}", params.epoch);
-
-    // Try to serve from cache.
-    let cache = state.cache.read().await;
-    if let Some(entry) = cache.get(&cache_key) {
-        match serde_json::from_str::<Vec<ExpiredBlobInfo>>(&entry.data) {
-            Ok(data) => {
-                tracing::info!(
-                    "serving cached response for expired blobs epoch {} (age: {:?})",
-                    params.epoch,
-                    entry.timestamp.elapsed()
-                );
-                return Ok(Json(data));
-            }
-            Err(e) => {
-                tracing::error!("failed to parse cached data: {}", e);
-            }
-        }
-    }
-
-    tracing::warn!("no cached data available for epoch {}", params.epoch);
-    Err(StatusCode::SERVICE_UNAVAILABLE)
+    let query_string = format!("epoch={}", params.epoch);
+    proxy_with_cache::<Vec<ExpiredBlobInfo>>(
+        &state,
+        "v1/app_blobs_expired_before_epoch",
+        &query_string,
+    )
+    .await
 }
 
 /// Handler for /v1/app_info_for_homepage.
-/// This endpoint always serves from cache (populated by background task).
 async fn proxy_app_info_for_homepage(State(state): State<AppState>) -> impl IntoResponse {
-    let cache_key = "v1/app_info_for_homepage?".to_string();
-
-    // Try to serve from cache.
-    let cache = state.cache.read().await;
-    if let Some(entry) = cache.get(&cache_key) {
-        match serde_json::from_str::<HomepageInfo>(&entry.data) {
-            Ok(data) => {
-                tracing::info!(
-                    "serving cached response for homepage (age: {:?})",
-                    entry.timestamp.elapsed()
-                );
-                return Ok(Json(data));
-            }
-            Err(e) => {
-                tracing::error!("failed to parse cached data: {}", e);
-            }
-        }
-    }
-
-    tracing::warn!("no cached data available for homepage");
-    Err(StatusCode::SERVICE_UNAVAILABLE)
+    proxy_with_cache::<HomepageInfo>(&state, "v1/app_info_for_homepage", "").await
 }
 
 /// Handler for /v1/app_blobs.
-/// This endpoint always serves from cache (populated by background task).
 async fn proxy_app_blobs(State(state): State<AppState>) -> impl IntoResponse {
-    let cache_key = "v1/app_blobs?".to_string();
-
-    // Try to serve from cache.
-    let cache = state.cache.read().await;
-    if let Some(entry) = cache.get(&cache_key) {
-        match serde_json::from_str::<Vec<AppBlobInfo>>(&entry.data) {
-            Ok(data) => {
-                tracing::info!(
-                    "serving cached response for app blobs (age: {:?})",
-                    entry.timestamp.elapsed()
-                );
-                return Ok(Json(data));
-            }
-            Err(e) => {
-                tracing::error!("failed to parse cached data: {}", e);
-            }
-        }
-    }
-
-    tracing::warn!("no cached data available for app blobs");
-    Err(StatusCode::SERVICE_UNAVAILABLE)
+    proxy_with_cache::<Vec<AppBlobInfo>>(&state, "v1/app_blobs", "").await
 }
 
 /// Handler for /v1/app_checkpoint.
