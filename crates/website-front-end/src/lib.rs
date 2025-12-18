@@ -210,9 +210,6 @@ pub async fn start_server(config: Config) -> Result<()> {
 /// Background task to periodically refresh cache.
 async fn background_cache_refresh(state: AppState) {
     loop {
-        // Wait for the cache freshness duration before refreshing.
-        tokio::time::sleep(state.cache_refresh_interval).await;
-
         tracing::info!("starting background cache refresh");
 
         // Refresh /v1/app_info_for_homepage.
@@ -228,6 +225,9 @@ async fn background_cache_refresh(state: AppState) {
         }
 
         tracing::info!("background cache refresh completed");
+
+        // Wait for the cache freshness duration before refreshing.
+        tokio::time::sleep(state.cache_refresh_interval).await;
     }
 }
 
