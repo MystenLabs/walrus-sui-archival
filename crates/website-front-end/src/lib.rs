@@ -29,11 +29,18 @@ pub struct Config {
     pub bind_address: SocketAddr,
     /// Cache freshness duration in seconds.
     pub cache_freshness_secs: u64,
+    /// Cache refresh interval in seconds.
+    pub cache_refresh_interval_secs: u64,
 }
 
 impl Config {
     /// Create a new config from environment string.
-    pub fn new(env: &str, bind_address: SocketAddr, cache_freshness_secs: u64) -> Self {
+    pub fn new(
+        env: &str,
+        bind_address: SocketAddr,
+        cache_freshness_secs: u64,
+        cache_refresh_interval_secs: u64,
+    ) -> Self {
         let backend_url = match env {
             "mainnet" => "https://walrus-sui-archival.mainnet.walrus.space".to_string(),
             "testnet" => "https://walrus-sui-archival.testnet.walrus.space".to_string(),
@@ -45,6 +52,7 @@ impl Config {
             backend_url,
             bind_address,
             cache_freshness_secs,
+            cache_refresh_interval_secs,
         }
     }
 }
@@ -62,6 +70,7 @@ struct AppState {
     backend_url: String,
     http_client: reqwest::Client,
     cache: Arc<RwLock<std::collections::HashMap<String, CacheEntry>>>,
+    cache_refresh_interval: Duration,
     cache_freshness_duration: Duration,
 }
 
@@ -152,6 +161,7 @@ pub async fn start_server(config: Config) -> Result<()> {
         backend_url: config.backend_url.clone(),
         http_client: reqwest::Client::new(),
         cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        cache_refresh_interval: Duration::from_secs(config.cache_refresh_interval_secs),
         cache_freshness_duration: Duration::from_secs(config.cache_freshness_secs),
     };
 
@@ -201,7 +211,7 @@ pub async fn start_server(config: Config) -> Result<()> {
 async fn background_cache_refresh(state: AppState) {
     loop {
         // Wait for the cache freshness duration before refreshing.
-        tokio::time::sleep(state.cache_freshness_duration).await;
+        tokio::time::sleep(state.cache_refresh_interval).await;
 
         tracing::info!("starting background cache refresh");
 

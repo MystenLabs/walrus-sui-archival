@@ -19,8 +19,12 @@ struct Args {
     bind_address: String,
 
     /// Cache freshness duration in seconds.
-    #[arg(long, default_value = "30")]
+    #[arg(long, default_value = "300")]
     cache_freshness_secs: u64,
+
+    /// Cache refresh interval in seconds.
+    #[arg(long, default_value = "60")]
+    cache_refresh_interval_secs: u64,
 }
 
 #[tokio::main]
@@ -37,7 +41,12 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("invalid bind address: {}", e))?;
 
     // Create config.
-    let config = Config::new(&args.backend, bind_address, args.cache_freshness_secs);
+    let config = Config::new(
+        &args.backend,
+        bind_address,
+        args.cache_freshness_secs,
+        args.cache_refresh_interval_secs,
+    );
 
     tracing::info!(
         "starting website front-end with backend: {}, cache freshness: {}s",
