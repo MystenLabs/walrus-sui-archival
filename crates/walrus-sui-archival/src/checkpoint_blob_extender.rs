@@ -192,6 +192,9 @@ impl CheckpointBlobExtender {
 
         // Extend shared blobs in batches of 100.
         for chunk in shared_blobs_to_extend.chunks(100) {
+            //TODO: make the timeout configurable.
+            tokio::time::sleep(Duration::from_secs(60)).await;
+
             if let Err(e) = self.extend_shared_blobs_batch(chunk).await {
                 tracing::error!(
                     "failed to extend batch of {} shared blobs: {}",
