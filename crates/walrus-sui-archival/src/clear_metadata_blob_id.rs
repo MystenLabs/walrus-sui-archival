@@ -12,7 +12,7 @@ use sui_types::{
 };
 use walrus_sdk::config::ClientConfig;
 
-use crate::config::Config;
+use crate::{config::Config, util::execute_transaction_and_check_status};
 
 pub async fn clear_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()> {
     let config = Config::from_file(config_path)?;
@@ -105,8 +105,7 @@ pub async fn clear_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()>
         gas_price,
     );
 
-    let signed_tx = wallet.sign_transaction(&tx_data).await;
-    let response = wallet.execute_transaction_may_fail(signed_tx).await?;
+    let response = execute_transaction_and_check_status(&wallet, tx_data).await?;
 
     tracing::info!(
         "successfully cleared metadata pointer, tx digest: {:?}",

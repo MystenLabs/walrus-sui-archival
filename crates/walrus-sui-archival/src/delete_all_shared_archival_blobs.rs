@@ -19,6 +19,7 @@ use walrus_sdk::config::ClientConfig;
 use crate::{
     archival_state::{ArchivalState, CF_CHECKPOINT_BLOB_INFO, proto::CheckpointBlobInfo},
     config::Config,
+    util::execute_transaction_and_check_status,
 };
 
 pub async fn delete_all_shared_archival_blobs(
@@ -236,8 +237,7 @@ pub async fn delete_all_shared_archival_blobs(
             gas_price,
         );
 
-        let signed_tx = wallet.sign_transaction(&tx_data).await;
-        let response = wallet.execute_transaction_may_fail(signed_tx).await?;
+        let response = execute_transaction_and_check_status(&wallet, tx_data).await?;
 
         total_deleted += blob_data.len();
 

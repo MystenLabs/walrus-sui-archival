@@ -30,7 +30,7 @@ use crate::{
     config::ArchivalStateSnapshotConfig,
     metrics::Metrics,
     sui_interactive_client::SuiInteractiveClient,
-    util::upload_blob_to_walrus_with_retry,
+    util::{execute_transaction_and_check_status, upload_blob_to_walrus_with_retry},
 };
 
 pub struct ArchivalStateSnapshotCreator {
@@ -201,8 +201,7 @@ impl ArchivalStateSnapshotCreator {
                         gas_price,
                     );
 
-                    let signed_tx = wallet.sign_transaction(&tx_data).await;
-                    let response = wallet.execute_transaction_may_fail(signed_tx).await?;
+                    let response = execute_transaction_and_check_status(wallet, tx_data).await?;
 
                     tracing::info!(
                         "successfully updated metadata pointer for blob_id: {}, tx digest: {:?}",

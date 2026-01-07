@@ -19,6 +19,7 @@ use crate::{
     config::CheckpointBlobExtenderConfig,
     metrics::Metrics,
     sui_interactive_client::SuiInteractiveClient,
+    util::execute_transaction_and_check_status,
 };
 
 /// Service that periodically checks and extends blob expiration epochs.
@@ -614,8 +615,7 @@ impl CheckpointBlobExtender {
                         gas_price,
                     );
 
-                    let signed_tx = wallet.sign_transaction(&tx_data).await;
-                    let response = wallet.execute_transaction_may_fail(signed_tx).await?;
+                    let response = execute_transaction_and_check_status(wallet, tx_data).await?;
 
                     tracing::info!(
                         "successfully extended shared blob {}, tx digest: {:?}",
@@ -802,8 +802,7 @@ impl CheckpointBlobExtender {
                         gas_price,
                     );
 
-                    let signed_tx = wallet.sign_transaction(&tx_data).await;
-                    let response = wallet.execute_transaction_may_fail(signed_tx).await?;
+                    let response = execute_transaction_and_check_status(wallet, tx_data).await?;
 
                     tracing::info!(
                         "successfully extended batch of {} shared blobs, tx digest: {:?}",

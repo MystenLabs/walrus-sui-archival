@@ -5,8 +5,12 @@ use std::{path::Path, time::Duration};
 
 use anyhow::Result;
 use serde::Deserialize;
-use sui_sdk::{types::base_types::ObjectID as SuiObjectID, wallet_context::WalletContext};
-use sui_types::base_types::SuiAddress;
+use sui_sdk::{
+    rpc_types::{SuiTransactionBlockEffectsAPI, SuiTransactionBlockResponse},
+    types::base_types::ObjectID as SuiObjectID,
+    wallet_context::WalletContext,
+};
+use sui_types::{base_types::SuiAddress, transaction::TransactionData};
 use walrus_core::{BlobId, Epoch};
 use walrus_sdk::{
     ObjectID,
@@ -411,4 +415,32 @@ pub async fn initialize_walrus_read_client(
     let walrus_read_client =
         WalrusNodeClient::new_read_client_with_refresher(client_config, read_client).await?;
     Ok(walrus_read_client)
+}
+
+/// Execute a transaction and check if it succeeded.
+///
+/// Returns the transaction response if it succeeded.
+pub async fn execute_transaction_and_check_status(
+    wallet: &WalletContext,
+    tx_data: TransactionData,
+) -> Result<SuiTransactionBlockResponse> {
+    let signed_tx = wallet.sign_transaction(&tx_data).await;
+    let response = wallet.execute_transaction_may_fail(signed_tx).await?;
+
+    if response.effects.is_none() {
+        return Err(anyhow::anyhow!(
+            "transaction execution failed: effects not found, tx digest: {:?}",
+            response.digest
+        ));
+    }
+
+    if response.effects.as_ref().unwrap().status().is_err() {
+        return Err(anyhow::anyhow!(
+            "transaction execution failed: status error: {:?}, tx digest: {:?}",
+            response.effects.unwrap().status(),
+            response.digest
+        ));
+    }
+
+    Ok(response)
 }
