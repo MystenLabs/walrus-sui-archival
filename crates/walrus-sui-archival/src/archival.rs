@@ -268,7 +268,8 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         system_object_id,
         config.archival_state_snapshot.wal_token_package_id,
     );
-    let blob_extender_handle = tokio::spawn(async move { blob_extender.start().await });
+    // TODO: re-enable this after testing.
+    // let blob_extender_handle = tokio::spawn(async move { blob_extender.start().await });
 
     // Start the archival state snapshot creator if configured.
     let snapshot_creator_handle = {

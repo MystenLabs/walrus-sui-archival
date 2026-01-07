@@ -67,6 +67,9 @@ impl CheckpointBlobExtender {
         // Main loop for checking and extending blobs.
         let mut extend_interval = time::interval(self.config.check_interval);
 
+        // Initial delay to avoid overloading initial startup process.
+        tokio::time::sleep(Duration::from_secs(1800)).await;
+
         loop {
             extend_interval.tick().await;
             if let Err(e) = self.check_and_extend_blobs().await {
@@ -81,6 +84,9 @@ impl CheckpointBlobExtender {
         // Run sync every hour.
         // We need relatively fresh if others are extending blobs.
         let mut sync_interval = time::interval(Duration::from_secs(3600));
+
+        // Initial delay to avoid overloading initial startup process.
+        tokio::time::sleep(Duration::from_secs(60)).await;
 
         loop {
             sync_interval.tick().await;
