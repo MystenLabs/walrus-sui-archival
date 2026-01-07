@@ -115,6 +115,7 @@ impl CheckpointBlobExtender {
         tracing::info!("current walrus epoch: {}", current_epoch);
 
         // Get all blobs from the archival state.
+        // TODO: `blobs` can be large. Make this more memory efficient.
         let blobs = self.archival_state.list_all_blobs(false)?;
         tracing::info!("found {} blobs to check", blobs.len());
 
@@ -122,7 +123,8 @@ impl CheckpointBlobExtender {
         let mut regular_blobs_to_extend = Vec::new();
         let mut shared_blobs_to_extend = Vec::new();
 
-        for blob_info in &blobs {
+        // We need to release blobs after iterating through them to avoid holding the lock for too long.
+        for blob_info in blobs.into_iter() {
             let blob_end_epoch = blob_info.blob_expiration_epoch;
 
             // Check if the blob is expiring within 2 epochs.
@@ -240,6 +242,7 @@ impl CheckpointBlobExtender {
         tracing::info!("syncing blob expiration epochs from on-chain state");
 
         // Get all blobs from the archival state.
+        // TODO: `blobs` can be large. Make this more memory efficient.
         let blobs = self.archival_state.list_all_blobs(true)?;
         tracing::info!("found {} blobs to sync", blobs.len());
 
