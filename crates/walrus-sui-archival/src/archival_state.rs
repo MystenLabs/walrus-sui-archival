@@ -455,6 +455,8 @@ impl ArchivalState {
             blobs.push(blob_info);
         }
 
+        tracing::info!("listed {} checkpoint blobs in the database", blobs.len());
+
         Ok(blobs)
     }
 

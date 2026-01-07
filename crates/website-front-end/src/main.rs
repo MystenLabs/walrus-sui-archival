@@ -23,7 +23,7 @@ struct Args {
     cache_freshness_secs: u64,
 
     /// Cache refresh interval in seconds.
-    #[arg(long, default_value = "60")]
+    #[arg(long, default_value = "600")]
     cache_refresh_interval_secs: u64,
 
     /// PostgreSQL database URL for direct queries (optional).
