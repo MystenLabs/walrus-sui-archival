@@ -84,6 +84,9 @@ pub struct Metrics {
     pub walrus_sdk_registry: WalrusRegistry,
     /// Metrics for the Walrus client.
     pub walrus_client_metrics: Arc<ClientMetrics>,
+
+    /// The prometheus registry used for all metrics.
+    pub registry: Registry,
 }
 
 impl Metrics {
@@ -415,6 +418,7 @@ impl Metrics {
             metadata_updates_failed,
             walrus_sdk_registry,
             walrus_client_metrics,
+            registry: registry.clone(),
         }
     }
 }

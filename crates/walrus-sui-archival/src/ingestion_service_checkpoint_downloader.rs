@@ -9,7 +9,7 @@ use in_memory_checkpoint_holder::InMemoryCheckpointHolder;
 use sui_indexer_alt_framework::ingestion::IngestionService;
 use sui_storage::blob::Blob;
 use sui_types::{
-    full_checkpoint_content::CheckpointData,
+    full_checkpoint_content::{Checkpoint, CheckpointData},
     messages_checkpoint::CheckpointSequenceNumber,
 };
 use tokio::{fs, select, sync, task};
@@ -34,7 +34,7 @@ impl Drop for WorkerGuard {
 
 pub struct IngestionServiceCheckpointDownloadWorker {
     worker_id: usize,
-    rx: Receiver<Arc<CheckpointData>>,
+    rx: Receiver<Arc<Checkpoint>>,
     tx: sync::mpsc::Sender<CheckpointInfo>,
     config: IngestionServiceCheckpointDownloaderConfig,
     metrics: Arc<Metrics>,
@@ -44,7 +44,7 @@ pub struct IngestionServiceCheckpointDownloadWorker {
 impl IngestionServiceCheckpointDownloadWorker {
     pub fn new(
         worker_id: usize,
-        rx: Receiver<Arc<CheckpointData>>,
+        rx: Receiver<Arc<Checkpoint>>,
         tx: sync::mpsc::Sender<CheckpointInfo>,
         config: IngestionServiceCheckpointDownloaderConfig,
         metrics: Arc<Metrics>,
@@ -69,8 +69,8 @@ impl IngestionServiceCheckpointDownloadWorker {
             metrics: self.metrics.clone(),
         };
 
-        while let Ok(checkpoint_data) = self.rx.recv().await {
-            let checkpoint_number = checkpoint_data.checkpoint_summary.sequence_number;
+        while let Ok(checkpoint) = self.rx.recv().await {
+            let checkpoint_number = checkpoint.summary.sequence_number;
 
             tracing::debug!(
                 "worker {} processing checkpoint {}",
@@ -94,12 +94,12 @@ impl IngestionServiceCheckpointDownloadWorker {
             //     // Still need to send checkpoint info even if file exists.
             //     let checkpoint_info = CheckpointInfo {
             //         checkpoint_number,
-            //         epoch: checkpoint_data.checkpoint_summary.epoch,
+            //         epoch: checkpoint.summary.epoch,
             //         is_end_of_epoch: checkpoint_data
-            //             .checkpoint_summary
+            //             .summary
             //             .end_of_epoch_data
             //             .is_some(),
-            //         timestamp_ms: checkpoint_data.checkpoint_summary.timestamp_ms,
+            //         timestamp_ms: checkpoint.summary.timestamp_ms,
             //         checkpoint_byte_size: 0, // We don't know the size if we skipped it.
             //     };
 
@@ -111,7 +111,7 @@ impl IngestionServiceCheckpointDownloadWorker {
             // }
 
             match self
-                .write_checkpoint_to_disk(checkpoint_number, checkpoint_data)
+                .write_checkpoint_to_disk(checkpoint_number, checkpoint)
                 .await
             {
                 Ok(checkpoint_info) => {
@@ -137,22 +137,30 @@ impl IngestionServiceCheckpointDownloadWorker {
     async fn write_checkpoint_to_disk(
         &self,
         checkpoint_number: CheckpointSequenceNumber,
-        checkpoint_data: Arc<CheckpointData>,
+        checkpoint: Arc<Checkpoint>,
     ) -> Result<CheckpointInfo> {
-        // Serialize checkpoint data to bytes.
-        let bytes =
-            Blob::encode(&*checkpoint_data, sui_storage::blob::BlobEncoding::Bcs)?.to_bytes();
-
-        // Create checkpoint info.
+        // Create checkpoint info before conversion.
         let checkpoint_info = CheckpointInfo {
             checkpoint_number,
-            epoch: checkpoint_data.checkpoint_summary.epoch,
-            is_end_of_epoch: checkpoint_data
-                .checkpoint_summary
-                .end_of_epoch_data
-                .is_some(),
-            timestamp_ms: checkpoint_data.checkpoint_summary.timestamp_ms,
+            epoch: checkpoint.summary.epoch,
+            is_end_of_epoch: checkpoint.summary.end_of_epoch_data.is_some(),
+            timestamp_ms: checkpoint.summary.timestamp_ms,
+            checkpoint_byte_size: 0, // Will be updated after serialization
+        };
+
+        // Convert Checkpoint to CheckpointData for serialization.
+        // This consumes the Arc, so we unwrap or clone as needed.
+        let checkpoint_data: CheckpointData =
+            Arc::try_unwrap(checkpoint).unwrap_or_else(|arc| (*arc).clone()).into();
+
+        // Serialize checkpoint data to bytes.
+        let bytes =
+            Blob::encode(&checkpoint_data, sui_storage::blob::BlobEncoding::Bcs)?.to_bytes();
+
+        // Update checkpoint info with actual byte size.
+        let checkpoint_info = CheckpointInfo {
             checkpoint_byte_size: bytes.len(),
+            ..checkpoint_info
         };
 
         // Drop checkpoint data to free memory.
@@ -267,7 +275,8 @@ impl IngestionServiceCheckpointDownloader {
         let mut ingestion_service = IngestionService::new(
             self.config.to_client_args(),
             self.config.ingestion_config.clone(),
-            self.metrics.indexer_metrics.clone(),
+            None,
+            &self.metrics.registry,
             cancel.clone(),
         )?;
 
@@ -279,7 +288,7 @@ impl IngestionServiceCheckpointDownloader {
 
         // Create channels for worker communication.
         // TODO: apply this to the other downloader if needed.
-        let (download_tx, download_rx) = async_channel::bounded::<Arc<CheckpointData>>(10);
+        let (download_tx, download_rx) = async_channel::bounded::<Arc<Checkpoint>>(10);
         let (result_tx, result_rx) = sync::mpsc::channel::<CheckpointInfo>(100);
 
         // Start the ingestion service.
@@ -338,8 +347,8 @@ impl IngestionServiceCheckpointDownloader {
     }
 
     async fn checkpoint_driver(
-        mut checkpoint_rx: sync::mpsc::Receiver<Arc<CheckpointData>>,
-        download_tx: async_channel::Sender<Arc<CheckpointData>>,
+        mut checkpoint_rx: sync::mpsc::Receiver<Arc<Checkpoint>>,
+        download_tx: async_channel::Sender<Arc<Checkpoint>>,
     ) -> Result<()> {
         loop {
             // Receive checkpoint from ingestion service.

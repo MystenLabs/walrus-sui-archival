@@ -11,7 +11,11 @@ use std::{
 use anyhow::Result;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use sui_indexer_alt_framework::ingestion::{ClientArgs, IngestionConfig};
+use sui_indexer_alt_framework::ingestion::{
+    ClientArgs, IngestionConfig,
+    ingestion_client::IngestionClientArgs,
+    streaming_client::StreamingClientArgs,
+};
 use sui_types::base_types::{ObjectID, SequenceNumber};
 use walrus_core::EpochCount;
 
@@ -132,11 +136,16 @@ impl IngestionServiceCheckpointDownloaderConfig {
     /// Convert this config into ClientArgs for the ingestion service.
     pub fn to_client_args(&self) -> ClientArgs {
         ClientArgs {
-            remote_store_url: Some(self.remote_store_url.clone()),
-            local_ingestion_path: None,
-            rpc_api_url: None,
-            rpc_username: None,
-            rpc_password: None,
+            ingestion: IngestionClientArgs {
+                remote_store_url: Some(self.remote_store_url.clone()),
+                local_ingestion_path: None,
+                rpc_api_url: None,
+                rpc_username: None,
+                rpc_password: None,
+            },
+            streaming: StreamingClientArgs {
+                streaming_url: None,
+            },
         }
     }
 }
