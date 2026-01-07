@@ -137,7 +137,7 @@ impl CheckpointBlobExtender {
                     .parse()
                     .map_err(|e| anyhow!("failed to parse blob ID: {}", e))?;
 
-                tracing::info!(
+                tracing::debug!(
                     "blob {} (object {}) expires at epoch {}, will extend (shared: {})",
                     blob_id,
                     object_id,

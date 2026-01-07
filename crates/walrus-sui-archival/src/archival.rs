@@ -315,13 +315,13 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
                 return Err(anyhow::anyhow!("REST API server failed: {}", e));
             }
         }
-        blob_extender_result = blob_extender_handle => {
-            tracing::info!("checkpoint blob extender stopped: {:?}", blob_extender_result);
-            if let Err(e) = blob_extender_result {
-                tracing::error!("checkpoint blob extender failed: {}", e);
-                return Err(anyhow::anyhow!("checkpoint blob extender failed: {}", e));
-            }
-        }
+        // blob_extender_result = blob_extender_handle => {
+        //     tracing::info!("checkpoint blob extender stopped: {:?}", blob_extender_result);
+        //     if let Err(e) = blob_extender_result {
+        //         tracing::error!("checkpoint blob extender failed: {}", e);
+        //         return Err(anyhow::anyhow!("checkpoint blob extender failed: {}", e));
+        //     }
+        // }
         snapshot_creator_result = snapshot_creator_handle => {
             tracing::info!("archival state snapshot creator stopped: {:?}", snapshot_creator_result);
             if let Err(e) = snapshot_creator_result {
