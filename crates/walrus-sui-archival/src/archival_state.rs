@@ -340,6 +340,7 @@ impl ArchivalState {
     /// List all checkpoint blobs in the database.
     /// Returns blobs in decreasing order of start_checkpoint (newest first).
     pub fn list_all_blobs(&self, reverse: bool) -> Result<Vec<CheckpointBlobInfo>> {
+        tracing::info!("listing all checkpoint blobs in the database");
         let cf = self
             .db
             .cf_handle(CF_CHECKPOINT_BLOB_INFO)

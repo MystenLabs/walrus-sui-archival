@@ -218,12 +218,6 @@ async fn background_cache_refresh(state: AppState) {
         // Refresh /v1/app_blobs.
         refresh_blobs_cache(&state).await;
 
-        // Refresh /v1/app_blobs_expired_before_epoch for various epochs.
-        // We'll refresh for a few common epochs.
-        for epoch in [100, 200, 300, 400, 500] {
-            refresh_expired_blobs_cache(&state, epoch).await;
-        }
-
         tracing::info!("background cache refresh completed");
 
         // Wait for the cache freshness duration before refreshing.
@@ -295,54 +289,6 @@ async fn refresh_blobs_cache(state: &AppState) {
         }
         Err(e) => {
             tracing::error!("failed to fetch blobs from backend: {}", e);
-        }
-    }
-}
-
-/// Refresh expired blobs cache for a specific epoch.
-async fn refresh_expired_blobs_cache(state: &AppState, epoch: u32) {
-    let url = format!(
-        "{}/v1/app_blobs_expired_before_epoch?epoch={}",
-        state.backend_url, epoch
-    );
-    let cache_key = format!("v1/app_blobs_expired_before_epoch?epoch={}", epoch);
-
-    match state.http_client.get(&url).send().await {
-        Ok(response) => {
-            if response.status().is_success() {
-                match response.text().await {
-                    Ok(text) => {
-                        let mut cache = state.cache.write().await;
-                        cache.insert(
-                            cache_key,
-                            CacheEntry {
-                                data: text,
-                                timestamp: Instant::now(),
-                            },
-                        );
-                        tracing::info!(
-                            "refreshed cache for /v1/app_blobs_expired_before_epoch?epoch={}",
-                            epoch
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!("failed to read expired blobs response: {}", e);
-                    }
-                }
-            } else {
-                tracing::error!(
-                    "backend returned error for expired blobs epoch {}: {}",
-                    epoch,
-                    response.status()
-                );
-            }
-        }
-        Err(e) => {
-            tracing::error!(
-                "failed to fetch expired blobs for epoch {} from backend: {}",
-                epoch,
-                e
-            );
         }
     }
 }
