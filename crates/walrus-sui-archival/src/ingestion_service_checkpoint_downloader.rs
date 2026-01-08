@@ -139,15 +139,6 @@ impl IngestionServiceCheckpointDownloadWorker {
         checkpoint_number: CheckpointSequenceNumber,
         checkpoint: Arc<Checkpoint>,
     ) -> Result<CheckpointInfo> {
-        // Create checkpoint info before conversion.
-        let checkpoint_info = CheckpointInfo {
-            checkpoint_number,
-            epoch: checkpoint.summary.epoch,
-            is_end_of_epoch: checkpoint.summary.end_of_epoch_data.is_some(),
-            timestamp_ms: checkpoint.summary.timestamp_ms,
-            checkpoint_byte_size: 0, // Will be updated after serialization
-        };
-
         // Convert Checkpoint to CheckpointData for serialization.
         let checkpoint_data = CheckpointData::from((*checkpoint).clone());
 
@@ -155,10 +146,13 @@ impl IngestionServiceCheckpointDownloadWorker {
         let bytes =
             Blob::encode(&checkpoint_data, sui_storage::blob::BlobEncoding::Bcs)?.to_bytes();
 
-        // Update checkpoint info with actual byte size.
+        // Create checkpoint info with all values.
         let checkpoint_info = CheckpointInfo {
+            checkpoint_number,
+            epoch: checkpoint.summary.epoch,
+            is_end_of_epoch: checkpoint.summary.end_of_epoch_data.is_some(),
+            timestamp_ms: checkpoint.summary.timestamp_ms,
             checkpoint_byte_size: bytes.len(),
-            ..checkpoint_info
         };
 
         // Store checkpoint either in memory or on disk.
