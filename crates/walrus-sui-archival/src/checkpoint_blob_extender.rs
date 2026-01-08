@@ -15,8 +15,11 @@ use tokio::time;
 use walrus_sdk::{SuiReadClient, sui::client::ReadClient};
 
 use crate::{
-    archival_state::ArchivalState, config::CheckpointBlobExtenderConfig, metrics::Metrics,
-    sui_interactive_client::SuiInteractiveClient, util::execute_transaction_and_check_status,
+    archival_state::ArchivalState,
+    config::CheckpointBlobExtenderConfig,
+    metrics::Metrics,
+    sui_interactive_client::SuiInteractiveClient,
+    util::execute_transaction_and_check_status,
 };
 
 /// Service that periodically checks and extends blob expiration epochs.

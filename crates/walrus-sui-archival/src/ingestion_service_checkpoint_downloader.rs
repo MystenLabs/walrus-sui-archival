@@ -16,7 +16,8 @@ use tokio::{fs, select, sync, task};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    checkpoint_downloader::CheckpointInfo, config::IngestionServiceCheckpointDownloaderConfig,
+    checkpoint_downloader::CheckpointInfo,
+    config::IngestionServiceCheckpointDownloaderConfig,
     metrics::Metrics,
 };
 

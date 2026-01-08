@@ -9,7 +9,8 @@ use std::{
 
 use anyhow::Result;
 use axum::{
-    Json, Router,
+    Json,
+    Router,
     extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,

@@ -9,7 +9,10 @@ use sui_sdk::wallet_context::WalletContext;
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{select, sync::mpsc};
 use walrus_sdk::{
-    SuiReadClient, client::WalrusNodeClient, config::ClientConfig, sui::client::SuiContractClient,
+    SuiReadClient,
+    client::WalrusNodeClient,
+    config::ClientConfig,
+    sui::client::SuiContractClient,
 };
 
 use crate::{
@@ -17,7 +20,8 @@ use crate::{
     archival_state_snapshot_creator::ArchivalStateSnapshotCreator,
     checkpoint_blob_extender::CheckpointBlobExtender,
     checkpoint_blob_publisher::{self, BlobBuildRequest},
-    checkpoint_downloader, checkpoint_monitor,
+    checkpoint_downloader,
+    checkpoint_monitor,
     config::{CheckpointDownloaderType, Config},
     ingestion_service_checkpoint_downloader,
     metrics::Metrics,

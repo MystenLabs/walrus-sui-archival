@@ -8,8 +8,10 @@ use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::sync::mpsc;
 
 use crate::{
-    checkpoint_blob_publisher::BlobBuildRequest, checkpoint_downloader::CheckpointInfo,
-    config::CheckpointMonitorConfig, metrics::Metrics,
+    checkpoint_blob_publisher::BlobBuildRequest,
+    checkpoint_downloader::CheckpointInfo,
+    config::CheckpointMonitorConfig,
+    metrics::Metrics,
 };
 
 /// Threshold for number of pending checkpoints before pausing the downloader.
