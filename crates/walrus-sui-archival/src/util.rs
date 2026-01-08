@@ -13,9 +13,8 @@ use sui_sdk::{
 use sui_types::{base_types::SuiAddress, transaction::TransactionData};
 use walrus_core::{BlobId, Epoch};
 use walrus_sdk::{
-    ObjectID,
-    SuiReadClient,
-    client::{StoreBlobsApi, StoreArgs, WalrusNodeClient, responses::BlobStoreResult},
+    ObjectID, SuiReadClient,
+    client::{StoreArgs, StoreBlobsApi, WalrusNodeClient, responses::BlobStoreResult},
     config::ClientConfig,
     store_optimizations::StoreOptimizations,
     sui::client::{BlobPersistence, PostStoreAction, SuiContractClient},

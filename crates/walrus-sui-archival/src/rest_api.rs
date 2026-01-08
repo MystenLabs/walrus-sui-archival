@@ -5,8 +5,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use axum::{
-    Json,
-    Router,
+    Json, Router,
     body::Body,
     extract::{Query, State},
     http::{StatusCode, header},
@@ -16,8 +15,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sui_storage::blob::Blob;
 use sui_types::{
-    full_checkpoint_content::CheckpointData,
-    messages_checkpoint::CheckpointSequenceNumber,
+    full_checkpoint_content::CheckpointData, messages_checkpoint::CheckpointSequenceNumber,
 };
 use tower_http::cors::CorsLayer;
 use walrus_core::{BlobId, encoding::Primary};

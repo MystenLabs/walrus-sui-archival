@@ -21,11 +21,8 @@ use sui_types::{
 use tokio::{fs, sync::mpsc, task::JoinSet};
 
 use crate::{
-    archival_state::ArchivalState,
-    config::CheckpointBlobPublisherConfig,
-    metrics::Metrics,
-    sui_interactive_client::SuiInteractiveClient,
-    util::upload_blob_to_walrus_with_retry,
+    archival_state::ArchivalState, config::CheckpointBlobPublisherConfig, metrics::Metrics,
+    sui_interactive_client::SuiInteractiveClient, util::upload_blob_to_walrus_with_retry,
 };
 
 // Global semaphore to limit concurrent blob builds to 1.
