@@ -149,9 +149,7 @@ impl IngestionServiceCheckpointDownloadWorker {
         };
 
         // Convert Checkpoint to CheckpointData for serialization.
-        // This consumes the Arc, so we unwrap or clone as needed.
-        let checkpoint_data: CheckpointData =
-            Arc::try_unwrap(checkpoint).unwrap_or_else(|arc| (*arc).clone()).into();
+        let checkpoint_data = CheckpointData::from((*checkpoint).clone());
 
         // Serialize checkpoint data to bytes.
         let bytes =
@@ -162,9 +160,6 @@ impl IngestionServiceCheckpointDownloadWorker {
             checkpoint_byte_size: bytes.len(),
             ..checkpoint_info
         };
-
-        // Drop checkpoint data to free memory.
-        drop(checkpoint_data);
 
         // Store checkpoint either in memory or on disk.
         if let Some(ref holder) = self.in_memory_holder {
