@@ -114,7 +114,7 @@ impl IngestionServiceCheckpointDownloadWorker {
             let checkpoint_data = CheckpointData::from((*checkpoint).clone());
 
             match self
-                .write_checkpoint_to_disk(checkpoint_number, checkpoint_data)
+                .write_checkpoint_to_disk(checkpoint_number, Arc::new(checkpoint_data))
                 .await
             {
                 Ok(checkpoint_info) => {
@@ -140,11 +140,11 @@ impl IngestionServiceCheckpointDownloadWorker {
     async fn write_checkpoint_to_disk(
         &self,
         checkpoint_number: CheckpointSequenceNumber,
-        checkpoint_data: CheckpointData,
+        checkpoint_data: Arc<CheckpointData>,
     ) -> Result<CheckpointInfo> {
         // Serialize checkpoint data to bytes.
         let bytes =
-            Blob::encode(&checkpoint_data, sui_storage::blob::BlobEncoding::Bcs)?.to_bytes();
+            Blob::encode(&*checkpoint_data, sui_storage::blob::BlobEncoding::Bcs)?.to_bytes();
 
         // Create checkpoint info with all values.
         let checkpoint_info = CheckpointInfo {
