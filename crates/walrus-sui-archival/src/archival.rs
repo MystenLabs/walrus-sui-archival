@@ -259,7 +259,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
 
     // Start the checkpoint blob extender.
     let system_object_id = client_config.contract_config.system_object;
-    let blob_extender = CheckpointBlobExtender::new(
+    let _blob_extender = CheckpointBlobExtender::new(
         archival_state.clone(),
         sui_interactive_client.clone(),
         config.checkpoint_blob_extender.clone(),

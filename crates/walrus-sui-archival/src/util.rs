@@ -15,7 +15,7 @@ use walrus_core::{BlobId, Epoch};
 use walrus_sdk::{
     ObjectID,
     SuiReadClient,
-    client::{StoreArgs, WalrusNodeClient, responses::BlobStoreResult},
+    client::{StoreArgs, StoreBlobsApi, WalrusNodeClient, responses::BlobStoreResult},
     config::ClientConfig,
     store_optimizations::StoreOptimizations,
     sui::client::{BlobPersistence, PostStoreAction, SuiContractClient},
@@ -125,7 +125,7 @@ pub async fn upload_blob_to_walrus_with_retry(
 
     loop {
         match walrus_client
-            .reserve_and_store_blobs_retry_committees(&[blob.as_slice()], &[], &store_args)
+            .reserve_and_store_blobs_retry_committees(vec![blob.clone()], vec![], &store_args)
             .await
         {
             Ok(results) => {
