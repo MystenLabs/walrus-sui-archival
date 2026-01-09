@@ -5601,7 +5601,7 @@ dependencies = [
  "either",
  "fastcrypto",
  "futures",
- "mysten-metrics 0.7.0 (git+https://github.com/MystenLabs/sui?tag=testnet-v1.62.0)",
+ "mysten-metrics",
  "once_cell",
  "parking_lot",
  "rand 0.8.5",
@@ -5626,28 +5626,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "prometheus",
- "prometheus-closure-metric 0.1.0 (git+https://github.com/MystenLabs/sui?tag=testnet-v1.62.0)",
- "scopeguard",
- "simple-server-timing-header",
- "tap",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "mysten-metrics"
-version = "0.7.0"
-source = "git+https://github.com/MystenLabs/sui?tag=testnet-v1.63.1#a14d9e8ddadfcea837de46b43d0b72a289320afb"
-dependencies = [
- "async-trait",
- "axum 0.8.7",
- "dashmap",
- "futures",
- "once_cell",
- "parking_lot",
- "prometheus",
- "prometheus-closure-metric 0.1.0 (git+https://github.com/MystenLabs/sui?tag=testnet-v1.63.1)",
+ "prometheus-closure-metric",
  "scopeguard",
  "simple-server-timing-header",
  "tap",
@@ -5676,7 +5655,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "multiaddr",
- "mysten-metrics 0.7.0 (git+https://github.com/MystenLabs/sui?tag=testnet-v1.62.0)",
+ "mysten-metrics",
  "once_cell",
  "pin-project-lite",
  "prometheus",
@@ -6761,16 +6740,6 @@ dependencies = [
 name = "prometheus-closure-metric"
 version = "0.1.0"
 source = "git+https://github.com/MystenLabs/sui?tag=testnet-v1.62.0#74e8414a498601333fa4dd408c892f5fe3b0ca93"
-dependencies = [
- "anyhow",
- "prometheus",
- "protobuf",
-]
-
-[[package]]
-name = "prometheus-closure-metric"
-version = "0.1.0"
-source = "git+https://github.com/MystenLabs/sui?tag=testnet-v1.63.1#a14d9e8ddadfcea837de46b43d0b72a289320afb"
 dependencies = [
  "anyhow",
  "prometheus",
@@ -8907,7 +8876,7 @@ dependencies = [
  "axum 0.8.7",
  "clap",
  "prometheus",
- "prometheus-closure-metric 0.1.0 (git+https://github.com/MystenLabs/sui?tag=testnet-v1.62.0)",
+ "prometheus-closure-metric",
  "sui-pg-db",
  "tokio",
  "tokio-util 0.7.17",
@@ -8939,7 +8908,7 @@ dependencies = [
  "anyhow",
  "fastcrypto",
  "jsonrpsee",
- "mysten-metrics 0.7.0 (git+https://github.com/MystenLabs/sui?tag=testnet-v1.62.0)",
+ "mysten-metrics",
  "once_cell",
  "prometheus",
  "sui-json",
@@ -8969,7 +8938,7 @@ dependencies = [
  "move-core-types",
  "move-disassembler",
  "move-ir-types",
- "mysten-metrics 0.7.0 (git+https://github.com/MystenLabs/sui?tag=testnet-v1.62.0)",
+ "mysten-metrics",
  "nonempty",
  "schemars 0.8.22",
  "serde",
@@ -9378,7 +9347,7 @@ dependencies = [
  "move-binary-format",
  "move-bytecode-utils",
  "move-core-types",
- "mysten-metrics 0.7.0 (git+https://github.com/MystenLabs/sui?tag=testnet-v1.62.0)",
+ "mysten-metrics",
  "num_enum",
  "object_store",
  "parking_lot",
@@ -9453,7 +9422,7 @@ dependencies = [
  "move-vm-profiler",
  "move-vm-test-utils",
  "mysten-common",
- "mysten-metrics 0.7.0 (git+https://github.com/MystenLabs/sui?tag=testnet-v1.62.0)",
+ "mysten-metrics",
  "mysten-network",
  "nonempty",
  "num-bigint 0.4.6",
@@ -10532,7 +10501,7 @@ dependencies = [
  "itertools 0.13.0",
  "msim",
  "mysten-common",
- "mysten-metrics 0.7.0 (git+https://github.com/MystenLabs/sui?tag=testnet-v1.62.0)",
+ "mysten-metrics",
  "once_cell",
  "prometheus",
  "rand 0.8.5",
@@ -10998,7 +10967,7 @@ dependencies = [
  "jsonrpsee",
  "move-core-types",
  "move-package",
- "mysten-metrics 0.7.0 (git+https://github.com/MystenLabs/sui?tag=testnet-v1.62.0)",
+ "mysten-metrics",
  "prometheus",
  "rand 0.8.5",
  "regex",
@@ -11050,7 +11019,7 @@ dependencies = [
  "humantime-serde",
  "in-memory-checkpoint-holder",
  "mockito",
- "mysten-metrics 0.7.0 (git+https://github.com/MystenLabs/sui?tag=testnet-v1.63.1)",
+ "mysten-metrics",
  "parquet",
  "prometheus",
  "prost 0.13.5",
