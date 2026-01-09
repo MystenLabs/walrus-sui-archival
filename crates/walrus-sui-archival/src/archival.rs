@@ -25,6 +25,7 @@ use crate::{
     config::{CheckpointDownloaderType, Config},
     ingestion_service_checkpoint_downloader,
     metrics::Metrics,
+    postgres::create_shared_pool_from_env,
     rest_api::RestApiServer,
     sui_interactive_client::SuiInteractiveClient,
 };
@@ -124,6 +125,40 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
 
     // Set walrus read client on archival state for lazy index fetching.
     archival_state.set_walrus_read_client(walrus_read_client.clone());
+
+    // Initialize PostgreSQL connection pool if DATABASE_URL is set.
+    // This enables dual-write to both RocksDB and PostgreSQL.
+    match create_shared_pool_from_env() {
+        Ok(pool) => {
+            tracing::info!("PostgreSQL connection pool initialized from DATABASE_URL");
+
+            // Run database migrations.
+            let pool_clone = pool.clone();
+            let migration_result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(pool_clone.run_migrations())
+            });
+
+            match migration_result {
+                Ok(()) => {
+                    // Set the postgres pool on archival state for dual writes.
+                    archival_state.set_postgres_pool(pool);
+                    tracing::info!("PostgreSQL migrations completed, dual-write enabled");
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "failed to run PostgreSQL migrations, continuing with RocksDB only: {}",
+                        e
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            tracing::info!(
+                "PostgreSQL not configured (DATABASE_URL not set): {}, using RocksDB only",
+                e
+            );
+        }
+    };
 
     let archival_state = Arc::new(archival_state);
 

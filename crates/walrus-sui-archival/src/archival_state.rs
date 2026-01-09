@@ -14,6 +14,8 @@ use tokio::task::JoinHandle;
 use walrus_core::{BlobId, Epoch, encoding::Primary};
 use walrus_sdk::{SuiReadClient, client::WalrusNodeClient};
 
+use crate::postgres::{NewCheckpointBlobInfo, NewCheckpointIndexEntry, SharedPostgresPool};
+
 // Include the generated protobuf code.
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/archival.rs"));
@@ -27,11 +29,13 @@ pub const CF_CHECKPOINT_BLOB_INFO: &str = "checkpoint_blob_info";
 /// Current version of the CheckpointBlobInfo format.
 const CHECKPOINT_BLOB_INFO_VERSION: u32 = 1;
 
-/// Archival state that manages the RocksDB database.
+/// Archival state that manages the RocksDB database and optional PostgreSQL.
 pub struct ArchivalState {
     db: Arc<DB>,
     read_only: bool,
     walrus_read_client: Option<Arc<WalrusNodeClient<SuiReadClient>>>,
+    /// Optional PostgreSQL connection pool for distributed metadata storage.
+    postgres_pool: Option<SharedPostgresPool>,
 }
 
 impl ArchivalState {
@@ -72,12 +76,88 @@ impl ArchivalState {
             db: Arc::new(db),
             read_only,
             walrus_read_client: None,
+            postgres_pool: None,
         })
     }
 
     /// Set the Walrus read client for fetching blob data.
     pub fn set_walrus_read_client(&mut self, client: Arc<WalrusNodeClient<SuiReadClient>>) {
         self.walrus_read_client = Some(client);
+    }
+
+    /// Set the PostgreSQL connection pool for distributed metadata storage.
+    pub fn set_postgres_pool(&mut self, pool: SharedPostgresPool) {
+        self.postgres_pool = Some(pool);
+    }
+
+    /// Get a reference to the PostgreSQL pool if configured.
+    pub fn postgres_pool(&self) -> Option<&SharedPostgresPool> {
+        self.postgres_pool.as_ref()
+    }
+
+    /// Write checkpoint blob info to PostgreSQL if configured.
+    /// This is a fire-and-forget operation - errors are logged but don't fail the main operation.
+    #[allow(clippy::too_many_arguments)]
+    fn write_to_postgres(
+        &self,
+        start_checkpoint: CheckpointSequenceNumber,
+        end_checkpoint: CheckpointSequenceNumber,
+        blob_id: &BlobId,
+        object_id: &ObjectID,
+        blob_expiration_epoch: Epoch,
+        end_of_epoch: bool,
+        is_shared_blob: bool,
+        index_entries: &[IndexEntry],
+    ) {
+        if let Some(pg_pool) = &self.postgres_pool {
+            let blob_id_str = blob_id.to_string();
+            let object_id_str = object_id.to_string();
+
+            let pg_blob_info = NewCheckpointBlobInfo::from_proto(
+                start_checkpoint,
+                end_checkpoint,
+                &blob_id_str,
+                &object_id_str,
+                end_of_epoch,
+                blob_expiration_epoch,
+                is_shared_blob,
+                CHECKPOINT_BLOB_INFO_VERSION,
+            );
+
+            let pg_index_entries: Vec<NewCheckpointIndexEntry> = index_entries
+                .iter()
+                .map(|entry| {
+                    NewCheckpointIndexEntry::new(
+                        start_checkpoint,
+                        entry.checkpoint_number,
+                        entry.offset,
+                        entry.length,
+                    )
+                })
+                .collect();
+
+            let pool = pg_pool.clone();
+            // Spawn a task to write to PostgreSQL asynchronously.
+            // This ensures RocksDB writes are not blocked by PostgreSQL operations.
+            tokio::spawn(async move {
+                if let Err(e) = pool
+                    .insert_checkpoint_blob_info(pg_blob_info, pg_index_entries)
+                    .await
+                {
+                    tracing::error!(
+                        "failed to write checkpoint blob info to PostgreSQL (start={}): {}",
+                        start_checkpoint,
+                        e
+                    );
+                } else {
+                    tracing::debug!(
+                        "wrote checkpoint blob info to PostgreSQL: start={}, end={}",
+                        start_checkpoint,
+                        end_checkpoint
+                    );
+                }
+            });
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -122,14 +202,14 @@ impl ArchivalState {
             end_checkpoint,
             end_of_epoch,
             blob_expiration_epoch,
-            index_entries,
+            index_entries: index_entries.clone(),
             is_shared_blob,
         };
 
         // Serialize to protobuf bytes.
         let blob_info_bytes = blob_info.encode_to_vec();
 
-        // Store in database with start_checkpoint as key.
+        // Store in RocksDB with start_checkpoint as key.
         self.db.put_cf(
             &self
                 .db
@@ -138,6 +218,18 @@ impl ArchivalState {
             be_fix_int_ser(&start_checkpoint)?,
             blob_info_bytes,
         )?;
+
+        // Also write to PostgreSQL if configured (fire-and-forget).
+        self.write_to_postgres(
+            start_checkpoint,
+            end_checkpoint,
+            &blob_id,
+            &object_id,
+            blob_expiration_epoch,
+            end_of_epoch,
+            is_shared_blob,
+            &index_entries,
+        );
 
         Ok(())
     }

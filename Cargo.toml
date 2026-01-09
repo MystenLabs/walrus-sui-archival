@@ -43,3 +43,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walrus-core = { git = "https://github.com/MystenLabs/walrus.git", tag = "testnet-v1.39.1" }
 walrus-sdk = { git = "https://github.com/MystenLabs/walrus.git", tag = "testnet-v1.39.1" }
+diesel = { version = "2.2", features = ["postgres", "r2d2", "chrono", "numeric"] }
+diesel-async = { version = "0.5", features = ["postgres", "deadpool"] }
+deadpool-diesel = { version = "0.6", features = ["postgres"] }
+diesel_migrations = "2.2"
+dotenvy = "0.15"
+hex = "0.4"
