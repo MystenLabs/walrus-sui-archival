@@ -269,6 +269,101 @@ impl PostgresPool {
         .map_err(|e| anyhow::anyhow!("Database error: {}", e))
     }
 
+    /// Get all start_checkpoint values from the database.
+    /// Useful for finding missing entries during backfill.
+    pub async fn get_all_start_checkpoints(&self) -> Result<Vec<i64>> {
+        let conn = self.pool.get().await.context("Failed to get connection")?;
+
+        conn.interact(|conn| {
+            checkpoint_blob_info::table
+                .select(checkpoint_blob_info::start_checkpoint)
+                .order(checkpoint_blob_info::start_checkpoint.asc())
+                .load::<i64>(conn)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Interact error: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Database error: {}", e))
+    }
+
+    /// Batch insert multiple checkpoint blob info records.
+    /// This is more efficient than inserting one at a time.
+    pub async fn batch_insert_checkpoint_blob_info(
+        &self,
+        records: Vec<(NewCheckpointBlobInfo, Vec<NewCheckpointIndexEntry>)>,
+    ) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        let conn = self.pool.get().await.context("Failed to get connection")?;
+
+        conn.interact(move |conn| {
+            conn.transaction::<_, diesel::result::Error, _>(|conn| {
+                // Collect all blob infos for batch insert
+                let blob_infos: Vec<&NewCheckpointBlobInfo> =
+                    records.iter().map(|(info, _)| info).collect();
+
+                // Batch insert blob infos with upsert
+                for chunk in blob_infos.chunks(100) {
+                    for blob_info in chunk {
+                        diesel::insert_into(checkpoint_blob_info::table)
+                            .values(*blob_info)
+                            .on_conflict(checkpoint_blob_info::start_checkpoint)
+                            .do_update()
+                            .set((
+                                checkpoint_blob_info::end_checkpoint.eq(&blob_info.end_checkpoint),
+                                checkpoint_blob_info::blob_id.eq(&blob_info.blob_id),
+                                checkpoint_blob_info::object_id.eq(&blob_info.object_id),
+                                checkpoint_blob_info::end_of_epoch.eq(&blob_info.end_of_epoch),
+                                checkpoint_blob_info::blob_expiration_epoch
+                                    .eq(&blob_info.blob_expiration_epoch),
+                                checkpoint_blob_info::is_shared_blob.eq(&blob_info.is_shared_blob),
+                                checkpoint_blob_info::version.eq(&blob_info.version),
+                            ))
+                            .execute(conn)?;
+                    }
+                }
+
+                // Collect all start_checkpoints for deleting old index entries
+                let start_checkpoints: Vec<i64> = records
+                    .iter()
+                    .map(|(info, _)| info.start_checkpoint)
+                    .collect();
+
+                // Delete existing index entries for all blobs in batch
+                diesel::delete(
+                    checkpoint_index_entry::table.filter(
+                        checkpoint_index_entry::start_checkpoint.eq_any(&start_checkpoints),
+                    ),
+                )
+                .execute(conn)?;
+
+                // Collect all index entries and batch insert
+                let all_index_entries: Vec<&NewCheckpointIndexEntry> = records
+                    .iter()
+                    .flat_map(|(_, entries)| entries.iter())
+                    .collect();
+
+                if !all_index_entries.is_empty() {
+                    for chunk in all_index_entries.chunks(1000) {
+                        let owned_chunk: Vec<NewCheckpointIndexEntry> =
+                            chunk.iter().map(|&e| e.clone()).collect();
+                        diesel::insert_into(checkpoint_index_entry::table)
+                            .values(&owned_chunk)
+                            .execute(conn)?;
+                    }
+                }
+
+                Ok(())
+            })
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Interact error: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+
+        Ok(())
+    }
+
     /// Get the inner pool for advanced usage.
     pub fn get_pool(&self) -> &Pool {
         &self.pool

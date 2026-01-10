@@ -6,7 +6,7 @@
 //! This module provides a CLI tool that reads all checkpoint blob info records
 //! from RocksDB and writes them to PostgreSQL.
 
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use anyhow::Result;
 use prost::Message;
@@ -17,10 +17,49 @@ use crate::{
     postgres::{NewCheckpointBlobInfo, NewCheckpointIndexEntry, PostgresPool},
 };
 
+/// Convert a RocksDB blob info to PostgreSQL models.
+fn convert_to_pg_models(
+    blob_info: &CheckpointBlobInfo,
+) -> (NewCheckpointBlobInfo, Vec<NewCheckpointIndexEntry>) {
+    let blob_id_str = String::from_utf8_lossy(&blob_info.blob_id).to_string();
+    let object_id_bytes = &blob_info.object_id;
+    let object_id_str = if object_id_bytes.len() == 32 {
+        format!("0x{}", hex::encode(object_id_bytes))
+    } else {
+        hex::encode(object_id_bytes)
+    };
+
+    let pg_blob_info = NewCheckpointBlobInfo::from_proto(
+        blob_info.start_checkpoint,
+        blob_info.end_checkpoint,
+        &blob_id_str,
+        &object_id_str,
+        blob_info.end_of_epoch,
+        blob_info.blob_expiration_epoch,
+        blob_info.is_shared_blob,
+        blob_info.version,
+    );
+
+    let pg_index_entries: Vec<NewCheckpointIndexEntry> = blob_info
+        .index_entries
+        .iter()
+        .map(|entry| {
+            NewCheckpointIndexEntry::new(
+                blob_info.start_checkpoint,
+                entry.checkpoint_number,
+                entry.offset,
+                entry.length,
+            )
+        })
+        .collect();
+
+    (pg_blob_info, pg_index_entries)
+}
+
 /// Run the backfill process from RocksDB to PostgreSQL.
 ///
 /// This function reads all checkpoint blob info records from RocksDB and writes them
-/// to PostgreSQL. It's designed as a one-time migration tool.
+/// to PostgreSQL in batches. It also verifies and reinserts any missing entries.
 pub async fn run_backfill(db_path: impl AsRef<Path>, batch_size: usize) -> Result<()> {
     tracing::info!("starting RocksDB to PostgreSQL backfill");
 
@@ -50,104 +89,76 @@ pub async fn run_backfill(db_path: impl AsRef<Path>, batch_size: usize) -> Resul
         .cf_handle(CF_CHECKPOINT_BLOB_INFO)
         .expect("column family must exist");
 
-    // Count total records first.
-    let total_count = db.iterator_cf(&cf, rocksdb::IteratorMode::Start).count();
+    // Collect all start_checkpoints from RocksDB.
+    tracing::info!("collecting all start_checkpoints from RocksDB...");
+    let mut rocks_checkpoints: Vec<u64> = Vec::new();
+    for item in db.iterator_cf(&cf, rocksdb::IteratorMode::Start) {
+        let (key_bytes, _) = item?;
+        let start_checkpoint: u64 = be_fix_int_deser(&key_bytes)?;
+        rocks_checkpoints.push(start_checkpoint);
+    }
+    let total_count = rocks_checkpoints.len();
     tracing::info!("found {} total records in RocksDB", total_count);
 
-    // Get the latest checkpoint in PostgreSQL to resume from.
-    let pg_latest = postgres_pool.get_latest_stored_checkpoint().await?;
-    let start_from = pg_latest.map(|c| (c + 1) as u64).unwrap_or(0);
-
-    if let Some(latest) = pg_latest {
-        tracing::info!(
-            "PostgreSQL already has data up to checkpoint {}, resuming from {}",
-            latest,
-            start_from
-        );
-    } else {
-        tracing::info!("PostgreSQL is empty, starting from beginning");
-    }
-
-    // Create iterator starting from the resume point.
-    let seek_key = crate::archival_state::be_fix_int_ser(&start_from)?;
-    let iter = db.iterator_cf(
-        &cf,
-        rocksdb::IteratorMode::From(&seek_key, rocksdb::Direction::Forward),
+    // Get existing checkpoints from PostgreSQL.
+    let pg_checkpoints: HashSet<i64> = postgres_pool
+        .get_all_start_checkpoints()
+        .await?
+        .into_iter()
+        .collect();
+    tracing::info!(
+        "found {} existing records in PostgreSQL",
+        pg_checkpoints.len()
     );
 
-    let mut processed_count = 0;
-    let mut batch_records = Vec::new();
+    // Find checkpoints that need to be inserted.
+    let missing_checkpoints: Vec<u64> = rocks_checkpoints
+        .iter()
+        .filter(|&&c| !pg_checkpoints.contains(&(c as i64)))
+        .copied()
+        .collect();
 
-    for item in iter {
-        let (key_bytes, value_bytes) = item?;
-
-        let start_checkpoint: u64 = be_fix_int_deser(&key_bytes)?;
-        let blob_info = CheckpointBlobInfo::decode(value_bytes.as_ref())?;
-
-        // Convert to PostgreSQL models.
-        let blob_id_str = String::from_utf8_lossy(&blob_info.blob_id).to_string();
-        let object_id_bytes = &blob_info.object_id;
-        let object_id_str = if object_id_bytes.len() == 32 {
-            format!("0x{}", hex::encode(object_id_bytes))
-        } else {
-            hex::encode(object_id_bytes)
-        };
-
-        let pg_blob_info = NewCheckpointBlobInfo::from_proto(
-            blob_info.start_checkpoint,
-            blob_info.end_checkpoint,
-            &blob_id_str,
-            &object_id_str,
-            blob_info.end_of_epoch,
-            blob_info.blob_expiration_epoch,
-            blob_info.is_shared_blob,
-            blob_info.version,
+    if missing_checkpoints.is_empty() {
+        tracing::info!("all records already exist in PostgreSQL, nothing to backfill");
+    } else {
+        tracing::info!(
+            "{} records need to be inserted into PostgreSQL",
+            missing_checkpoints.len()
         );
 
-        let pg_index_entries: Vec<NewCheckpointIndexEntry> = blob_info
-            .index_entries
-            .iter()
-            .map(|entry| {
-                NewCheckpointIndexEntry::new(
-                    blob_info.start_checkpoint,
-                    entry.checkpoint_number,
-                    entry.offset,
-                    entry.length,
-                )
-            })
-            .collect();
+        // Process missing checkpoints in batches.
+        let mut processed_count = 0;
+        for chunk in missing_checkpoints.chunks(batch_size) {
+            let mut batch_records = Vec::with_capacity(chunk.len());
 
-        batch_records.push((pg_blob_info, pg_index_entries));
-        processed_count += 1;
-
-        // Process batch when it reaches the batch size.
-        if batch_records.len() >= batch_size {
-            for (blob_info, index_entries) in batch_records.drain(..) {
-                postgres_pool
-                    .insert_checkpoint_blob_info(blob_info, index_entries)
-                    .await?;
+            for &start_checkpoint in chunk {
+                // Read the blob info from RocksDB.
+                let key = crate::archival_state::be_fix_int_ser(&start_checkpoint)?;
+                if let Some(value) = db.get_cf(&cf, &key)? {
+                    let blob_info = CheckpointBlobInfo::decode(value.as_ref())?;
+                    let (pg_blob_info, pg_index_entries) = convert_to_pg_models(&blob_info);
+                    batch_records.push((pg_blob_info, pg_index_entries));
+                }
             }
 
+            // Batch insert into PostgreSQL.
+            postgres_pool
+                .batch_insert_checkpoint_blob_info(batch_records)
+                .await?;
+
+            processed_count += chunk.len();
             tracing::info!(
-                "processed {}/{} records (checkpoint {})",
+                "processed {}/{} missing records",
                 processed_count,
-                total_count,
-                start_checkpoint
+                missing_checkpoints.len()
             );
         }
-    }
 
-    // Process remaining records.
-    for (blob_info, index_entries) in batch_records {
-        postgres_pool
-            .insert_checkpoint_blob_info(blob_info, index_entries)
-            .await?;
+        tracing::info!(
+            "backfill complete: inserted {} records",
+            missing_checkpoints.len()
+        );
     }
-
-    tracing::info!(
-        "backfill complete: processed {} records total",
-        processed_count
-    );
 
     // Verify counts match.
     let pg_count = postgres_pool.count_checkpoint_blobs().await?;
@@ -161,7 +172,7 @@ pub async fn run_backfill(db_path: impl AsRef<Path>, batch_size: usize) -> Resul
         tracing::info!("backfill verification passed: record counts match");
     } else {
         tracing::warn!(
-            "backfill verification warning: record counts don't match (RocksDB: {}, PostgreSQL: {})",
+            "backfill verification warning: record counts don't match (RocksDB: {}, PostgreSQL: {}). Run backfill again to insert missing entries.",
             total_count,
             pg_count
         );
