@@ -17,6 +17,7 @@ use axum::{
     routing::{get, post},
 };
 use postgres_store::{PostgresPool, SharedPostgresPool};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
@@ -418,18 +419,11 @@ async fn background_cache_refresh(state: AppState) {
         tracing::info!("background cache refresh completed");
 
         // Wait for the cache freshness duration before refreshing.
-        // Add jitter (+/- 20%) to avoid thundering herd across instances.
+        // Random jitter: 10% shorter to 30% longer than the base interval.
         let base = state.cache_refresh_interval;
-        let base_ms = base.as_millis() as u128;
-        let max_jitter_ms = base_ms / 5; // 20%
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        // Uniform-ish jitter in [-max_jitter_ms, +max_jitter_ms] based on current time.
-        let span = max_jitter_ms.saturating_mul(2).saturating_add(1);
-        let jitter_ms = (now_nanos % span) as i128 - max_jitter_ms as i128;
-        let sleep_ms = (base_ms as i128 + jitter_ms).max(0) as u64;
+        let factor: f64 = rand::rng().random_range(0.9..1.3);
+        let sleep_ms = (base.as_millis() as f64 * factor).max(0.0) as u64;
+        tracing::info!("sleeping for {} ms before next refresh", sleep_ms);
         tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
     }
 }
