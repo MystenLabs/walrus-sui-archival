@@ -18,6 +18,7 @@ use walrus_sui_archival::{
     inspect_db::{InspectDbCommand, execute_inspect_db},
     list_blobs::list_owned_blobs,
     parse_bcs_checkpoint::parse_bcs_checkpoint,
+    postgres::run_backfill,
     remove_metadata_from_db::remove_metadata_from_db,
 };
 
@@ -152,6 +153,16 @@ enum Commands {
         /// Path to the BCS-encoded checkpoint file.
         #[arg(short, long)]
         file: PathBuf,
+    },
+    /// Backfill checkpoint metadata from RocksDB to PostgreSQL.
+    /// Requires DATABASE_URL environment variable to be set.
+    BackfillToPostgres {
+        /// Path to the RocksDB database.
+        #[arg(short, long, default_value = "archival_db")]
+        db_path: PathBuf,
+        /// Number of records to process in each batch.
+        #[arg(short, long, default_value = "100")]
+        batch_size: usize,
     },
 }
 
@@ -288,6 +299,18 @@ fn main() -> Result<()> {
         Commands::ParseBcsCheckpoint { file } => {
             tracing::info!("parsing BCS checkpoint file: {}", file.display());
             parse_bcs_checkpoint(file)?;
+        }
+        Commands::BackfillToPostgres {
+            db_path,
+            batch_size,
+        } => {
+            tracing::info!(
+                "starting backfill from RocksDB ({}) to PostgreSQL with batch size {}",
+                db_path.display(),
+                batch_size
+            );
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(run_backfill(db_path, batch_size))?;
         }
     }
 

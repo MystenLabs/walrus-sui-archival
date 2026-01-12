@@ -16,6 +16,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use postgres_store::{PostgresPool, SharedPostgresPool};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
@@ -23,7 +24,7 @@ use tower_http::cors::CorsLayer;
 /// Configuration for the website front-end.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// The backend URL to proxy requests to.
+    /// The backend URL to proxy requests to (used as fallback).
     pub backend_url: String,
     /// The address to bind the server to.
     pub bind_address: SocketAddr,
@@ -31,6 +32,8 @@ pub struct Config {
     pub cache_freshness_secs: u64,
     /// Cache refresh interval in seconds.
     pub cache_refresh_interval_secs: u64,
+    /// PostgreSQL database URL for direct queries.
+    pub database_url: Option<String>,
 }
 
 impl Config {
@@ -40,6 +43,7 @@ impl Config {
         bind_address: SocketAddr,
         cache_freshness_secs: u64,
         cache_refresh_interval_secs: u64,
+        database_url: Option<String>,
     ) -> Self {
         let backend_url = match env {
             "mainnet" => "https://walrus-sui-archival.mainnet.walrus.space".to_string(),
@@ -53,6 +57,7 @@ impl Config {
             bind_address,
             cache_freshness_secs,
             cache_refresh_interval_secs,
+            database_url,
         }
     }
 }
@@ -72,6 +77,180 @@ struct AppState {
     cache: Arc<RwLock<std::collections::HashMap<String, CacheEntry>>>,
     cache_refresh_interval: Duration,
     cache_freshness_duration: Duration,
+    /// PostgreSQL connection pool for direct database queries.
+    postgres_pool: Option<SharedPostgresPool>,
+}
+
+impl AppState {
+    /// Query homepage info directly from PostgreSQL.
+    async fn query_homepage_info_from_postgres(&self) -> Option<HomepageInfo> {
+        let pool = self.postgres_pool.as_ref()?;
+
+        // Get blob count and stats.
+        let blobs = match pool.list_all_blobs(false).await {
+            Ok(blobs) => blobs,
+            Err(e) => {
+                tracing::error!("failed to list blobs from postgres: {}", e);
+                return None;
+            }
+        };
+
+        if blobs.is_empty() {
+            return Some(HomepageInfo {
+                blob_count: 0,
+                total_checkpoints: 0,
+                earliest_checkpoint: 0,
+                latest_checkpoint: 0,
+                total_size: 0,
+                metadata_info: None,
+            });
+        }
+
+        let blob_count = blobs.len();
+        let earliest_checkpoint = blobs
+            .first()
+            .map(|b| b.start_checkpoint as u64)
+            .unwrap_or(0);
+        let latest_checkpoint = blobs.last().map(|b| b.end_checkpoint as u64).unwrap_or(0);
+        let total_checkpoints = if latest_checkpoint >= earliest_checkpoint {
+            latest_checkpoint - earliest_checkpoint + 1
+        } else {
+            0
+        };
+
+        // Calculate total size by summing index entries.
+        // For simplicity, we estimate based on checkpoint count * average size.
+        // A more accurate approach would query total size from index entries.
+        let total_size = 0u64; // We don't have size info in the blob table directly.
+
+        Some(HomepageInfo {
+            blob_count,
+            total_checkpoints,
+            earliest_checkpoint,
+            latest_checkpoint,
+            total_size,
+            metadata_info: None, // Metadata info requires on-chain query.
+        })
+    }
+
+    /// Query all blobs directly from PostgreSQL.
+    async fn query_blobs_from_postgres(&self) -> Option<Vec<AppBlobInfo>> {
+        let pool = self.postgres_pool.as_ref()?;
+
+        let blobs = match pool.list_all_blobs(true).await {
+            Ok(blobs) => blobs,
+            Err(e) => {
+                tracing::error!("failed to list blobs from postgres: {}", e);
+                return None;
+            }
+        };
+
+        let mut result = Vec::with_capacity(blobs.len());
+        for blob in blobs {
+            // Get index entries for this blob to calculate entries_count and total_size.
+            let (entries_count, total_size) =
+                match pool.get_index_entries(blob.start_checkpoint).await {
+                    Ok(entries) => {
+                        let count = entries.len();
+                        let size: i64 = entries.iter().map(|e| e.length_bytes).sum();
+                        (count, size as u64)
+                    }
+                    Err(_) => (0, 0),
+                };
+
+            result.push(AppBlobInfo {
+                blob_id: blob.blob_id,
+                object_id: blob.object_id,
+                start_checkpoint: blob.start_checkpoint as u64,
+                end_checkpoint: blob.end_checkpoint as u64,
+                end_of_epoch: blob.end_of_epoch,
+                expiry_epoch: blob.blob_expiration_epoch as u32,
+                is_shared_blob: blob.is_shared_blob,
+                entries_count,
+                total_size,
+            });
+        }
+
+        Some(result)
+    }
+
+    /// Query blobs expired before a given epoch from PostgreSQL.
+    async fn query_blobs_expired_before_epoch_from_postgres(
+        &self,
+        epoch: u32,
+    ) -> Option<Vec<ExpiredBlobInfo>> {
+        let pool = self.postgres_pool.as_ref()?;
+
+        let blobs = match pool.list_all_blobs(false).await {
+            Ok(blobs) => blobs,
+            Err(e) => {
+                tracing::error!("failed to list blobs from postgres: {}", e);
+                return None;
+            }
+        };
+
+        let result: Vec<ExpiredBlobInfo> = blobs
+            .into_iter()
+            .filter(|b| (b.blob_expiration_epoch as u32) < epoch)
+            .map(|b| ExpiredBlobInfo {
+                blob_id: b.blob_id,
+                object_id: b.object_id,
+                end_epoch: b.blob_expiration_epoch as u32,
+            })
+            .collect();
+
+        Some(result)
+    }
+
+    /// Query a specific checkpoint from PostgreSQL.
+    async fn query_checkpoint_from_postgres(&self, checkpoint: u64) -> Option<AppCheckpointInfo> {
+        let pool = self.postgres_pool.as_ref()?;
+
+        // Find the blob that contains this checkpoint.
+        let blob = match pool
+            .find_blob_containing_checkpoint(checkpoint as i64)
+            .await
+        {
+            Ok(Some(blob)) => blob,
+            Ok(None) => {
+                tracing::warn!("checkpoint {} not found in postgres", checkpoint);
+                return None;
+            }
+            Err(e) => {
+                tracing::error!("failed to find blob for checkpoint {}: {}", checkpoint, e);
+                return None;
+            }
+        };
+
+        // Get index entries for this blob.
+        let entries = match pool.get_index_entries(blob.start_checkpoint).await {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::error!(
+                    "failed to get index entries for checkpoint {}: {}",
+                    checkpoint,
+                    e
+                );
+                return None;
+            }
+        };
+
+        // Find the specific entry for this checkpoint.
+        let index = (checkpoint as i64 - blob.start_checkpoint) as usize;
+        let entry = entries
+            .iter()
+            .find(|e| e.checkpoint_number == checkpoint as i64)?;
+
+        Some(AppCheckpointInfo {
+            checkpoint_number: checkpoint,
+            blob_id: blob.blob_id,
+            object_id: blob.object_id,
+            index,
+            offset: entry.offset_bytes as u64,
+            length: entry.length_bytes as u64,
+            content: None, // Content requires fetching from Walrus.
+        })
+    }
 }
 
 /// Query parameters for blobs expired before epoch endpoint.
@@ -157,12 +336,27 @@ struct RefreshBlobEndEpochResponse {
 
 /// Start the website front-end server.
 pub async fn start_server(config: Config) -> Result<()> {
+    // Initialize PostgreSQL pool if database URL is provided.
+    // If DATABASE_URL is set, use PostgreSQL exclusively; otherwise use backend proxy.
+    let postgres_pool = if let Some(ref db_url) = config.database_url {
+        let pool = PostgresPool::new(db_url)?;
+        tracing::info!("PostgreSQL mode: using database directly");
+        Some(Arc::new(pool))
+    } else {
+        tracing::info!(
+            "Backend proxy mode: forwarding requests to {}",
+            config.backend_url
+        );
+        None
+    };
+
     let app_state = AppState {
         backend_url: config.backend_url.clone(),
         http_client: reqwest::Client::new(),
         cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
         cache_refresh_interval: Duration::from_secs(config.cache_refresh_interval_secs),
         cache_freshness_duration: Duration::from_secs(config.cache_freshness_secs),
+        postgres_pool,
     };
 
     // Start background cache refresh task.
@@ -212,11 +406,14 @@ async fn background_cache_refresh(state: AppState) {
     loop {
         tracing::info!("starting background cache refresh");
 
-        // Refresh /v1/app_info_for_homepage.
-        refresh_homepage_cache(&state).await;
-
-        // Refresh /v1/app_blobs.
-        refresh_blobs_cache(&state).await;
+        // If PostgreSQL is available, refresh from there; otherwise use backend proxy.
+        if state.postgres_pool.is_some() {
+            refresh_homepage_cache_from_postgres(&state).await;
+            refresh_blobs_cache_from_postgres(&state).await;
+        } else {
+            refresh_homepage_cache(&state).await;
+            refresh_blobs_cache(&state).await;
+        }
 
         tracing::info!("background cache refresh completed");
 
@@ -289,6 +486,60 @@ async fn refresh_blobs_cache(state: &AppState) {
         }
         Err(e) => {
             tracing::error!("failed to fetch blobs from backend: {}", e);
+        }
+    }
+}
+
+/// Refresh homepage info cache from PostgreSQL.
+async fn refresh_homepage_cache_from_postgres(state: &AppState) {
+    let cache_key = "v1/app_info_for_homepage?".to_string();
+
+    match state.query_homepage_info_from_postgres().await {
+        Some(info) => match serde_json::to_string(&info) {
+            Ok(text) => {
+                let mut cache = state.cache.write().await;
+                cache.insert(
+                    cache_key,
+                    CacheEntry {
+                        data: text,
+                        timestamp: Instant::now(),
+                    },
+                );
+                tracing::info!("refreshed cache for /v1/app_info_for_homepage from postgres");
+            }
+            Err(e) => {
+                tracing::error!("failed to serialize homepage info: {}", e);
+            }
+        },
+        None => {
+            tracing::error!("failed to query homepage info from postgres");
+        }
+    }
+}
+
+/// Refresh blobs cache from PostgreSQL.
+async fn refresh_blobs_cache_from_postgres(state: &AppState) {
+    let cache_key = "v1/app_blobs?".to_string();
+
+    match state.query_blobs_from_postgres().await {
+        Some(blobs) => match serde_json::to_string(&blobs) {
+            Ok(text) => {
+                let mut cache = state.cache.write().await;
+                cache.insert(
+                    cache_key,
+                    CacheEntry {
+                        data: text,
+                        timestamp: Instant::now(),
+                    },
+                );
+                tracing::info!("refreshed cache for /v1/app_blobs from postgres");
+            }
+            Err(e) => {
+                tracing::error!("failed to serialize blobs: {}", e);
+            }
+        },
+        None => {
+            tracing::error!("failed to query blobs from postgres");
         }
     }
 }
@@ -403,6 +654,18 @@ async fn proxy_blobs_expired_before_epoch(
     State(state): State<AppState>,
     Query(params): Query<BlobsExpiredQuery>,
 ) -> impl IntoResponse {
+    // PostgreSQL mode: query database directly.
+    if state.postgres_pool.is_some() {
+        return match state
+            .query_blobs_expired_before_epoch_from_postgres(params.epoch)
+            .await
+        {
+            Some(result) => Ok(Json(result)),
+            None => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+    }
+
+    // Backend proxy mode.
     let query_string = format!("epoch={}", params.epoch);
     proxy_with_cache::<Vec<ExpiredBlobInfo>>(
         &state,
@@ -414,11 +677,29 @@ async fn proxy_blobs_expired_before_epoch(
 
 /// Handler for /v1/app_info_for_homepage.
 async fn proxy_app_info_for_homepage(State(state): State<AppState>) -> impl IntoResponse {
+    // PostgreSQL mode: query database directly.
+    if state.postgres_pool.is_some() {
+        return match state.query_homepage_info_from_postgres().await {
+            Some(result) => Ok(Json(result)),
+            None => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+    }
+
+    // Backend proxy mode.
     proxy_with_cache::<HomepageInfo>(&state, "v1/app_info_for_homepage", "").await
 }
 
 /// Handler for /v1/app_blobs.
 async fn proxy_app_blobs(State(state): State<AppState>) -> impl IntoResponse {
+    // PostgreSQL mode: query database directly.
+    if state.postgres_pool.is_some() {
+        return match state.query_blobs_from_postgres().await {
+            Some(result) => Ok(Json(result)),
+            None => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+    }
+
+    // Backend proxy mode.
     proxy_with_cache::<Vec<AppBlobInfo>>(&state, "v1/app_blobs", "").await
 }
 
@@ -427,6 +708,19 @@ async fn proxy_app_checkpoint(
     State(state): State<AppState>,
     Query(params): Query<AppCheckpointQuery>,
 ) -> impl IntoResponse {
+    // PostgreSQL mode: query database directly.
+    // Note: show_content requires Walrus, so we forward to backend in that case.
+    if state.postgres_pool.is_some() && !params.show_content {
+        return match state
+            .query_checkpoint_from_postgres(params.checkpoint)
+            .await
+        {
+            Some(result) => Ok(Json(result)),
+            None => Err(StatusCode::NOT_FOUND),
+        };
+    }
+
+    // Backend proxy mode (or show_content requested).
     let query_string = if params.show_content {
         format!("checkpoint={}&show_content=true", params.checkpoint)
     } else {

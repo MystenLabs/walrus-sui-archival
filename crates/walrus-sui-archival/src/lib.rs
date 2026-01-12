@@ -23,6 +23,7 @@ pub mod inspect_db;
 pub mod list_blobs;
 pub mod metrics;
 pub mod parse_bcs_checkpoint;
+pub mod postgres;
 pub mod remove_metadata_from_db;
 pub mod rest_api;
 pub mod sui_interactive_client;

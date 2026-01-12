@@ -1,0 +1,15 @@
+[package]
+name = "postgres-store"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PostgreSQL storage backend for checkpoint blob metadata"
+
+[dependencies]
+anyhow.workspace = true
+chrono = "=0.4.39"
+deadpool-diesel.workspace = true
+diesel.workspace = true
+diesel_migrations.workspace = true
+tracing.workspace = true
