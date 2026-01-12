@@ -45,8 +45,8 @@ fn convert_to_pg_models(
         .iter()
         .map(|entry| {
             NewCheckpointIndexEntry::new(
-                blob_info.start_checkpoint,
                 entry.checkpoint_number,
+                blob_info.start_checkpoint,
                 entry.offset,
                 entry.length,
             )

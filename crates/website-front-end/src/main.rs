@@ -25,6 +25,12 @@ struct Args {
     /// Cache refresh interval in seconds.
     #[arg(long, default_value = "60")]
     cache_refresh_interval_secs: u64,
+
+    /// PostgreSQL database URL for direct queries (optional).
+    /// If not provided, will fall back to proxying requests to the backend.
+    /// Can also be set via DATABASE_URL environment variable.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: Option<String>,
 }
 
 #[tokio::main]
@@ -46,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
         bind_address,
         args.cache_freshness_secs,
         args.cache_refresh_interval_secs,
+        args.database_url,
     );
 
     tracing::info!(

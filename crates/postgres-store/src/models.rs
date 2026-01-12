@@ -4,7 +4,7 @@
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 
-use super::schema::{checkpoint_blob_info, checkpoint_index_entry};
+use crate::schema::{checkpoint_blob_info, checkpoint_index_entry};
 
 /// Queryable model for checkpoint_blob_info table.
 #[derive(Debug, Clone, Queryable, Selectable, Identifiable)]
@@ -47,11 +47,11 @@ pub struct UpdateCheckpointBlobInfo {
 /// Queryable model for checkpoint_index_entry table.
 #[derive(Debug, Clone, Queryable, Selectable, Identifiable, Associations)]
 #[diesel(table_name = checkpoint_index_entry)]
-#[diesel(primary_key(start_checkpoint, checkpoint_number))]
+#[diesel(primary_key(checkpoint_number))]
 #[diesel(belongs_to(CheckpointBlobInfoRow, foreign_key = start_checkpoint))]
 pub struct CheckpointIndexEntryRow {
-    pub start_checkpoint: i64,
     pub checkpoint_number: i64,
+    pub start_checkpoint: i64,
     pub offset_bytes: i64,
     pub length_bytes: i64,
 }
@@ -60,8 +60,8 @@ pub struct CheckpointIndexEntryRow {
 #[derive(Debug, Clone, Insertable)]
 #[diesel(table_name = checkpoint_index_entry)]
 pub struct NewCheckpointIndexEntry {
-    pub start_checkpoint: i64,
     pub checkpoint_number: i64,
+    pub start_checkpoint: i64,
     pub offset_bytes: i64,
     pub length_bytes: i64,
 }
@@ -94,10 +94,10 @@ impl NewCheckpointBlobInfo {
 
 impl NewCheckpointIndexEntry {
     /// Create a new index entry record.
-    pub fn new(start_checkpoint: u64, checkpoint_number: u64, offset: u64, length: u64) -> Self {
+    pub fn new(checkpoint_number: u64, start_checkpoint: u64, offset: u64, length: u64) -> Self {
         Self {
-            start_checkpoint: start_checkpoint as i64,
             checkpoint_number: checkpoint_number as i64,
+            start_checkpoint: start_checkpoint as i64,
             offset_bytes: offset as i64,
             length_bytes: length as i64,
         }

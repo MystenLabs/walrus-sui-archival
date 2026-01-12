@@ -8,7 +8,7 @@ use deadpool_diesel::postgres::{Manager, Pool, Runtime};
 use diesel::prelude::*;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 
-use super::{
+use crate::{
     models::{
         CheckpointBlobInfoRow,
         CheckpointIndexEntryRow,

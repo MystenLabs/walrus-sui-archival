@@ -12,7 +12,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
-clap.workspace = true
+clap = { workspace = true, features = ["env"] }
+postgres-store.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

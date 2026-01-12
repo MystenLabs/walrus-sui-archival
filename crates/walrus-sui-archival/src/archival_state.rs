@@ -128,8 +128,8 @@ impl ArchivalState {
                 .iter()
                 .map(|entry| {
                     NewCheckpointIndexEntry::new(
-                        start_checkpoint,
                         entry.checkpoint_number,
+                        start_checkpoint,
                         entry.offset,
                         entry.length,
                     )

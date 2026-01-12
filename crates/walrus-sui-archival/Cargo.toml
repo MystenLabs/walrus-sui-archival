@@ -48,11 +48,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 walrus-core.workspace = true
 walrus-sdk.workspace = true
-diesel.workspace = true
-diesel-async.workspace = true
-deadpool-diesel.workspace = true
-diesel_migrations.workspace = true
-dotenvy.workspace = true
+postgres-store.workspace = true
 hex.workspace = true
 
 [build-dependencies]

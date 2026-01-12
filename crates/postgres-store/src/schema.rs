@@ -18,9 +18,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    checkpoint_index_entry (start_checkpoint, checkpoint_number) {
-        start_checkpoint -> Int8,
+    checkpoint_index_entry (checkpoint_number) {
         checkpoint_number -> Int8,
+        start_checkpoint -> Int8,
         offset_bytes -> Int8,
         length_bytes -> Int8,
     }
