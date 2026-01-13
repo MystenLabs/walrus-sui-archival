@@ -19,6 +19,26 @@ use crate::{
     schema::{checkpoint_blob_info, checkpoint_index_entry},
 };
 
+/// Helper struct for raw SQL query that returns blob size.
+#[derive(QueryableByName)]
+struct BlobSizeResult {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    total: i64,
+}
+
+/// Aggregate stats for checkpoint blobs.
+#[derive(Debug, Clone, QueryableByName)]
+pub struct BlobStats {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub blob_count: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub earliest_checkpoint: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub latest_checkpoint: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub total_size: i64,
+}
+
 /// Embedded migrations from the migrations directory.
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
@@ -86,6 +106,7 @@ impl PostgresPool {
                             .eq(&blob_info.blob_expiration_epoch),
                         checkpoint_blob_info::is_shared_blob.eq(&blob_info.is_shared_blob),
                         checkpoint_blob_info::version.eq(&blob_info.version),
+                        checkpoint_blob_info::blob_size.eq(&blob_info.blob_size),
                     ))
                     .execute(conn)?;
 
@@ -224,19 +245,46 @@ impl PostgresPool {
         .map_err(|e| anyhow::anyhow!("Database error: {}", e))
     }
 
-    /// List all checkpoint blob infos.
-    pub async fn list_all_blobs(&self, reverse: bool) -> Result<Vec<CheckpointBlobInfoRow>> {
+    /// List checkpoint blob infos with pagination.
+    ///
+    /// # Arguments
+    /// * `reverse` - If true, returns blobs in descending order (newest first)
+    /// * `limit` - Maximum number of blobs to return (default 50)
+    /// * `cursor` - Optional cursor (start_checkpoint) for pagination.
+    ///   - If reverse=true: returns blobs with start_checkpoint < cursor
+    ///   - If reverse=false: returns blobs with start_checkpoint > cursor
+    pub async fn list_all_blobs(
+        &self,
+        reverse: bool,
+        limit: Option<i64>,
+        cursor: Option<i64>,
+    ) -> Result<Vec<CheckpointBlobInfoRow>> {
         let conn = self.pool.get().await.context("Failed to get connection")?;
+        let limit = limit.unwrap_or(50);
 
         conn.interact(move |conn| {
             if reverse {
-                checkpoint_blob_info::table
+                let mut query = checkpoint_blob_info::table
                     .order(checkpoint_blob_info::start_checkpoint.desc())
-                    .load(conn)
+                    .limit(limit)
+                    .into_boxed();
+
+                if let Some(c) = cursor {
+                    query = query.filter(checkpoint_blob_info::start_checkpoint.lt(c));
+                }
+
+                query.load(conn)
             } else {
-                checkpoint_blob_info::table
+                let mut query = checkpoint_blob_info::table
                     .order(checkpoint_blob_info::start_checkpoint.asc())
-                    .load(conn)
+                    .limit(limit)
+                    .into_boxed();
+
+                if let Some(c) = cursor {
+                    query = query.filter(checkpoint_blob_info::start_checkpoint.gt(c));
+                }
+
+                query.load(conn)
             }
         })
         .await
@@ -252,6 +300,46 @@ impl PostgresPool {
             .await
             .map_err(|e| anyhow::anyhow!("Interact error: {}", e))?
             .map_err(|e| anyhow::anyhow!("Database error: {}", e))
+    }
+
+    /// Get aggregate stats for homepage: blob_count, earliest_checkpoint, latest_checkpoint, total_size.
+    pub async fn get_blob_stats(&self) -> Result<BlobStats> {
+        let conn = self.pool.get().await.context("Failed to get connection")?;
+
+        conn.interact(|conn| {
+            // Use raw SQL for aggregate query
+            diesel::sql_query(
+                "SELECT
+                    COUNT(*) as blob_count,
+                    COALESCE(MIN(start_checkpoint), 0) as earliest_checkpoint,
+                    COALESCE(MAX(end_checkpoint), 0) as latest_checkpoint,
+                    COALESCE(SUM(blob_size), 0) as total_size
+                FROM checkpoint_blob_info",
+            )
+            .get_result::<BlobStats>(conn)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Interact error: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Database error: {}", e))
+    }
+
+    /// List blobs that expire before a given epoch.
+    /// Uses the blob_expiration_epoch index for efficient querying.
+    pub async fn list_blobs_expiring_before(
+        &self,
+        epoch: i32,
+    ) -> Result<Vec<CheckpointBlobInfoRow>> {
+        let conn = self.pool.get().await.context("Failed to get connection")?;
+
+        conn.interact(move |conn| {
+            checkpoint_blob_info::table
+                .filter(checkpoint_blob_info::blob_expiration_epoch.lt(epoch))
+                .order(checkpoint_blob_info::blob_expiration_epoch.asc())
+                .load(conn)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Interact error: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Database error: {}", e))
     }
 
     /// Check if a blob with the given start_checkpoint exists.
@@ -319,6 +407,7 @@ impl PostgresPool {
                                     .eq(&blob_info.blob_expiration_epoch),
                                 checkpoint_blob_info::is_shared_blob.eq(&blob_info.is_shared_blob),
                                 checkpoint_blob_info::version.eq(&blob_info.version),
+                                checkpoint_blob_info::blob_size.eq(&blob_info.blob_size),
                             ))
                             .execute(conn)?;
                     }
@@ -367,6 +456,80 @@ impl PostgresPool {
     /// Get the inner pool for advanced usage.
     pub fn get_pool(&self) -> &Pool {
         &self.pool
+    }
+
+    /// Backfill blob_size for all checkpoint_blob_info records.
+    /// blob_size = sum of length_bytes from all checkpoint_index_entry records
+    /// with matching start_checkpoint.
+    pub async fn backfill_blob_sizes(&self) -> Result<usize> {
+        let conn = self.pool.get().await.context("Failed to get connection")?;
+
+        conn.interact(|conn| {
+            // Use a single UPDATE query with a subquery to compute all blob_sizes at once
+            diesel::sql_query(
+                "UPDATE checkpoint_blob_info SET blob_size = subquery.total_size
+                 FROM (
+                     SELECT start_checkpoint, COALESCE(SUM(length_bytes), 0) as total_size
+                     FROM checkpoint_index_entry
+                     GROUP BY start_checkpoint
+                 ) AS subquery
+                 WHERE checkpoint_blob_info.start_checkpoint = subquery.start_checkpoint",
+            )
+            .execute(conn)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Interact error: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Database error: {}", e))
+    }
+
+    /// Get blobs that have NULL blob_size (for incremental backfill).
+    pub async fn get_blobs_without_size(&self) -> Result<Vec<i64>> {
+        let conn = self.pool.get().await.context("Failed to get connection")?;
+
+        conn.interact(|conn| {
+            checkpoint_blob_info::table
+                .filter(checkpoint_blob_info::blob_size.is_null())
+                .select(checkpoint_blob_info::start_checkpoint)
+                .order(checkpoint_blob_info::start_checkpoint.asc())
+                .load::<i64>(conn)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Interact error: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Database error: {}", e))
+    }
+
+    /// Update blob_size for a single blob.
+    pub async fn update_blob_size(&self, start_checkpoint: i64, blob_size: i64) -> Result<()> {
+        let conn = self.pool.get().await.context("Failed to get connection")?;
+
+        conn.interact(move |conn| {
+            diesel::update(checkpoint_blob_info::table.find(start_checkpoint))
+                .set(checkpoint_blob_info::blob_size.eq(blob_size))
+                .execute(conn)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Interact error: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Calculate blob_size for a specific start_checkpoint by summing length_bytes.
+    pub async fn calculate_blob_size(&self, start_checkpoint: i64) -> Result<i64> {
+        let conn = self.pool.get().await.context("Failed to get connection")?;
+
+        conn.interact(move |conn| {
+            // Use raw SQL to avoid Numeric type issues with SUM
+            diesel::sql_query(
+                "SELECT COALESCE(SUM(length_bytes), 0)::BIGINT as total FROM checkpoint_index_entry WHERE start_checkpoint = $1"
+            )
+            .bind::<diesel::sql_types::BigInt, _>(start_checkpoint)
+            .get_result::<BlobSizeResult>(conn)
+            .map(|r| r.total)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Interact error: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Database error: {}", e))
     }
 }
 

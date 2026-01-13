@@ -18,7 +18,7 @@ use walrus_sui_archival::{
     inspect_db::{InspectDbCommand, execute_inspect_db},
     list_blobs::list_owned_blobs,
     parse_bcs_checkpoint::parse_bcs_checkpoint,
-    postgres::run_backfill,
+    postgres::{PostgresPool, run_backfill},
     remove_metadata_from_db::remove_metadata_from_db,
 };
 
@@ -163,6 +163,14 @@ enum Commands {
         /// Number of records to process in each batch.
         #[arg(short, long, default_value = "100")]
         batch_size: usize,
+    },
+    /// Backfill blob_size column in checkpoint_blob_info table.
+    /// blob_size = sum of length_bytes from all checkpoint_index_entry records.
+    /// Requires DATABASE_URL environment variable to be set.
+    BackfillBlobSize {
+        /// Database URL (can also be set via DATABASE_URL environment variable).
+        #[arg(short, long, env = "DATABASE_URL")]
+        database_url: String,
     },
 }
 
@@ -311,6 +319,32 @@ fn main() -> Result<()> {
             );
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(run_backfill(db_path, batch_size))?;
+        }
+        Commands::BackfillBlobSize { database_url } => {
+            tracing::info!("starting blob_size backfill...");
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(async {
+                let pool = PostgresPool::new(&database_url)?;
+
+                // Run migrations first to ensure the blob_size column exists
+                pool.run_migrations().await?;
+
+                // Get count of blobs to backfill
+                let blobs_without_size = pool.get_blobs_without_size().await?;
+                let total = blobs_without_size.len();
+
+                if total == 0 {
+                    tracing::info!(
+                        "all blobs already have blob_size set, running full backfill to update..."
+                    );
+                }
+
+                // Run the backfill
+                let updated = pool.backfill_blob_sizes().await?;
+                tracing::info!("blob_size backfill complete: {} records updated", updated);
+
+                Ok::<_, anyhow::Error>(())
+            })?;
         }
     }
 

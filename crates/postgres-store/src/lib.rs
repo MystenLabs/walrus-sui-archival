@@ -11,6 +11,7 @@ pub mod models;
 pub mod schema;
 
 pub use connection::{
+    BlobStats,
     MIGRATIONS,
     PostgresPool,
     SharedPostgresPool,

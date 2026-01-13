@@ -14,6 +14,7 @@ diesel::table! {
         version -> Int4,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        blob_size -> Nullable<Int8>,
     }
 }
 

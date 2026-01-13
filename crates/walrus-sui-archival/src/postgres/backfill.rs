@@ -29,6 +29,9 @@ fn convert_to_pg_models(
         hex::encode(object_id_bytes)
     };
 
+    // Calculate blob_size as sum of all length_bytes from index entries
+    let blob_size: u64 = blob_info.index_entries.iter().map(|e| e.length).sum();
+
     let pg_blob_info = NewCheckpointBlobInfo::from_proto(
         blob_info.start_checkpoint,
         blob_info.end_checkpoint,
@@ -38,6 +41,7 @@ fn convert_to_pg_models(
         blob_info.blob_expiration_epoch,
         blob_info.is_shared_blob,
         blob_info.version,
+        Some(blob_size),
     );
 
     let pg_index_entries: Vec<NewCheckpointIndexEntry> = blob_info

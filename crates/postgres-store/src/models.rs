@@ -21,6 +21,7 @@ pub struct CheckpointBlobInfoRow {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub blob_size: Option<i64>,
 }
 
 /// Insertable model for checkpoint_blob_info table.
@@ -35,6 +36,7 @@ pub struct NewCheckpointBlobInfo {
     pub blob_expiration_epoch: i32,
     pub is_shared_blob: bool,
     pub version: i32,
+    pub blob_size: Option<i64>,
 }
 
 /// AsChangeset model for updating checkpoint_blob_info.
@@ -78,6 +80,7 @@ impl NewCheckpointBlobInfo {
         blob_expiration_epoch: u32,
         is_shared_blob: bool,
         version: u32,
+        blob_size: Option<u64>,
     ) -> Self {
         Self {
             start_checkpoint: start_checkpoint as i64,
@@ -88,6 +91,7 @@ impl NewCheckpointBlobInfo {
             blob_expiration_epoch: blob_expiration_epoch as i32,
             is_shared_blob,
             version: version as i32,
+            blob_size: blob_size.map(|s| s as i64),
         }
     }
 }

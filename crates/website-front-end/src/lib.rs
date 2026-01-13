@@ -84,61 +84,49 @@ struct AppState {
 
 impl AppState {
     /// Query homepage info directly from PostgreSQL.
+    /// Uses aggregate query for efficient stats retrieval.
     async fn query_homepage_info_from_postgres(&self) -> Option<HomepageInfo> {
         let pool = self.postgres_pool.as_ref()?;
 
-        // Get blob count and stats.
-        let blobs = match pool.list_all_blobs(false).await {
-            Ok(blobs) => blobs,
+        // Get aggregate stats in a single query.
+        let stats = match pool.get_blob_stats().await {
+            Ok(stats) => stats,
             Err(e) => {
-                tracing::error!("failed to list blobs from postgres: {}", e);
+                tracing::error!("failed to get blob stats from postgres: {}", e);
                 return None;
             }
         };
 
-        if blobs.is_empty() {
-            return Some(HomepageInfo {
-                blob_count: 0,
-                total_checkpoints: 0,
-                earliest_checkpoint: 0,
-                latest_checkpoint: 0,
-                total_size: 0,
-                metadata_info: None,
-            });
-        }
-
-        let blob_count = blobs.len();
-        let earliest_checkpoint = blobs
-            .first()
-            .map(|b| b.start_checkpoint as u64)
-            .unwrap_or(0);
-        let latest_checkpoint = blobs.last().map(|b| b.end_checkpoint as u64).unwrap_or(0);
-        let total_checkpoints = if latest_checkpoint >= earliest_checkpoint {
-            latest_checkpoint - earliest_checkpoint + 1
+        let total_checkpoints = if stats.latest_checkpoint >= stats.earliest_checkpoint {
+            (stats.latest_checkpoint - stats.earliest_checkpoint + 1) as u64
         } else {
             0
         };
 
-        // Calculate total size by summing index entries.
-        // For simplicity, we estimate based on checkpoint count * average size.
-        // A more accurate approach would query total size from index entries.
-        let total_size = 0u64; // We don't have size info in the blob table directly.
-
         Some(HomepageInfo {
-            blob_count,
+            blob_count: stats.blob_count as usize,
             total_checkpoints,
-            earliest_checkpoint,
-            latest_checkpoint,
-            total_size,
+            earliest_checkpoint: stats.earliest_checkpoint as u64,
+            latest_checkpoint: stats.latest_checkpoint as u64,
+            total_size: stats.total_size as u64,
             metadata_info: None, // Metadata info requires on-chain query.
         })
     }
 
-    /// Query all blobs directly from PostgreSQL.
-    async fn query_blobs_from_postgres(&self) -> Option<Vec<AppBlobInfo>> {
+    /// Query blobs directly from PostgreSQL with pagination.
+    async fn query_blobs_from_postgres(
+        &self,
+        limit: Option<i64>,
+        cursor: Option<i64>,
+    ) -> Option<AppBlobsResponse> {
         let pool = self.postgres_pool.as_ref()?;
 
-        let blobs = match pool.list_all_blobs(true).await {
+        // Request one extra to determine if there are more results.
+        let request_limit = limit.unwrap_or(50);
+        let blobs = match pool
+            .list_all_blobs(true, Some(request_limit + 1), cursor)
+            .await
+        {
             Ok(blobs) => blobs,
             Err(e) => {
                 tracing::error!("failed to list blobs from postgres: {}", e);
@@ -146,53 +134,62 @@ impl AppState {
             }
         };
 
-        let mut result = Vec::with_capacity(blobs.len());
-        for blob in blobs {
-            // Get index entries for this blob to calculate entries_count and total_size.
-            let (entries_count, total_size) =
-                match pool.get_index_entries(blob.start_checkpoint).await {
-                    Ok(entries) => {
-                        let count = entries.len();
-                        let size: i64 = entries.iter().map(|e| e.length_bytes).sum();
-                        (count, size as u64)
-                    }
-                    Err(_) => (0, 0),
-                };
+        let has_more = blobs.len() > request_limit as usize;
+        let blobs_to_return: Vec<_> = blobs.into_iter().take(request_limit as usize).collect();
 
-            result.push(AppBlobInfo {
-                blob_id: blob.blob_id,
-                object_id: blob.object_id,
-                start_checkpoint: blob.start_checkpoint as u64,
-                end_checkpoint: blob.end_checkpoint as u64,
-                end_of_epoch: blob.end_of_epoch,
-                expiry_epoch: blob.blob_expiration_epoch as u32,
-                is_shared_blob: blob.is_shared_blob,
-                entries_count,
-                total_size,
-            });
-        }
+        let next_cursor = if has_more {
+            blobs_to_return.last().map(|b| b.start_checkpoint)
+        } else {
+            None
+        };
 
-        Some(result)
+        let result: Vec<AppBlobInfo> = blobs_to_return
+            .into_iter()
+            .map(|blob| {
+                // Calculate entries_count from checkpoint range.
+                let entries_count =
+                    (blob.end_checkpoint - blob.start_checkpoint + 1).max(0) as usize;
+                // Use blob_size directly from the database.
+                let total_size = blob.blob_size.unwrap_or(0) as u64;
+
+                AppBlobInfo {
+                    blob_id: blob.blob_id,
+                    object_id: blob.object_id,
+                    start_checkpoint: blob.start_checkpoint as u64,
+                    end_checkpoint: blob.end_checkpoint as u64,
+                    end_of_epoch: blob.end_of_epoch,
+                    expiry_epoch: blob.blob_expiration_epoch as u32,
+                    is_shared_blob: blob.is_shared_blob,
+                    entries_count,
+                    total_size,
+                }
+            })
+            .collect();
+
+        Some(AppBlobsResponse {
+            blobs: result,
+            next_cursor,
+        })
     }
 
     /// Query blobs expired before a given epoch from PostgreSQL.
+    /// Uses the blob_expiration_epoch index for efficient querying.
     async fn query_blobs_expired_before_epoch_from_postgres(
         &self,
         epoch: u32,
     ) -> Option<Vec<ExpiredBlobInfo>> {
         let pool = self.postgres_pool.as_ref()?;
 
-        let blobs = match pool.list_all_blobs(false).await {
+        let blobs = match pool.list_blobs_expiring_before(epoch as i32).await {
             Ok(blobs) => blobs,
             Err(e) => {
-                tracing::error!("failed to list blobs from postgres: {}", e);
+                tracing::error!("failed to query expired blobs from postgres: {}", e);
                 return None;
             }
         };
 
         let result: Vec<ExpiredBlobInfo> = blobs
             .into_iter()
-            .filter(|b| (b.blob_expiration_epoch as u32) < epoch)
             .map(|b| ExpiredBlobInfo {
                 blob_id: b.blob_id,
                 object_id: b.object_id,
@@ -299,6 +296,23 @@ struct AppBlobInfo {
     is_shared_blob: bool,
     entries_count: usize,
     total_size: u64,
+}
+
+/// Response structure for paginated app blobs endpoint.
+#[derive(Serialize, Deserialize)]
+struct AppBlobsResponse {
+    blobs: Vec<AppBlobInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<i64>,
+}
+
+/// Query parameters for app blobs endpoint.
+#[derive(Deserialize)]
+struct AppBlobsQuery {
+    #[serde(default)]
+    limit: Option<i64>,
+    #[serde(default)]
+    cursor: Option<i64>,
 }
 
 /// Response structure for app checkpoint endpoint.
@@ -524,11 +538,12 @@ async fn refresh_homepage_cache_from_postgres(state: &AppState) {
 }
 
 /// Refresh blobs cache from PostgreSQL.
+/// Caches the first 500 blobs so UI can get the first 10 pages quickly.
 async fn refresh_blobs_cache_from_postgres(state: &AppState) {
     let cache_key = "v1/app_blobs?".to_string();
 
-    match state.query_blobs_from_postgres().await {
-        Some(blobs) => match serde_json::to_string(&blobs) {
+    match state.query_blobs_from_postgres(Some(500), None).await {
+        Some(response) => match serde_json::to_string(&response) {
             Ok(text) => {
                 let mut cache = state.cache.write().await;
                 cache.insert(
@@ -696,17 +711,36 @@ async fn proxy_app_info_for_homepage(State(state): State<AppState>) -> impl Into
 }
 
 /// Handler for /v1/app_blobs.
-async fn proxy_app_blobs(State(state): State<AppState>) -> impl IntoResponse {
-    // PostgreSQL mode: query database directly.
+async fn proxy_app_blobs(
+    State(state): State<AppState>,
+    Query(params): Query<AppBlobsQuery>,
+) -> impl IntoResponse {
+    // PostgreSQL mode: query database directly with pagination.
     if state.postgres_pool.is_some() {
-        return match state.query_blobs_from_postgres().await {
+        return match state
+            .query_blobs_from_postgres(params.limit, params.cursor)
+            .await
+        {
             Some(result) => Ok(Json(result)),
             None => Err(StatusCode::INTERNAL_SERVER_ERROR),
         };
     }
 
-    // Backend proxy mode.
-    proxy_with_cache::<Vec<AppBlobInfo>>(&state, "v1/app_blobs", "").await
+    // Backend proxy mode - wrap response in AppBlobsResponse for consistency.
+    let query_string = match (params.limit, params.cursor) {
+        (Some(l), Some(c)) => format!("limit={}&cursor={}", l, c),
+        (Some(l), None) => format!("limit={}", l),
+        (None, Some(c)) => format!("cursor={}", c),
+        (None, None) => String::new(),
+    };
+
+    match proxy_with_cache::<Vec<AppBlobInfo>>(&state, "v1/app_blobs", &query_string).await {
+        Ok(Json(blobs)) => Ok(Json(AppBlobsResponse {
+            blobs,
+            next_cursor: None,
+        })),
+        Err(e) => Err(e),
+    }
 }
 
 /// Handler for /v1/app_checkpoint.
