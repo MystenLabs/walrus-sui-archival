@@ -294,7 +294,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
 
     // Start the checkpoint blob extender.
     let system_object_id = client_config.contract_config.system_object;
-    let _blob_extender = CheckpointBlobExtender::new(
+    let blob_extender = CheckpointBlobExtender::new(
         archival_state.clone(),
         sui_interactive_client.clone(),
         config.checkpoint_blob_extender.clone(),
@@ -303,8 +303,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         system_object_id,
         config.archival_state_snapshot.wal_token_package_id,
     );
-    // TODO: re-enable this after testing.
-    // let blob_extender_handle = tokio::spawn(async move { blob_extender.start().await });
+    let blob_extender_handle = tokio::spawn(async move { blob_extender.start().await });
 
     // Start the archival state snapshot creator if configured.
     let snapshot_creator_handle = {
@@ -350,13 +349,13 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
                 return Err(anyhow::anyhow!("REST API server failed: {}", e));
             }
         }
-        // blob_extender_result = blob_extender_handle => {
-        //     tracing::info!("checkpoint blob extender stopped: {:?}", blob_extender_result);
-        //     if let Err(e) = blob_extender_result {
-        //         tracing::error!("checkpoint blob extender failed: {}", e);
-        //         return Err(anyhow::anyhow!("checkpoint blob extender failed: {}", e));
-        //     }
-        // }
+        blob_extender_result = blob_extender_handle => {
+            tracing::info!("checkpoint blob extender stopped: {:?}", blob_extender_result);
+            if let Err(e) = blob_extender_result {
+                tracing::error!("checkpoint blob extender failed: {}", e);
+                return Err(anyhow::anyhow!("checkpoint blob extender failed: {}", e));
+            }
+        }
         snapshot_creator_result = snapshot_creator_handle => {
             tracing::info!("archival state snapshot creator stopped: {:?}", snapshot_creator_result);
             if let Err(e) = snapshot_creator_result {

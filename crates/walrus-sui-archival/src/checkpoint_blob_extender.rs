@@ -114,45 +114,47 @@ impl CheckpointBlobExtender {
             .await?;
         tracing::info!("current walrus epoch: {}", current_epoch);
 
-        // Get all blobs from the archival state.
-        // TODO: `blobs` can be large. Make this more memory efficient.
-        let blobs = self.archival_state.list_all_blobs(false)?;
-        tracing::info!("found {} blobs to check", blobs.len());
-
         // Store tuple of (object_id, start_checkpoint, blob_id) for regular and shared blobs separately.
         let mut regular_blobs_to_extend = Vec::new();
         let mut shared_blobs_to_extend = Vec::new();
 
-        // We need to release blobs after iterating through them to avoid holding the lock for too long.
-        for blob_info in blobs.into_iter() {
-            let blob_end_epoch = blob_info.blob_expiration_epoch;
+        {
+            // Get all blobs from the archival state.
+            // We need to drop blobs after iterating through them to avoid long memory usage.
+            let blobs = self.archival_state.list_all_blobs(false, true)?;
+            tracing::info!("found {} blobs to check", blobs.len());
 
-            // Check if the blob is expiring within 2 epochs.
-            if blob_end_epoch <= current_epoch + 2 {
-                // Parse the object ID.
-                let object_id = ObjectID::from_bytes(&blob_info.object_id)
-                    .map_err(|e| anyhow!("failed to parse object ID: {}", e))?;
+            // We need to release blobs after iterating through them to avoid holding the lock for too long.
+            for blob_info in blobs.into_iter() {
+                let blob_end_epoch = blob_info.blob_expiration_epoch;
 
-                // Parse the blob ID.
-                let blob_id_str = String::from_utf8_lossy(&blob_info.blob_id).to_string();
-                let blob_id: walrus_core::BlobId = blob_id_str
-                    .parse()
-                    .map_err(|e| anyhow!("failed to parse blob ID: {}", e))?;
+                // Check if the blob is expiring within 2 epochs.
+                if blob_end_epoch <= current_epoch + 2 {
+                    // Parse the object ID.
+                    let object_id = ObjectID::from_bytes(&blob_info.object_id)
+                        .map_err(|e| anyhow!("failed to parse object ID: {}", e))?;
 
-                tracing::debug!(
-                    "blob {} (object {}) expires at epoch {}, will extend (shared: {})",
-                    blob_id,
-                    object_id,
-                    blob_end_epoch,
-                    blob_info.is_shared_blob
-                );
+                    // Parse the blob ID.
+                    let blob_id_str = String::from_utf8_lossy(&blob_info.blob_id).to_string();
+                    let blob_id: walrus_core::BlobId = blob_id_str
+                        .parse()
+                        .map_err(|e| anyhow!("failed to parse blob ID: {}", e))?;
 
-                let blob_tuple = (object_id, blob_info.start_checkpoint, blob_id);
+                    tracing::debug!(
+                        "blob {} (object {}) expires at epoch {}, will extend (shared: {})",
+                        blob_id,
+                        object_id,
+                        blob_end_epoch,
+                        blob_info.is_shared_blob
+                    );
 
-                if blob_info.is_shared_blob {
-                    shared_blobs_to_extend.push(blob_tuple);
-                } else {
-                    regular_blobs_to_extend.push(blob_tuple);
+                    let blob_tuple = (object_id, blob_info.start_checkpoint, blob_id);
+
+                    if blob_info.is_shared_blob {
+                        shared_blobs_to_extend.push(blob_tuple);
+                    } else {
+                        regular_blobs_to_extend.push(blob_tuple);
+                    }
                 }
             }
         }
@@ -198,10 +200,13 @@ impl CheckpointBlobExtender {
             }
         }
 
+        let mut succeeded_count = 0;
+        let mut succeeded_transactions = 0;
+
         // Extend shared blobs in batches of 100.
         for chunk in shared_blobs_to_extend.chunks(100) {
             //TODO: make the timeout configurable.
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            tokio::time::sleep(Duration::from_secs(10)).await;
 
             if let Err(e) = self.extend_shared_blobs_batch(chunk).await {
                 tracing::error!(
@@ -232,7 +237,16 @@ impl CheckpointBlobExtender {
                     );
                 }
             }
+
+            succeeded_count += chunk.len();
+            succeeded_transactions += 1;
         }
+
+        tracing::info!(
+            "successfully extended {} shared blobs in {} transactions",
+            succeeded_count,
+            succeeded_transactions
+        );
 
         Ok(())
     }
@@ -242,8 +256,7 @@ impl CheckpointBlobExtender {
         tracing::info!("syncing blob expiration epochs from on-chain state");
 
         // Get all blobs from the archival state.
-        // TODO: `blobs` can be large. Make this more memory efficient.
-        let blobs = self.archival_state.list_all_blobs(true)?;
+        let blobs = self.archival_state.list_all_blobs(true, true)?;
         tracing::info!("found {} blobs to sync", blobs.len());
 
         let mut synced_count = 0;

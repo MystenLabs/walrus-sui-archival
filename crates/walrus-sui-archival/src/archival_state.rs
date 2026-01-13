@@ -431,8 +431,19 @@ impl ArchivalState {
 
     /// List all checkpoint blobs in the database.
     /// Returns blobs in decreasing order of start_checkpoint (newest first).
-    pub fn list_all_blobs(&self, reverse: bool) -> Result<Vec<CheckpointBlobInfo>> {
-        tracing::info!("listing all checkpoint blobs in the database");
+    /// If `omit_index_entries` is true, the index entries will be omitted from the blob info.
+    /// This is useful when we only need to list the blobs and not the index entries (which can be
+    /// large).
+    pub fn list_all_blobs(
+        &self,
+        reverse: bool,
+        omit_index_entries: bool,
+    ) -> Result<Vec<CheckpointBlobInfo>> {
+        tracing::info!(
+            "listing all checkpoint blobs in the databas, reverse: {}, omit_index_entries: {}",
+            reverse,
+            omit_index_entries
+        );
         let cf = self
             .db
             .cf_handle(CF_CHECKPOINT_BLOB_INFO)
@@ -451,9 +462,14 @@ impl ArchivalState {
         let mut blobs = Vec::new();
         for item in iter {
             let (_key_bytes, value_bytes) = item?;
-            let blob_info = CheckpointBlobInfo::decode(value_bytes.as_ref())?;
+            let mut blob_info = CheckpointBlobInfo::decode(value_bytes.as_ref())?;
+            if omit_index_entries {
+                blob_info.index_entries.clear();
+            }
             blobs.push(blob_info);
         }
+
+        tracing::info!("listed {} checkpoint blobs in the database", blobs.len());
 
         Ok(blobs)
     }
@@ -1376,7 +1392,9 @@ mod tests {
         }
 
         // Verify all blobs have been updated correctly.
-        let all_blobs = state.list_all_blobs(false).expect("Should list all blobs");
+        let all_blobs = state
+            .list_all_blobs(false, false)
+            .expect("Should list all blobs");
         assert_eq!(all_blobs.len(), 3);
 
         for (i, blob_info) in all_blobs.iter().enumerate() {
@@ -1526,7 +1544,9 @@ mod tests {
         assert_eq!(count, 2);
 
         // Verify we can still find the remaining blobs.
-        let all_blobs = state.list_all_blobs(true).expect("should list blobs");
+        let all_blobs = state
+            .list_all_blobs(true, false)
+            .expect("should list blobs");
         assert_eq!(all_blobs.len(), 2);
         assert_eq!(all_blobs[0].start_checkpoint, 100);
         assert_eq!(all_blobs[1].start_checkpoint, 0);
@@ -1649,5 +1669,91 @@ mod tests {
                 .to_string()
                 .contains("cannot remove entries in read-only mode")
         );
+    }
+
+    #[test]
+    fn test_list_all_blobs_omit_index_entries() {
+        tracing_subscriber::fmt::init();
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_db");
+        let state = ArchivalState::open(&db_path, false).expect("Failed to open database");
+
+        // Create multiple blobs with different checkpoint ranges.
+        let blobs = vec![
+            (0u64, 99u64, "blob_1"),
+            (100u64, 199u64, "blob_2"),
+            (200u64, 299u64, "blob_3"),
+        ];
+
+        for (start, end, blob_id_str) in &blobs {
+            let (index_map, blob_id, epoch) = create_test_blob_info(*start, *end, blob_id_str);
+            state
+                .create_new_checkpoint_blob(
+                    *start,
+                    *end,
+                    &index_map,
+                    blob_id,
+                    ObjectID::random(),
+                    epoch,
+                    false,
+                    false,
+                )
+                .expect("Failed to create blob");
+        }
+
+        // Test with omit_index_entries = false (should include index entries).
+        let blobs_with_index = state
+            .list_all_blobs(false, false)
+            .expect("should list all blobs");
+        assert_eq!(blobs_with_index.len(), 3);
+
+        // Each blob should have 100 index entries (0-99, 100-199, 200-299).
+        for blob_info in &blobs_with_index {
+            assert_eq!(
+                blob_info.index_entries.len(),
+                100,
+                "blob should have 100 index entries"
+            );
+        }
+
+        // Test with omit_index_entries = true (should omit index entries).
+        let blobs_without_index = state
+            .list_all_blobs(false, true)
+            .expect("should list all blobs");
+        assert_eq!(blobs_without_index.len(), 3);
+
+        // Each blob should have 0 index entries.
+        for blob_info in &blobs_without_index {
+            assert_eq!(
+                blob_info.index_entries.len(),
+                0,
+                "blob should have 0 index entries when omitted"
+            );
+        }
+
+        // Verify that other fields are still present when index entries are omitted.
+        assert_eq!(blobs_without_index[0].start_checkpoint, 0);
+        assert_eq!(blobs_without_index[0].end_checkpoint, 99);
+        assert_eq!(blobs_without_index[1].start_checkpoint, 100);
+        assert_eq!(blobs_without_index[1].end_checkpoint, 199);
+        assert_eq!(blobs_without_index[2].start_checkpoint, 200);
+        assert_eq!(blobs_without_index[2].end_checkpoint, 299);
+
+        // Test with reverse = true and omit_index_entries = true.
+        let blobs_reversed = state
+            .list_all_blobs(true, true)
+            .expect("should list all blobs in reverse");
+        assert_eq!(blobs_reversed.len(), 3);
+
+        // Verify reverse order.
+        assert_eq!(blobs_reversed[0].start_checkpoint, 200);
+        assert_eq!(blobs_reversed[1].start_checkpoint, 100);
+        assert_eq!(blobs_reversed[2].start_checkpoint, 0);
+
+        // All should have 0 index entries.
+        for blob_info in &blobs_reversed {
+            assert_eq!(blob_info.index_entries.len(), 0);
+        }
     }
 }

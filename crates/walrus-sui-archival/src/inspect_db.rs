@@ -100,7 +100,7 @@ fn get_latest_checkpoint(state: &ArchivalState) -> Result<()> {
 
 /// List all blobs tracked in the database.
 fn list_blobs(state: &ArchivalState) -> Result<()> {
-    let blobs = state.list_all_blobs(true)?;
+    let blobs = state.list_all_blobs(true, false)?;
 
     if blobs.is_empty() {
         println!("no blobs tracked in the database");
