@@ -244,7 +244,6 @@ impl CheckpointBlobExtender {
         tracing::info!("syncing blob expiration epochs from on-chain state");
 
         // Get all blobs from the archival state.
-        // TODO: `blobs` can be large. Make this more memory efficient.
         let blobs = self.archival_state.list_all_blobs(true, true)?;
         tracing::info!("found {} blobs to sync", blobs.len());
 
