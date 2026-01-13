@@ -113,6 +113,9 @@ impl ArchivalState {
             let blob_id_str = blob_id.to_string();
             let object_id_str = object_id.to_string();
 
+            // Calculate blob_size as sum of all length_bytes from index entries
+            let blob_size: u64 = index_entries.iter().map(|e| e.length).sum();
+
             let pg_blob_info = NewCheckpointBlobInfo::from_proto(
                 start_checkpoint,
                 end_checkpoint,
@@ -122,6 +125,7 @@ impl ArchivalState {
                 blob_expiration_epoch,
                 is_shared_blob,
                 CHECKPOINT_BLOB_INFO_VERSION,
+                Some(blob_size),
             );
 
             let pg_index_entries: Vec<NewCheckpointIndexEntry> = index_entries
@@ -577,6 +581,28 @@ impl ArchivalState {
             new_expiration_epoch
         );
 
+        // Also update PostgreSQL if configured.
+        if let Some(pg_pool) = &self.postgres_pool {
+            let pool = pg_pool.clone();
+            let start_cp = start_checkpoint as i64;
+            let new_epoch = new_expiration_epoch as i32;
+            tokio::spawn(async move {
+                if let Err(e) = pool.update_blob_expiration_epoch(start_cp, new_epoch).await {
+                    tracing::error!(
+                        "failed to update blob expiration epoch in PostgreSQL (start={}): {}",
+                        start_cp,
+                        e
+                    );
+                } else {
+                    tracing::debug!(
+                        "updated blob expiration epoch in PostgreSQL: start={}, new_epoch={}",
+                        start_cp,
+                        new_epoch
+                    );
+                }
+            });
+        }
+
         Ok(())
     }
 
@@ -626,6 +652,30 @@ impl ArchivalState {
             num_entries,
             from_checkpoint
         );
+
+        // Also remove from PostgreSQL if configured.
+        if let Some(pg_pool) = &self.postgres_pool {
+            let pool = pg_pool.clone();
+            let from_cp = from_checkpoint as i64;
+            tokio::spawn(async move {
+                match pool.remove_entries_from_checkpoint(from_cp).await {
+                    Ok(pg_count) => {
+                        tracing::info!(
+                            "removed {} entries from PostgreSQL with start_checkpoint >= {}",
+                            pg_count,
+                            from_cp
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "failed to remove entries from PostgreSQL (from_checkpoint={}): {}",
+                            from_cp,
+                            e
+                        );
+                    }
+                }
+            });
+        }
 
         Ok(num_entries)
     }
