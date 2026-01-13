@@ -308,12 +308,13 @@ impl PostgresPool {
 
         conn.interact(|conn| {
             // Use raw SQL for aggregate query
+            // Cast SUM result to BIGINT to avoid NUMERIC type issues
             diesel::sql_query(
                 "SELECT
-                    COUNT(*) as blob_count,
-                    COALESCE(MIN(start_checkpoint), 0) as earliest_checkpoint,
-                    COALESCE(MAX(end_checkpoint), 0) as latest_checkpoint,
-                    COALESCE(SUM(blob_size), 0) as total_size
+                    COUNT(*)::BIGINT as blob_count,
+                    COALESCE(MIN(start_checkpoint), 0)::BIGINT as earliest_checkpoint,
+                    COALESCE(MAX(end_checkpoint), 0)::BIGINT as latest_checkpoint,
+                    COALESCE(SUM(blob_size), 0)::BIGINT as total_size
                 FROM checkpoint_blob_info",
             )
             .get_result::<BlobStats>(conn)
