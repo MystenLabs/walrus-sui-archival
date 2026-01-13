@@ -200,6 +200,9 @@ impl CheckpointBlobExtender {
             }
         }
 
+        let mut succeeded_count = 0;
+        let mut succeeded_transactions = 0;
+
         // Extend shared blobs in batches of 100.
         for chunk in shared_blobs_to_extend.chunks(100) {
             //TODO: make the timeout configurable.
@@ -234,7 +237,16 @@ impl CheckpointBlobExtender {
                     );
                 }
             }
+
+            succeeded_count += chunk.len();
+            succeeded_transactions += 1;
         }
+
+        tracing::info!(
+            "successfully extended {} shared blobs in {} transactions",
+            succeeded_count,
+            succeeded_transactions
+        );
 
         Ok(())
     }
