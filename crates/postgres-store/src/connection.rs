@@ -333,7 +333,7 @@ impl PostgresPool {
 
         conn.interact(move |conn| {
             checkpoint_blob_info::table
-                .filter(checkpoint_blob_info::blob_expiration_epoch.lt(epoch))
+                .filter(checkpoint_blob_info::blob_expiration_epoch.le(epoch))
                 .order(checkpoint_blob_info::blob_expiration_epoch.asc())
                 .load(conn)
         })
