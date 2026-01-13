@@ -19,13 +19,6 @@ use crate::{
     schema::{checkpoint_blob_info, checkpoint_index_entry},
 };
 
-/// Helper struct for raw SQL query that returns blob size.
-#[derive(QueryableByName)]
-struct BlobSizeResult {
-    #[diesel(sql_type = diesel::sql_types::BigInt)]
-    total: i64,
-}
-
 /// Aggregate stats for checkpoint blobs.
 #[derive(Debug, Clone, QueryableByName)]
 pub struct BlobStats {
@@ -513,24 +506,6 @@ impl PostgresPool {
         .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
 
         Ok(())
-    }
-
-    /// Calculate blob_size for a specific start_checkpoint by summing length_bytes.
-    pub async fn calculate_blob_size(&self, start_checkpoint: i64) -> Result<i64> {
-        let conn = self.pool.get().await.context("Failed to get connection")?;
-
-        conn.interact(move |conn| {
-            // Use raw SQL to avoid Numeric type issues with SUM
-            diesel::sql_query(
-                "SELECT COALESCE(SUM(length_bytes), 0)::BIGINT as total FROM checkpoint_index_entry WHERE start_checkpoint = $1"
-            )
-            .bind::<diesel::sql_types::BigInt, _>(start_checkpoint)
-            .get_result::<BlobSizeResult>(conn)
-            .map(|r| r.total)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Interact error: {}", e))?
-        .map_err(|e| anyhow::anyhow!("Database error: {}", e))
     }
 }
 
