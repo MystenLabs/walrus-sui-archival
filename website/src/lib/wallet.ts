@@ -16,12 +16,17 @@ interface DisconnectFeature {
   disconnect: () => Promise<void>;
 }
 
-interface SignAndExecuteFeature {
-  signAndExecuteTransaction: (input: {
-    transaction: Uint8Array;
+// Old wallet standard interface (sui:signAndExecuteTransactionBlock)
+interface SignAndExecuteTransactionBlockFeature {
+  signAndExecuteTransactionBlock: (input: {
+    transactionBlock: Transaction;
     account: WalletAccount;
     chain: string;
-  }) => Promise<unknown>;
+    options?: { showEffects?: boolean };
+  }) => Promise<{
+    digest: string;
+    effects?: { status?: { status: string; error?: string } };
+  }>;
 }
 
 export function getAvailableWallets(): Wallet[] {
@@ -86,21 +91,23 @@ export async function signAndExecuteTransaction(
     throw new Error("No wallet connected");
   }
 
-  const signFeature = currentWallet.features["sui:signAndExecuteTransaction"] as SignAndExecuteFeature | undefined;
-  if (!signFeature) {
+  // Use the old wallet standard method (sui:signAndExecuteTransactionBlock)
+  // This is what website-old uses and is compatible with most wallets
+  const signAndExecuteFeature = currentWallet.features["sui:signAndExecuteTransactionBlock"] as SignAndExecuteTransactionBlockFeature | undefined;
+  if (!signAndExecuteFeature) {
     throw new Error("Wallet does not support transaction signing");
   }
 
-  const client = getSuiClient();
-  const txBytes = await tx.build({ client });
-
-  const result = await signFeature.signAndExecuteTransaction({
-    transaction: txBytes,
+  const result = await signAndExecuteFeature.signAndExecuteTransactionBlock({
+    transactionBlock: tx,
     account: currentAccount,
-    chain: `sui:${config.suiRpcUrl.includes("mainnet") ? "mainnet" : "testnet"}`,
+    chain: config.suiRpcUrl.includes("mainnet") ? "sui:mainnet" : "sui:testnet",
+    options: {
+      showEffects: true,
+    },
   });
 
-  return result as SuiTransactionBlockResponse;
+  return result as unknown as SuiTransactionBlockResponse;
 }
 
 export async function getSharedFundBalance(): Promise<bigint> {
@@ -220,7 +227,7 @@ export async function contributeToSharedFund(amountWal: number): Promise<SuiTran
 
   // Split the exact amount from the first coin
   const [depositCoin] = tx.splitCoins(tx.object(coins.data[0].coinObjectId), [
-    tx.pure.u64(amountMist),
+    amountMist,
   ]);
 
   // Call deposit function
