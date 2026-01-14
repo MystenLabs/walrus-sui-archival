@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { api } from "@/lib/api";
+import { api, ExpiredBlobInfo } from "@/lib/api";
 import { formatSize, formatNumber, formatAddress, CURRENT_NETWORK } from "@/lib/config";
 import {
   connectWallet,
@@ -16,6 +16,7 @@ import {
   useWalrusEpoch,
   useContribute,
 } from "@/lib/queries";
+import Modal from "@/components/Modal";
 
 export default function HomePage() {
   // React Query hooks
@@ -39,6 +40,11 @@ export default function HomePage() {
     type: "success" | "error" | "info";
     text: string;
   } | null>(null);
+
+  // Modal state for extend blobs confirmation
+  const [showExtendModal, setShowExtendModal] = useState(false);
+  const [blobsToExtend, setBlobsToExtend] = useState<ExpiredBlobInfo[]>([]);
+  const [isExtendingInModal, setIsExtendingInModal] = useState(false);
 
   const handleConnectWallet = async () => {
     try {
@@ -98,15 +104,32 @@ export default function HomePage() {
 
       // Get blobs expiring within 3 epochs
       const expiringBlobs = await api.getBlobsExpiredBeforeEpoch(currentEpoch + 3);
-      const blobsToExtend = expiringBlobs.slice(0, count);
+      const blobs = expiringBlobs.slice(0, count);
 
-      if (blobsToExtend.length === 0) {
+      if (blobs.length === 0) {
         setExtendStatus({ type: "info", text: "No blobs need extension" });
         setIsExtending(false);
         return;
       }
 
-      setExtendStatus({ type: "info", text: "Signing transaction..." });
+      // Show confirmation modal
+      setBlobsToExtend(blobs);
+      setShowExtendModal(true);
+      setIsExtending(false);
+      setExtendStatus(null);
+    } catch (err) {
+      setExtendStatus({
+        type: "error",
+        text: err instanceof Error ? err.message : "Failed to fetch blobs",
+      });
+      setIsExtending(false);
+    }
+  };
+
+  const handleConfirmExtend = async () => {
+    try {
+      setIsExtendingInModal(true);
+
       const objectIds = blobsToExtend.map((b) => b.object_id);
       await extendBlobsUsingSharedFund(objectIds);
 
@@ -118,7 +141,9 @@ export default function HomePage() {
         text: `Extended ${blobsToExtend.length} blobs by 5 epochs!`,
       });
 
-      // Refresh data
+      // Close modal and refresh data
+      setShowExtendModal(false);
+      setBlobsToExtend([]);
       refetch();
       refetchBalance();
     } catch (err) {
@@ -126,9 +151,16 @@ export default function HomePage() {
         type: "error",
         text: err instanceof Error ? err.message : "Failed to extend blobs",
       });
+      setShowExtendModal(false);
     } finally {
-      setIsExtending(false);
+      setIsExtendingInModal(false);
     }
+  };
+
+  const handleCancelExtend = () => {
+    setShowExtendModal(false);
+    setBlobsToExtend([]);
+    setExtendStatus({ type: "info", text: "Extension cancelled by user" });
   };
 
   const formatBalance = (balance: bigint): string => {
@@ -351,6 +383,29 @@ export default function HomePage() {
           </div>
         </div>
       )}
+
+      {/* Extend Blobs Confirmation Modal */}
+      <Modal
+        isOpen={showExtendModal}
+        onClose={handleCancelExtend}
+        onConfirm={handleConfirmExtend}
+        title={`Extend ${blobsToExtend.length} Blob(s)`}
+        confirmText="Extend Blobs"
+        cancelText="Cancel"
+        isLoading={isExtendingInModal}
+      >
+        <p>The following blobs will be extended by 5 epochs:</p>
+        <ul className="blob-list">
+          {blobsToExtend.map((blob, index) => (
+            <li key={blob.object_id}>
+              <span>{index + 1}. </span>
+              <span>{blob.blob_id.slice(0, 8)}...{blob.blob_id.slice(-6)}</span>
+              <span className="blob-arrow">&rarr;</span>
+              <span className="blob-epoch">epoch {blob.end_epoch} &rarr; {blob.end_epoch + 5}</span>
+            </li>
+          ))}
+        </ul>
+      </Modal>
     </div>
   );
 }
