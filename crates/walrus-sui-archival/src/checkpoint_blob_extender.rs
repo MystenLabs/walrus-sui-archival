@@ -91,8 +91,20 @@ impl CheckpointBlobExtender {
         loop {
             sync_interval.tick().await;
             tracing::info!("starting scheduled blob expiration epoch sync");
-            if let Err(e) = self.sync_all_blob_expiration_epochs().await {
-                tracing::error!("failed to sync blob expiration epochs: {}", e);
+
+            // Run both syncs concurrently.
+            let (rocksdb_result, postgres_result) = tokio::join!(
+                self.sync_all_blob_expiration_epochs(),
+                self.sync_all_blob_expiration_epochs_to_postgres()
+            );
+
+            if let Err(e) = rocksdb_result {
+                tracing::error!("failed to sync blob expiration epochs to RocksDB: {}", e);
+                // Continue running despite errors.
+            }
+
+            if let Err(e) = postgres_result {
+                tracing::error!("failed to sync blob expiration epochs to PostgreSQL: {}", e);
                 // Continue running despite errors.
             }
         }
@@ -252,6 +264,7 @@ impl CheckpointBlobExtender {
     }
 
     /// Periodically sync all blob expiration epochs from on-chain state.
+    /// Uses batch fetching with multi_get_object_with_options for efficiency.
     async fn sync_all_blob_expiration_epochs(&self) -> Result<()> {
         tracing::info!("syncing blob expiration epochs from on-chain state");
 
@@ -261,78 +274,345 @@ impl CheckpointBlobExtender {
 
         let mut synced_count = 0;
         let mut error_count = 0;
+        let mut total_processed = 0;
 
-        // Get a read client for reading blob epoch. This is read-only and therefore do not mutual
-        // exclusive to the client.
+        // Get a read client for reading blob epoch.
         let sui_read_client = self.sui_interactive_client.get_sui_read_client().await;
-        for blob_info in blobs {
-            // To not sending too many requests to the RPC node, we wait a little bit between each blob.
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            // Parse the object ID.
-            let object_id = match ObjectID::from_bytes(&blob_info.object_id) {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("failed to parse object ID: {}", e);
-                    error_count += 1;
-                    continue;
-                }
-            };
 
-            // Parse the blob ID.
-            let blob_id_str = String::from_utf8_lossy(&blob_info.blob_id).to_string();
-            let blob_id: walrus_core::BlobId = match blob_id_str.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("failed to parse blob ID: {}", e);
-                    error_count += 1;
-                    continue;
-                }
-            };
+        // Process blobs in batches.
+        let batch_size = 50; // Sui RPC typically supports up to 50 objects per multi_get call.
 
-            let on_chain_end_epoch = self
-                .get_blob_expiration_epoch(
-                    object_id,
-                    blob_info.is_shared_blob,
-                    sui_read_client.clone(),
+        for batch in blobs.chunks(batch_size) {
+            tracing::info!(
+                "processing batch of {} blobs (total processed so far: {})",
+                batch.len(),
+                total_processed
+            );
+
+            // Parse all object IDs and blob IDs for this batch.
+            let mut object_ids = Vec::with_capacity(batch.len());
+            let mut valid_blobs = Vec::with_capacity(batch.len());
+
+            for blob_info in batch {
+                // Parse the object ID.
+                let object_id = match ObjectID::from_bytes(&blob_info.object_id) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!("failed to parse object ID: {}", e);
+                        error_count += 1;
+                        continue;
+                    }
+                };
+
+                // Parse the blob ID.
+                let blob_id_str = String::from_utf8_lossy(&blob_info.blob_id).to_string();
+                let blob_id: walrus_core::BlobId = match blob_id_str.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!("failed to parse blob ID: {}", e);
+                        error_count += 1;
+                        continue;
+                    }
+                };
+
+                object_ids.push(object_id);
+                valid_blobs.push((blob_info, blob_id, object_id));
+            }
+
+            if object_ids.is_empty() {
+                continue;
+            }
+
+            // Batch fetch all objects from on-chain.
+            let objects = match sui_read_client
+                .retriable_sui_client()
+                .multi_get_object_with_options(
+                    &object_ids,
+                    sui_sdk::rpc_types::SuiObjectDataOptions::new().with_content(),
                 )
-                .await;
+                .await
+            {
+                Ok(objs) => objs,
+                Err(e) => {
+                    tracing::error!("failed to batch fetch objects from on-chain: {}", e);
+                    error_count += valid_blobs.len();
+                    total_processed += valid_blobs.len();
+                    // Wait before retrying next batch.
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
 
-            // Compare with stored epoch.
-            if on_chain_end_epoch != blob_info.blob_expiration_epoch {
-                tracing::info!(
-                    "blob {} (checkpoint {}) expiration epoch mismatch: db={}, on-chain={}, updating db",
-                    blob_id,
-                    blob_info.start_checkpoint,
-                    blob_info.blob_expiration_epoch,
-                    on_chain_end_epoch
-                );
+            // Process each object and compare epochs.
+            for (i, obj_response) in objects.into_iter().enumerate() {
+                total_processed += 1;
+                let (blob_info, blob_id, object_id) = &valid_blobs[i];
 
-                // Update the database.
-                if let Err(e) = self.archival_state.update_blob_expiration_epoch(
-                    blob_info.start_checkpoint,
-                    &blob_id,
-                    &object_id,
-                    on_chain_end_epoch,
-                ) {
-                    tracing::error!(
-                        "failed to update blob expiration epoch in db for blob {}: {}",
-                        object_id,
-                        e
+                // Extract expiration epoch from object.
+                let on_chain_epoch = match self
+                    .extract_expiration_epoch_from_object(&obj_response, blob_info.is_shared_blob)
+                {
+                    Ok(epoch) => epoch,
+                    Err(e) => {
+                        tracing::error!(
+                            "failed to extract expiration epoch for object {}: {}",
+                            object_id,
+                            e
+                        );
+                        error_count += 1;
+                        continue;
+                    }
+                };
+
+                // Compare with stored epoch.
+                if on_chain_epoch != blob_info.blob_expiration_epoch {
+                    tracing::info!(
+                        "blob {} (checkpoint {}) expiration epoch mismatch: db={}, on-chain={}, updating db",
+                        blob_id,
+                        blob_info.start_checkpoint,
+                        blob_info.blob_expiration_epoch,
+                        on_chain_epoch
                     );
-                    error_count += 1;
-                } else {
-                    synced_count += 1;
+
+                    // Update the database.
+                    if let Err(e) = self.archival_state.update_blob_expiration_epoch(
+                        blob_info.start_checkpoint,
+                        blob_id,
+                        object_id,
+                        on_chain_epoch,
+                    ) {
+                        tracing::error!(
+                            "failed to update blob expiration epoch in db for blob {}: {}",
+                            object_id,
+                            e
+                        );
+                        error_count += 1;
+                    } else {
+                        synced_count += 1;
+                    }
                 }
             }
+
+            // Small delay between batches to avoid overwhelming the RPC node.
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
         tracing::info!(
-            "blob expiration epoch sync completed: {} updated, {} errors",
+            "blob expiration epoch sync completed: {} total blobs, {} updated, {} errors",
+            total_processed,
             synced_count,
             error_count
         );
 
         Ok(())
+    }
+
+    /// Sync all blob expiration epochs from on-chain state to PostgreSQL.
+    /// This reads blobs from PostgreSQL and compares with on-chain state,
+    /// updating PostgreSQL if they don't match.
+    /// Uses batch fetching with multi_get_object_with_options for efficiency.
+    async fn sync_all_blob_expiration_epochs_to_postgres(&self) -> Result<()> {
+        let pg_pool = match self.archival_state.postgres_pool() {
+            Some(pool) => pool.clone(),
+            None => {
+                tracing::info!("PostgreSQL not configured, skipping postgres sync");
+                return Ok(());
+            }
+        };
+
+        tracing::info!("syncing blob expiration epochs from on-chain state to PostgreSQL");
+
+        let mut synced_count = 0;
+        let mut error_count = 0;
+        let mut total_processed = 0;
+
+        // Get a read client for reading blob epochs from on-chain.
+        let sui_read_client = self.sui_interactive_client.get_sui_read_client().await;
+
+        // Use cursor-based pagination to loop through all blobs.
+        // Batch size for PostgreSQL query and on-chain fetch.
+        let batch_size = 50; // Sui RPC typically supports up to 50 objects per multi_get call.
+        let mut cursor: Option<i64> = None;
+
+        loop {
+            // Get a batch of blobs from PostgreSQL.
+            let pg_blobs = pg_pool
+                .list_all_blobs(false, Some(batch_size), cursor)
+                .await?;
+
+            if pg_blobs.is_empty() {
+                break;
+            }
+
+            tracing::info!(
+                "processing batch of {} blobs (total processed so far: {})",
+                pg_blobs.len(),
+                total_processed
+            );
+
+            // Update cursor for next iteration.
+            cursor = pg_blobs.last().map(|b| b.start_checkpoint);
+
+            // Parse all object IDs for this batch.
+            let mut object_ids = Vec::with_capacity(pg_blobs.len());
+            let mut valid_blobs = Vec::with_capacity(pg_blobs.len());
+
+            for pg_blob in pg_blobs {
+                match ObjectID::from_hex_literal(&pg_blob.object_id) {
+                    Ok(id) => {
+                        object_ids.push(id);
+                        valid_blobs.push(pg_blob);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "failed to parse object ID {} from PostgreSQL: {}",
+                            pg_blob.object_id,
+                            e
+                        );
+                        error_count += 1;
+                    }
+                }
+            }
+
+            if object_ids.is_empty() {
+                total_processed += valid_blobs.len();
+                continue;
+            }
+
+            // Batch fetch all objects from on-chain.
+            let objects = match sui_read_client
+                .retriable_sui_client()
+                .multi_get_object_with_options(
+                    &object_ids,
+                    sui_sdk::rpc_types::SuiObjectDataOptions::new().with_content(),
+                )
+                .await
+            {
+                Ok(objs) => objs,
+                Err(e) => {
+                    tracing::error!("failed to batch fetch objects from on-chain: {}", e);
+                    error_count += valid_blobs.len();
+                    total_processed += valid_blobs.len();
+                    // Wait before retrying next batch.
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+
+            // Process each object and compare epochs.
+            for (i, obj_response) in objects.into_iter().enumerate() {
+                total_processed += 1;
+                let pg_blob = &valid_blobs[i];
+                let object_id = object_ids[i];
+
+                // Extract expiration epoch from object.
+                let on_chain_epoch = match self
+                    .extract_expiration_epoch_from_object(&obj_response, pg_blob.is_shared_blob)
+                {
+                    Ok(epoch) => epoch,
+                    Err(e) => {
+                        tracing::error!(
+                            "failed to extract expiration epoch for object {}: {}",
+                            object_id,
+                            e
+                        );
+                        error_count += 1;
+                        continue;
+                    }
+                };
+
+                let pg_epoch = pg_blob.blob_expiration_epoch as u32;
+
+                // Compare epochs.
+                if on_chain_epoch != pg_epoch {
+                    tracing::info!(
+                        "blob {} (start_checkpoint {}) expiration epoch mismatch: pg={}, on-chain={}, updating pg",
+                        object_id,
+                        pg_blob.start_checkpoint,
+                        pg_epoch,
+                        on_chain_epoch
+                    );
+
+                    // Update PostgreSQL with on-chain value.
+                    if let Err(e) = pg_pool
+                        .update_blob_expiration_epoch(
+                            pg_blob.start_checkpoint,
+                            on_chain_epoch as i32,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            "failed to update PostgreSQL blob expiration epoch for start_checkpoint {}: {}",
+                            pg_blob.start_checkpoint,
+                            e
+                        );
+                        error_count += 1;
+                    } else {
+                        synced_count += 1;
+                    }
+                }
+            }
+
+            // Small delay between batches to avoid overwhelming the RPC node.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        tracing::info!(
+            "PostgreSQL blob expiration epoch sync completed: {} total blobs, {} updated, {} errors",
+            total_processed,
+            synced_count,
+            error_count
+        );
+
+        Ok(())
+    }
+
+    /// Extract expiration epoch from a fetched object response.
+    fn extract_expiration_epoch_from_object(
+        &self,
+        obj_response: &sui_sdk::rpc_types::SuiObjectResponse,
+        is_shared_blob: bool,
+    ) -> Result<u32> {
+        let obj_data = obj_response
+            .data
+            .as_ref()
+            .ok_or_else(|| anyhow!("object data not found"))?;
+
+        let content = obj_data
+            .content
+            .as_ref()
+            .ok_or_else(|| anyhow!("object content not found"))?;
+
+        let fields = match content {
+            sui_sdk::rpc_types::SuiParsedData::MoveObject(obj) => {
+                obj.fields.clone().to_json_value()
+            }
+            _ => return Err(anyhow!("unexpected object type")),
+        };
+
+        if is_shared_blob {
+            // SharedArchivalBlob structure: { id, blob: Blob { storage: { end_epoch } } }
+            fields
+                .get("blob")
+                .ok_or_else(|| anyhow!("blob field not found"))?
+                .get("storage")
+                .ok_or_else(|| anyhow!("blob.storage not found"))?
+                .get("end_epoch")
+                .ok_or_else(|| anyhow!("blob.storage.end_epoch not found"))?
+                .as_u64()
+                .map(|v| v as u32)
+                .ok_or_else(|| anyhow!("end_epoch is not a valid u64"))
+        } else {
+            // Regular Blob structure: { storage: { end_epoch } }
+            fields
+                .get("storage")
+                .ok_or_else(|| anyhow!("storage not found"))?
+                .get("end_epoch")
+                .ok_or_else(|| anyhow!("storage.end_epoch not found"))?
+                .as_u64()
+                .map(|v| v as u32)
+                .ok_or_else(|| anyhow!("end_epoch is not a valid u64"))
+        }
     }
 
     /// Get the updated blob expiration epoch with infinite retry.
