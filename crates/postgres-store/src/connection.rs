@@ -507,6 +507,45 @@ impl PostgresPool {
 
         Ok(())
     }
+
+    /// Check the consistency of the checkpoint blob database by ensuring there are no gaps.
+    /// Returns a list of gaps found in the checkpoint sequence.
+    /// Each gap is represented as (expected_start, actual_start).
+    pub async fn check_consistency(&self) -> Result<Vec<(i64, i64)>> {
+        let conn = self.pool.get().await.context("Failed to get connection")?;
+
+        conn.interact(|conn| {
+            // Get all blobs ordered by start_checkpoint.
+            let blobs: Vec<(i64, i64)> = checkpoint_blob_info::table
+                .select((
+                    checkpoint_blob_info::start_checkpoint,
+                    checkpoint_blob_info::end_checkpoint,
+                ))
+                .order(checkpoint_blob_info::start_checkpoint.asc())
+                .load(conn)?;
+
+            if blobs.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            let mut gaps = Vec::new();
+            let mut expected_next_checkpoint: Option<i64> = None;
+
+            for (start_checkpoint, end_checkpoint) in blobs {
+                if let Some(expected) = expected_next_checkpoint
+                    && start_checkpoint != expected
+                {
+                    gaps.push((expected, start_checkpoint));
+                }
+                expected_next_checkpoint = Some(end_checkpoint + 1);
+            }
+
+            Ok(gaps)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Interact error: {}", e))?
+        .map_err(|e: diesel::result::Error| anyhow::anyhow!("Database error: {}", e))
+    }
 }
 
 /// Wrapper for thread-safe sharing of PostgresPool.

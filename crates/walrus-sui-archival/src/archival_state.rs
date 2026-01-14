@@ -746,12 +746,53 @@ impl ArchivalState {
 
                 tracing::info!("running periodic consistency check");
 
+                // Check RocksDB consistency.
                 if let Err(e) = self.check_consistency() {
-                    tracing::error!("consistency check failed: {}", e);
+                    tracing::error!("RocksDB consistency check failed: {}", e);
                     return Err(e);
+                }
+
+                // Check PostgreSQL consistency if configured.
+                if let Err(e) = self.check_postgres_consistency().await {
+                    tracing::error!("PostgreSQL consistency check failed: {}", e);
+                    // Don't return error, just log it. PostgreSQL is optional.
                 }
             }
         })
+    }
+
+    /// Check the consistency of the PostgreSQL checkpoint blob database by ensuring there are no gaps.
+    /// Logs warnings if any gaps are detected in the checkpoint sequence.
+    pub async fn check_postgres_consistency(&self) -> Result<()> {
+        let pg_pool = match &self.postgres_pool {
+            Some(pool) => pool,
+            None => {
+                tracing::info!("PostgreSQL not configured, skipping postgres consistency check");
+                return Ok(());
+            }
+        };
+
+        tracing::info!("starting PostgreSQL database consistency check");
+
+        let gaps = pg_pool.check_consistency().await?;
+
+        if gaps.is_empty() {
+            tracing::info!("PostgreSQL database consistency check passed, no gaps found");
+        } else {
+            for (expected, actual) in &gaps {
+                tracing::warn!(
+                    "PostgreSQL gap detected: expected start_checkpoint {}, found {}",
+                    expected,
+                    actual
+                );
+            }
+            tracing::warn!(
+                "PostgreSQL database consistency check completed with {} gaps detected",
+                gaps.len()
+            );
+        }
+
+        Ok(())
     }
 }
 
