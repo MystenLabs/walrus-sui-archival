@@ -11359,6 +11359,8 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sui-storage",
+ "sui-types",
  "tokio",
  "tower-http 0.6.6",
  "tracing",
