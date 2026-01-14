@@ -25,7 +25,7 @@ use sui_types::full_checkpoint_content::CheckpointData;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 
-/// Configuration for the website front-end.
+/// Configuration for the caching server.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The backend URL to proxy requests to (used as fallback).
@@ -390,7 +390,7 @@ struct RefreshBlobEndEpochResponse {
     count: usize,
 }
 
-/// Start the website front-end server.
+/// Start the caching server.
 pub async fn start_server(config: Config) -> Result<()> {
     // Initialize PostgreSQL pool if database URL is provided.
     // If DATABASE_URL is set, use PostgreSQL exclusively; otherwise use backend proxy.
@@ -441,7 +441,7 @@ pub async fn start_server(config: Config) -> Result<()> {
         .layer(CorsLayer::permissive());
 
     tracing::info!(
-        "starting website front-end server on {} with backend {}",
+        "starting caching server on {} with backend {}",
         config.bind_address,
         config.backend_url
     );

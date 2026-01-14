@@ -3,12 +3,12 @@
 
 use std::net::SocketAddr;
 
+use caching_server::Config;
 use clap::Parser;
-use website_front_end::Config;
 
 #[derive(Parser, Debug)]
-#[command(name = "website-front-end")]
-#[command(about = "Website front-end caching proxy for walrus-sui-archival API")]
+#[command(name = "caching-server")]
+#[command(about = "Caching server for walrus-sui-archival API")]
 struct Args {
     /// Backend environment: mainnet, testnet, localnet, or custom URL.
     #[arg(long, default_value = "mainnet")]
@@ -56,13 +56,13 @@ async fn main() -> anyhow::Result<()> {
     );
 
     tracing::info!(
-        "starting website front-end with backend: {}, cache freshness: {}s",
+        "starting caching server with backend: {}, cache freshness: {}s",
         config.backend_url,
         config.cache_freshness_secs
     );
 
     // Start server.
-    website_front_end::start_server(config).await?;
+    caching_server::start_server(config).await?;
 
     Ok(())
 }
