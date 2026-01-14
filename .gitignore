@@ -25,6 +25,11 @@ contracts/build/
 # CLAUDE
 CLAUDE.md
 
+# Node.js
+node_modules/
+.next/
+out/
+
 #App folders
 downloaded_checkpoint_dir/
 checkpoint_blobs/
