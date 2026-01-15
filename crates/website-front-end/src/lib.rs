@@ -74,11 +74,12 @@ fn convert_bytes_to_base64(value: serde_json::Value) -> serde_json::Value {
             // Check if this is a byte array (array of numbers 0-255).
             if arr.iter().all(|v| {
                 if let serde_json::Value::Number(n) = v {
-                    n.as_u64().map_or(false, |num| num <= 255)
+                    n.as_u64().is_some_and(|num| num <= 255)
                 } else {
                     false
                 }
-            }) && !arr.is_empty() {
+            }) && !arr.is_empty()
+            {
                 // Convert to base64 string.
                 let bytes: Vec<u8> = arr
                     .iter()
@@ -87,11 +88,7 @@ fn convert_bytes_to_base64(value: serde_json::Value) -> serde_json::Value {
                 serde_json::Value::String(BASE64.encode(&bytes))
             } else {
                 // Recursively process array elements.
-                serde_json::Value::Array(
-                    arr.into_iter()
-                        .map(convert_bytes_to_base64)
-                        .collect()
-                )
+                serde_json::Value::Array(arr.into_iter().map(convert_bytes_to_base64).collect())
             }
         }
         serde_json::Value::Object(map) => {
@@ -99,7 +96,7 @@ fn convert_bytes_to_base64(value: serde_json::Value) -> serde_json::Value {
             serde_json::Value::Object(
                 map.into_iter()
                     .map(|(k, v)| (k, convert_bytes_to_base64(v)))
-                    .collect()
+                    .collect(),
             )
         }
         // Leave other types unchanged.
