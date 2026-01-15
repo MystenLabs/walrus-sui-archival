@@ -215,10 +215,10 @@ export default function BlobsPage() {
           {displayedBlobs.map((blob) => (
             <tr key={blob.blob_id} className={blob.end_of_epoch ? "end-of-epoch" : ""}>
               <td>
-                <code title={blob.blob_id}>{formatAddress(blob.blob_id, 8)}</code>
+                <code>{blob.blob_id}</code>
               </td>
               <td>
-                <code title={blob.object_id}>{formatAddress(blob.object_id, 8)}</code>
+                <code>{blob.object_id}</code>
               </td>
               <td className="text-right">
                 <Link href={`/checkpoint?checkpoint=${blob.start_checkpoint}`}>
