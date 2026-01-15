@@ -19,6 +19,8 @@ use axum::{
 use postgres_store::{PostgresPool, SharedPostgresPool};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sui_storage::blob::Blob;
+use sui_types::full_checkpoint_content::CheckpointData;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 
@@ -743,6 +745,47 @@ async fn proxy_app_blobs(
     }
 }
 
+/// Fetch checkpoint content from aggregator.
+// TODO: move this to a helper crate that can be shared with the archival service.
+async fn fetch_checkpoint_content(
+    blob_id: &str,
+    offset: u64,
+    length: u64,
+) -> Result<CheckpointData> {
+    let url = format!(
+        "https://aggregator.walrus-mainnet.walrus.space/v1/blobs/{}/byte-range?start={}&length={}",
+        blob_id, offset, length
+    );
+
+    tracing::info!("fetching checkpoint content from: {}", url);
+
+    // Fetch the data from the aggregator.
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to fetch from aggregator: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "aggregator returned error status: {}",
+            response.status()
+        ));
+    }
+
+    let bcs_data = response
+        .bytes()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to read response body: {}", e))?;
+
+    // Decode using BCS.
+    let checkpoint_data = Blob::from_bytes::<CheckpointData>(&bcs_data)
+        .map_err(|e| anyhow::anyhow!("failed to decode checkpoint data: {}", e))?;
+
+    Ok(checkpoint_data)
+}
+
 /// Handler for /v1/app_checkpoint.
 async fn proxy_app_checkpoint(
     State(state): State<AppState>,
@@ -750,23 +793,56 @@ async fn proxy_app_checkpoint(
 ) -> impl IntoResponse {
     // PostgreSQL mode: query database directly.
     // Note: show_content requires Walrus, so we forward to backend in that case.
-    if state.postgres_pool.is_some() && !params.show_content {
-        return match state
+    if state.postgres_pool.is_some() {
+        let checkpoint_info = match state
             .query_checkpoint_from_postgres(params.checkpoint)
             .await
         {
-            Some(result) => Ok(Json(result)),
-            None => Err(StatusCode::NOT_FOUND),
+            Some(result) => result,
+            None => return Err(StatusCode::NOT_FOUND),
         };
-    }
 
-    // Backend proxy mode (or show_content requested).
-    let query_string = if params.show_content {
-        format!("checkpoint={}&show_content=true", params.checkpoint)
+        if !params.show_content {
+            return Ok(Json(checkpoint_info));
+        }
+
+        let checkpoint_data = match fetch_checkpoint_content(
+            &checkpoint_info.blob_id,
+            checkpoint_info.offset,
+            checkpoint_info.length,
+        )
+        .await
+        {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::error!("failed to fetch checkpoint content: {}", e);
+                // TODO: return a more detailed error message.
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        };
+
+        Ok(Json(AppCheckpointInfo {
+            checkpoint_number: checkpoint_info.checkpoint_number,
+            blob_id: checkpoint_info.blob_id,
+            object_id: checkpoint_info.object_id,
+            index: checkpoint_info.index,
+            offset: checkpoint_info.offset,
+            length: checkpoint_info.length,
+            content: Some(serde_json::to_value(checkpoint_data).map_err(|e| {
+                tracing::error!("failed to serialize checkpoint data: {}", e);
+                // TODO: return a more detailed error message.
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?),
+        }))
     } else {
-        format!("checkpoint={}", params.checkpoint)
-    };
-    proxy_with_cache::<AppCheckpointInfo>(&state, "v1/app_checkpoint", &query_string).await
+        // Backend proxy mode.
+        let query_string = if params.show_content {
+            format!("checkpoint={}&show_content=true", params.checkpoint)
+        } else {
+            format!("checkpoint={}", params.checkpoint)
+        };
+        proxy_with_cache::<AppCheckpointInfo>(&state, "v1/app_checkpoint", &query_string).await
+    }
 }
 
 /// Handler for /v1/app_refresh_blob_end_epoch.

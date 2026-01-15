@@ -756,6 +756,7 @@ impl ArchivalState {
                 if let Err(e) = self.check_postgres_consistency().await {
                     tracing::error!("PostgreSQL consistency check failed: {}", e);
                     // Don't return error, just log it. PostgreSQL is optional.
+                    // TODO: return error when postgres becomes the default DB.
                 }
             }
         })
