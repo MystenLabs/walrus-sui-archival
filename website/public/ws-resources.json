@@ -1,7 +1,7 @@
 {
   "routes": {
     "/blobs": "/blobs/index.html",
-    "/checkpoint": "/checkpoint/index.html",
+    "/checkpoint": "/checkpoint/index.html"
   },
   "metadata": {
     "link": "https://walrus-sui-archival.wal.app",
