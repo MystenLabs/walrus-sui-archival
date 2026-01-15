@@ -1,0 +1,13 @@
+{
+  "routes": {
+    "/blobs": "/blobs/index.html",
+    "/checkpoint": "/checkpoint/index.html",
+  },
+  "metadata": {
+    "link": "https://walrus-sui-archival.wal.app",
+    "image_url": "https:///walrus-sui-archival.wal.app/walrus_image.png",
+    "description": "Walrus Sui Archival Site",
+    "project_url": "https://github.com/MystenLabs/walrus-sui-archival",
+    "creator": "MystenLabs"
+  }
+}
