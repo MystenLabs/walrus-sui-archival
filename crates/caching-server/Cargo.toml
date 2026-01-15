@@ -1,12 +1,12 @@
 [package]
-name = "website-front-end"
+name = "caching-server"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "website-front-end"
+name = "caching-server"
 path = "src/main.rs"
 
 [dependencies]

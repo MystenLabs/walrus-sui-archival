@@ -1,5 +1,5 @@
 [workspace]
-default-members = ["crates/blob-bundle", "crates/walrus-sui-archival", "crates/website-front-end"]
+default-members = ["crates/blob-bundle", "crates/walrus-sui-archival", "crates/caching-server"]
 members = ["crates/*"]
 resolver = "2"
 

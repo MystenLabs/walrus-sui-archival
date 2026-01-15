@@ -13,7 +13,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY resources resources
 
-RUN cargo build --profile $PROFILE --bin walrus-sui-archival --bin website-front-end
+RUN cargo build --profile $PROFILE --bin walrus-sui-archival --bin caching-server
 
 # Production Image for walrus-sui-archival
 FROM rust:1.91-bookworm AS walrus-sui-archival
@@ -23,7 +23,7 @@ RUN apt-get install -y libjemalloc2
 ARG PROFILE=release
 WORKDIR "/tmp/walrus-sui-archival"
 COPY --from=builder /tmp/walrus-sui-archival/target/release/walrus-sui-archival /opt/walrus/bin/walrus-sui-archival
-COPY --from=builder /tmp/walrus-sui-archival/target/release/website-front-end /opt/walrus/bin/website-front-end
+COPY --from=builder /tmp/walrus-sui-archival/target/release/caching-server /opt/walrus/bin/caching-server
 COPY --from=builder /tmp/walrus-sui-archival/resources/walrus_image.png /opt/walrus/resources/walrus_image.png
 
 ARG BUILD_DATE
