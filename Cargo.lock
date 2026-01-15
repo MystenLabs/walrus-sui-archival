@@ -11353,6 +11353,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.8.7",
+ "base64 0.22.1",
  "clap",
  "postgres-store",
  "rand 0.9.2",

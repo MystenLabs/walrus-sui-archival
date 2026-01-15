@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+base64 = "0.22"
 clap = { workspace = true, features = ["env"] }
 postgres-store.workspace = true
 rand.workspace = true

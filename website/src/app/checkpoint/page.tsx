@@ -191,11 +191,11 @@ function CheckpointContent() {
                 </tr>
                 <tr>
                   <td>Blob ID</td>
-                  <td><code title={checkpoint.blob_id}>{formatAddress(checkpoint.blob_id, 16)}</code></td>
+                  <td><code>{checkpoint.blob_id}</code></td>
                 </tr>
                 <tr>
                   <td>Object ID</td>
-                  <td><code title={checkpoint.object_id}>{formatAddress(checkpoint.object_id, 16)}</code></td>
+                  <td><code>{checkpoint.object_id}</code></td>
                 </tr>
                 <tr>
                   <td>Index in Blob</td>

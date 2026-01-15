@@ -16,6 +16,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use postgres_store::{PostgresPool, SharedPostgresPool};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -62,6 +63,44 @@ impl Config {
             cache_refresh_interval_secs,
             database_url,
         }
+    }
+}
+
+/// Helper function to convert Vec<u8> fields in a JSON value to base64 strings.
+/// This recursively processes JSON arrays and objects.
+fn convert_bytes_to_base64(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(arr) => {
+            // Check if this is a byte array (array of numbers 0-255).
+            if arr.iter().all(|v| {
+                if let serde_json::Value::Number(n) = v {
+                    n.as_u64().is_some_and(|num| num <= 255)
+                } else {
+                    false
+                }
+            }) && !arr.is_empty()
+            {
+                // Convert to base64 string.
+                let bytes: Vec<u8> = arr
+                    .iter()
+                    .filter_map(|v| v.as_u64().map(|n| n as u8))
+                    .collect();
+                serde_json::Value::String(BASE64.encode(&bytes))
+            } else {
+                // Recursively process array elements.
+                serde_json::Value::Array(arr.into_iter().map(convert_bytes_to_base64).collect())
+            }
+        }
+        serde_json::Value::Object(map) => {
+            // Recursively process object fields.
+            serde_json::Value::Object(
+                map.into_iter()
+                    .map(|(k, v)| (k, convert_bytes_to_base64(v)))
+                    .collect(),
+            )
+        }
+        // Leave other types unchanged.
+        other => other,
     }
 }
 
@@ -821,6 +860,13 @@ async fn proxy_app_checkpoint(
             }
         };
 
+        // Serialize checkpoint data and convert Vec<u8> fields to base64.
+        let checkpoint_value = serde_json::to_value(checkpoint_data).map_err(|e| {
+            tracing::error!("failed to serialize checkpoint data: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        let checkpoint_value_with_base64 = convert_bytes_to_base64(checkpoint_value);
+
         Ok(Json(AppCheckpointInfo {
             checkpoint_number: checkpoint_info.checkpoint_number,
             blob_id: checkpoint_info.blob_id,
@@ -828,11 +874,7 @@ async fn proxy_app_checkpoint(
             index: checkpoint_info.index,
             offset: checkpoint_info.offset,
             length: checkpoint_info.length,
-            content: Some(serde_json::to_value(checkpoint_data).map_err(|e| {
-                tracing::error!("failed to serialize checkpoint data: {}", e);
-                // TODO: return a more detailed error message.
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?),
+            content: Some(checkpoint_value_with_base64),
         }))
     } else {
         // Backend proxy mode.

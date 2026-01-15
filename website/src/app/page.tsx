@@ -377,7 +377,7 @@ export default function HomePage() {
             {homepageInfo.metadata_info.current_metadata_blob_id && (
               <p>
                 <strong>Current Metadata Blob:</strong>{" "}
-                <code>{formatAddress(homepageInfo.metadata_info.current_metadata_blob_id, 16)}</code>
+                <code>{homepageInfo.metadata_info.current_metadata_blob_id}</code>
               </p>
             )}
           </div>
