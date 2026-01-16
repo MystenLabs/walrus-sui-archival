@@ -1,7 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use bincode::Options;
@@ -14,7 +18,10 @@ use tokio::task::JoinHandle;
 use walrus_core::{BlobId, Epoch, encoding::Primary};
 use walrus_sdk::{SuiReadClient, client::WalrusNodeClient};
 
-use crate::postgres::{NewCheckpointBlobInfo, NewCheckpointIndexEntry, SharedPostgresPool};
+use crate::{
+    metrics::Metrics,
+    postgres::{NewCheckpointBlobInfo, NewCheckpointIndexEntry, SharedPostgresPool},
+};
 
 // Include the generated protobuf code.
 pub mod proto {
@@ -36,6 +43,8 @@ pub struct ArchivalState {
     walrus_read_client: Option<Arc<WalrusNodeClient<SuiReadClient>>>,
     /// Optional PostgreSQL connection pool for distributed metadata storage.
     postgres_pool: Option<SharedPostgresPool>,
+    /// Optional metrics for tracking database operations.
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl ArchivalState {
@@ -77,6 +86,7 @@ impl ArchivalState {
             read_only,
             walrus_read_client: None,
             postgres_pool: None,
+            metrics: None,
         })
     }
 
@@ -88,6 +98,11 @@ impl ArchivalState {
     /// Set the PostgreSQL connection pool for distributed metadata storage.
     pub fn set_postgres_pool(&mut self, pool: SharedPostgresPool) {
         self.postgres_pool = Some(pool);
+    }
+
+    /// Set the metrics for tracking database operations.
+    pub fn set_metrics(&mut self, metrics: Arc<Metrics>) {
+        self.metrics = Some(metrics);
     }
 
     /// Get a reference to the PostgreSQL pool if configured.
@@ -141,9 +156,15 @@ impl ArchivalState {
                 .collect();
 
             let pool = pg_pool.clone();
+            let metrics = self.metrics.clone();
             // Spawn a task to write to PostgreSQL asynchronously.
             // This ensures RocksDB writes are not blocked by PostgreSQL operations.
             tokio::spawn(async move {
+                let start_time = Instant::now();
+                if let Some(ref m) = metrics {
+                    m.pg_inserts_total.inc();
+                }
+
                 if let Err(e) = pool
                     .insert_checkpoint_blob_info(pg_blob_info, pg_index_entries)
                     .await
@@ -153,12 +174,19 @@ impl ArchivalState {
                         start_checkpoint,
                         e
                     );
+                    if let Some(ref m) = metrics {
+                        m.pg_insert_failures.inc();
+                    }
                 } else {
                     tracing::debug!(
                         "wrote checkpoint blob info to PostgreSQL: start={}, end={}",
                         start_checkpoint,
                         end_checkpoint
                     );
+                    if let Some(ref m) = metrics {
+                        m.pg_insert_latency_seconds
+                            .observe(start_time.elapsed().as_secs_f64());
+                    }
                 }
             });
         }
@@ -181,6 +209,12 @@ impl ArchivalState {
                 "cannot create checkpoint blob in read-only mode"
             ));
         }
+
+        let start_time = Instant::now();
+        if let Some(ref m) = self.metrics {
+            m.rocksdb_inserts_total.inc();
+        }
+
         // Convert index_map to protobuf IndexEntry messages.
         let index_entries: Vec<IndexEntry> = index_map
             .iter()
@@ -214,14 +248,26 @@ impl ArchivalState {
         let blob_info_bytes = blob_info.encode_to_vec();
 
         // Store in RocksDB with start_checkpoint as key.
-        self.db.put_cf(
+        let result = self.db.put_cf(
             &self
                 .db
                 .cf_handle(CF_CHECKPOINT_BLOB_INFO)
                 .expect("column family must exist"),
             be_fix_int_ser(&start_checkpoint)?,
             blob_info_bytes,
-        )?;
+        );
+
+        if let Err(ref e) = result {
+            if let Some(ref m) = self.metrics {
+                m.rocksdb_insert_failures.inc();
+            }
+            return Err(anyhow::anyhow!("failed to store in RocksDB: {}", e));
+        }
+
+        if let Some(ref m) = self.metrics {
+            m.rocksdb_insert_latency_seconds
+                .observe(start_time.elapsed().as_secs_f64());
+        }
 
         // Also write to PostgreSQL if configured (fire-and-forget).
         self.write_to_postgres(
@@ -246,6 +292,11 @@ impl ArchivalState {
         &self,
         checkpoint: CheckpointSequenceNumber,
     ) -> Result<CheckpointBlobInfo> {
+        let start_time = Instant::now();
+        if let Some(ref m) = self.metrics {
+            m.rocksdb_queries_total.inc();
+        }
+
         // First, find the blob_info synchronously without holding cf across await.
         let (start_checkpoint, mut blob_info) = {
             let cf = self
@@ -285,10 +336,24 @@ impl ArchivalState {
                 }
             }
 
-            found.ok_or_else(|| {
-                anyhow::anyhow!("no blob found containing checkpoint {}", checkpoint)
-            })?
+            match found {
+                Some(result) => result,
+                None => {
+                    if let Some(ref m) = self.metrics {
+                        m.rocksdb_query_failures.inc();
+                    }
+                    return Err(anyhow::anyhow!(
+                        "no blob found containing checkpoint {}",
+                        checkpoint
+                    ));
+                }
+            }
         };
+
+        if let Some(ref m) = self.metrics {
+            m.rocksdb_query_latency_seconds
+                .observe(start_time.elapsed().as_secs_f64());
+        }
 
         // Now handle async operations outside the scope where cf was held.
         // If index_entries is empty, fetch from Walrus blob.
@@ -529,6 +594,11 @@ impl ArchivalState {
             ));
         }
 
+        let start_time = Instant::now();
+        if let Some(ref m) = self.metrics {
+            m.rocksdb_updates_total.inc();
+        }
+
         let cf = self
             .db
             .cf_handle(CF_CHECKPOINT_BLOB_INFO)
@@ -538,15 +608,27 @@ impl ArchivalState {
         let key = be_fix_int_ser(&start_checkpoint)?;
 
         // Get the blob info for this start_checkpoint.
-        let value = self.db.get_cf(&cf, &key)?.ok_or_else(|| {
-            anyhow::anyhow!("no blob found with start_checkpoint {}", start_checkpoint)
-        })?;
+        let value = match self.db.get_cf(&cf, &key)? {
+            Some(v) => v,
+            None => {
+                if let Some(ref m) = self.metrics {
+                    m.rocksdb_update_failures.inc();
+                }
+                return Err(anyhow::anyhow!(
+                    "no blob found with start_checkpoint {}",
+                    start_checkpoint
+                ));
+            }
+        };
 
         let mut blob_info = CheckpointBlobInfo::decode(value.as_ref())?;
 
         // Verify blob_id matches.
         let stored_blob_id_str = String::from_utf8_lossy(&blob_info.blob_id);
         if stored_blob_id_str != blob_id.to_string() {
+            if let Some(ref m) = self.metrics {
+                m.rocksdb_update_failures.inc();
+            }
             return Err(anyhow::anyhow!(
                 "blob_id mismatch: expected {}, found {}",
                 blob_id,
@@ -558,6 +640,9 @@ impl ArchivalState {
         let stored_object_id = ObjectID::from_bytes(&blob_info.object_id)
             .map_err(|e| anyhow::anyhow!("failed to parse object ID: {}", e))?;
         if stored_object_id != *object_id {
+            if let Some(ref m) = self.metrics {
+                m.rocksdb_update_failures.inc();
+            }
             return Err(anyhow::anyhow!(
                 "object_id mismatch: expected {}, found {}",
                 object_id,
@@ -571,7 +656,17 @@ impl ArchivalState {
 
         // Serialize and store the updated blob info.
         let updated_blob_info_bytes = blob_info.encode_to_vec();
-        self.db.put_cf(&cf, key, updated_blob_info_bytes)?;
+        if let Err(e) = self.db.put_cf(&cf, key, updated_blob_info_bytes) {
+            if let Some(ref m) = self.metrics {
+                m.rocksdb_update_failures.inc();
+            }
+            return Err(anyhow::anyhow!("failed to update RocksDB: {}", e));
+        }
+
+        if let Some(ref m) = self.metrics {
+            m.rocksdb_update_latency_seconds
+                .observe(start_time.elapsed().as_secs_f64());
+        }
 
         tracing::info!(
             "updated blob expiration epoch for start_checkpoint {} (object {}) from epoch {} to epoch {}",
@@ -584,21 +679,34 @@ impl ArchivalState {
         // Also update PostgreSQL if configured.
         if let Some(pg_pool) = &self.postgres_pool {
             let pool = pg_pool.clone();
+            let metrics = self.metrics.clone();
             let start_cp = start_checkpoint as i64;
             let new_epoch = new_expiration_epoch as i32;
             tokio::spawn(async move {
+                let pg_start_time = Instant::now();
+                if let Some(ref m) = metrics {
+                    m.pg_updates_total.inc();
+                }
+
                 if let Err(e) = pool.update_blob_expiration_epoch(start_cp, new_epoch).await {
                     tracing::error!(
                         "failed to update blob expiration epoch in PostgreSQL (start={}): {}",
                         start_cp,
                         e
                     );
+                    if let Some(ref m) = metrics {
+                        m.pg_update_failures.inc();
+                    }
                 } else {
                     tracing::debug!(
                         "updated blob expiration epoch in PostgreSQL: start={}, new_epoch={}",
                         start_cp,
                         new_epoch
                     );
+                    if let Some(ref m) = metrics {
+                        m.pg_update_latency_seconds
+                            .observe(pg_start_time.elapsed().as_secs_f64());
+                    }
                 }
             });
         }
@@ -614,6 +722,10 @@ impl ArchivalState {
     ) -> Result<usize> {
         if self.read_only {
             return Err(anyhow::anyhow!("cannot remove entries in read-only mode"));
+        }
+
+        if let Some(ref m) = self.metrics {
+            m.rocksdb_deletes_total.inc();
         }
 
         tracing::info!(
@@ -644,7 +756,12 @@ impl ArchivalState {
 
         // Delete all collected keys.
         for key in keys_to_delete {
-            self.db.delete_cf(&cf, key)?;
+            if let Err(e) = self.db.delete_cf(&cf, key) {
+                if let Some(ref m) = self.metrics {
+                    m.rocksdb_delete_failures.inc();
+                }
+                return Err(anyhow::anyhow!("failed to delete from RocksDB: {}", e));
+            }
         }
 
         tracing::info!(
@@ -656,8 +773,13 @@ impl ArchivalState {
         // Also remove from PostgreSQL if configured.
         if let Some(pg_pool) = &self.postgres_pool {
             let pool = pg_pool.clone();
+            let metrics = self.metrics.clone();
             let from_cp = from_checkpoint as i64;
             tokio::spawn(async move {
+                if let Some(ref m) = metrics {
+                    m.pg_deletes_total.inc();
+                }
+
                 match pool.remove_entries_from_checkpoint(from_cp).await {
                     Ok(pg_count) => {
                         tracing::info!(
@@ -672,6 +794,9 @@ impl ArchivalState {
                             from_cp,
                             e
                         );
+                        if let Some(ref m) = metrics {
+                            m.pg_delete_failures.inc();
+                        }
                     }
                 }
             });
@@ -720,6 +845,9 @@ impl ArchivalState {
                     blob.start_checkpoint
                 );
                 has_gaps = true;
+                if let Some(ref m) = self.metrics {
+                    m.rocksdb_consistency_gaps.inc();
+                }
             }
 
             expected_next_checkpoint = Some(blob.end_checkpoint + 1);

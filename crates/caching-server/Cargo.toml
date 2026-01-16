@@ -14,7 +14,9 @@ anyhow.workspace = true
 axum.workspace = true
 base64 = "0.22"
 clap = { workspace = true, features = ["env"] }
+mysten-metrics.workspace = true
 postgres-store.workspace = true
+prometheus.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true

@@ -1,6 +1,8 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod metrics;
+
 use std::{
     net::SocketAddr,
     sync::Arc,
@@ -17,6 +19,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use metrics::Metrics;
 use postgres_store::{PostgresPool, SharedPostgresPool};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -32,6 +35,9 @@ pub struct Config {
     pub backend_url: String,
     /// The address to bind the server to.
     pub bind_address: SocketAddr,
+    /// The address to bind the Prometheus metrics server to.
+    /// Metrics will be available at /metrics on this server.
+    pub metrics_address: SocketAddr,
     /// Cache freshness duration in seconds.
     pub cache_freshness_secs: u64,
     /// Cache refresh interval in seconds.
@@ -45,6 +51,7 @@ impl Config {
     pub fn new(
         env: &str,
         bind_address: SocketAddr,
+        metrics_address: SocketAddr,
         cache_freshness_secs: u64,
         cache_refresh_interval_secs: u64,
         database_url: Option<String>,
@@ -59,6 +66,7 @@ impl Config {
         Self {
             backend_url,
             bind_address,
+            metrics_address,
             cache_freshness_secs,
             cache_refresh_interval_secs,
             database_url,
@@ -121,6 +129,8 @@ struct AppState {
     cache_freshness_duration: Duration,
     /// PostgreSQL connection pool for direct database queries.
     postgres_pool: Option<SharedPostgresPool>,
+    /// Metrics for tracking server operations.
+    metrics: Arc<Metrics>,
 }
 
 impl AppState {
@@ -391,7 +401,29 @@ struct RefreshBlobEndEpochResponse {
 }
 
 /// Start the caching server.
-pub async fn start_server(config: Config) -> Result<()> {
+pub async fn start_server(config: Config, version: &'static str) -> Result<()> {
+    // Initialize metrics with Prometheus server.
+    let registry_service = mysten_metrics::start_prometheus_server(config.metrics_address);
+    let registry = registry_service.default_registry();
+
+    // Register uptime metric.
+    let registry_clone = registry.clone();
+    tokio::spawn(async move {
+        registry_clone
+            .register(mysten_metrics::uptime_metric(
+                "caching-server",
+                version,
+                "walrus-sui-archival",
+            ))
+            .expect("metrics defined at compile time must be valid");
+    });
+
+    tracing::info!(
+        "Prometheus metrics server started on {}",
+        config.metrics_address
+    );
+    let metrics = Arc::new(Metrics::new_with_registry(&registry));
+
     // Initialize PostgreSQL pool if database URL is provided.
     // If DATABASE_URL is set, use PostgreSQL exclusively; otherwise use backend proxy.
     let postgres_pool = if let Some(ref db_url) = config.database_url {
@@ -413,6 +445,7 @@ pub async fn start_server(config: Config) -> Result<()> {
         cache_refresh_interval: Duration::from_secs(config.cache_refresh_interval_secs),
         cache_freshness_duration: Duration::from_secs(config.cache_freshness_secs),
         postgres_pool,
+        metrics,
     };
 
     // Start background cache refresh task.
@@ -437,6 +470,7 @@ pub async fn start_server(config: Config) -> Result<()> {
             post(proxy_refresh_blob_end_epoch),
         )
         .route("/v1/health", get(health_check))
+        .route("/metrics", get(metrics_handler))
         .with_state(app_state)
         .layer(CorsLayer::permissive());
 
@@ -716,39 +750,123 @@ async fn proxy_blobs_expired_before_epoch(
     State(state): State<AppState>,
     Query(params): Query<BlobsExpiredQuery>,
 ) -> impl IntoResponse {
+    let start_time = Instant::now();
+    let endpoint = "app_blobs_expired_before_epoch";
+    let source = if state.postgres_pool.is_some() {
+        "postgres"
+    } else {
+        "backend"
+    };
+
     // PostgreSQL mode: query database directly.
     if state.postgres_pool.is_some() {
-        return match state
+        let result = match state
             .query_blobs_expired_before_epoch_from_postgres(params.epoch)
             .await
         {
-            Some(result) => Ok(Json(result)),
-            None => Err(StatusCode::INTERNAL_SERVER_ERROR),
+            Some(result) => {
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, "200"])
+                    .inc();
+                Ok(Json(result))
+            }
+            None => {
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, "500"])
+                    .inc();
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
         };
+        state
+            .metrics
+            .http_request_latency_seconds
+            .with_label_values(&[endpoint, source])
+            .observe(start_time.elapsed().as_secs_f64());
+        return result;
     }
 
     // Backend proxy mode.
     let query_string = format!("epoch={}", params.epoch);
-    proxy_with_cache::<Vec<ExpiredBlobInfo>>(
+    let result = proxy_with_cache::<Vec<ExpiredBlobInfo>>(
         &state,
         "v1/app_blobs_expired_before_epoch",
         &query_string,
     )
-    .await
+    .await;
+
+    let status = if result.is_ok() { "200" } else { "error" };
+    state
+        .metrics
+        .http_requests_total
+        .with_label_values(&[endpoint, source, status])
+        .inc();
+    state
+        .metrics
+        .http_request_latency_seconds
+        .with_label_values(&[endpoint, source])
+        .observe(start_time.elapsed().as_secs_f64());
+
+    result
 }
 
 /// Handler for /v1/app_info_for_homepage.
 async fn proxy_app_info_for_homepage(State(state): State<AppState>) -> impl IntoResponse {
+    let start_time = Instant::now();
+    let endpoint = "app_info_for_homepage";
+    let source = if state.postgres_pool.is_some() {
+        "postgres"
+    } else {
+        "backend"
+    };
+
     // PostgreSQL mode: query database directly.
     if state.postgres_pool.is_some() {
-        return match state.query_homepage_info_from_postgres().await {
-            Some(result) => Ok(Json(result)),
-            None => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        let result = match state.query_homepage_info_from_postgres().await {
+            Some(result) => {
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, "200"])
+                    .inc();
+                Ok(Json(result))
+            }
+            None => {
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, "500"])
+                    .inc();
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
         };
+        state
+            .metrics
+            .http_request_latency_seconds
+            .with_label_values(&[endpoint, source])
+            .observe(start_time.elapsed().as_secs_f64());
+        return result;
     }
 
     // Backend proxy mode.
-    proxy_with_cache::<HomepageInfo>(&state, "v1/app_info_for_homepage", "").await
+    let result = proxy_with_cache::<HomepageInfo>(&state, "v1/app_info_for_homepage", "").await;
+
+    let status = if result.is_ok() { "200" } else { "error" };
+    state
+        .metrics
+        .http_requests_total
+        .with_label_values(&[endpoint, source, status])
+        .inc();
+    state
+        .metrics
+        .http_request_latency_seconds
+        .with_label_values(&[endpoint, source])
+        .observe(start_time.elapsed().as_secs_f64());
+
+    result
 }
 
 /// Handler for /v1/app_blobs.
@@ -756,15 +874,43 @@ async fn proxy_app_blobs(
     State(state): State<AppState>,
     Query(params): Query<AppBlobsQuery>,
 ) -> impl IntoResponse {
+    let start_time = Instant::now();
+    let endpoint = "app_blobs";
+    let source = if state.postgres_pool.is_some() {
+        "postgres"
+    } else {
+        "backend"
+    };
+
     // PostgreSQL mode: query database directly with pagination.
     if state.postgres_pool.is_some() {
-        return match state
+        let result = match state
             .query_blobs_from_postgres(params.limit, params.cursor)
             .await
         {
-            Some(result) => Ok(Json(result)),
-            None => Err(StatusCode::INTERNAL_SERVER_ERROR),
+            Some(result) => {
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, "200"])
+                    .inc();
+                Ok(Json(result))
+            }
+            None => {
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, "500"])
+                    .inc();
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
         };
+        state
+            .metrics
+            .http_request_latency_seconds
+            .with_label_values(&[endpoint, source])
+            .observe(start_time.elapsed().as_secs_f64());
+        return result;
     }
 
     // Backend proxy mode - wrap response in AppBlobsResponse for consistency.
@@ -775,13 +921,35 @@ async fn proxy_app_blobs(
         (None, None) => String::new(),
     };
 
-    match proxy_with_cache::<Vec<AppBlobInfo>>(&state, "v1/app_blobs", &query_string).await {
-        Ok(Json(blobs)) => Ok(Json(AppBlobsResponse {
-            blobs,
-            next_cursor: None,
-        })),
-        Err(e) => Err(e),
-    }
+    let result =
+        match proxy_with_cache::<Vec<AppBlobInfo>>(&state, "v1/app_blobs", &query_string).await {
+            Ok(Json(blobs)) => {
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, "200"])
+                    .inc();
+                Ok(Json(AppBlobsResponse {
+                    blobs,
+                    next_cursor: None,
+                }))
+            }
+            Err(e) => {
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, "error"])
+                    .inc();
+                Err(e)
+            }
+        };
+    state
+        .metrics
+        .http_request_latency_seconds
+        .with_label_values(&[endpoint, source])
+        .observe(start_time.elapsed().as_secs_f64());
+
+    result
 }
 
 /// Fetch checkpoint content from aggregator.
@@ -830,6 +998,14 @@ async fn proxy_app_checkpoint(
     State(state): State<AppState>,
     Query(params): Query<AppCheckpointQuery>,
 ) -> impl IntoResponse {
+    let start_time = Instant::now();
+    let endpoint = "app_checkpoint";
+    let source = if state.postgres_pool.is_some() {
+        "postgres"
+    } else {
+        "backend"
+    };
+
     // PostgreSQL mode: query database directly.
     // Note: show_content requires Walrus, so we forward to backend in that case.
     if state.postgres_pool.is_some() {
@@ -838,10 +1014,32 @@ async fn proxy_app_checkpoint(
             .await
         {
             Some(result) => result,
-            None => return Err(StatusCode::NOT_FOUND),
+            None => {
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, "404"])
+                    .inc();
+                state
+                    .metrics
+                    .http_request_latency_seconds
+                    .with_label_values(&[endpoint, source])
+                    .observe(start_time.elapsed().as_secs_f64());
+                return Err(StatusCode::NOT_FOUND);
+            }
         };
 
         if !params.show_content {
+            state
+                .metrics
+                .http_requests_total
+                .with_label_values(&[endpoint, source, "200"])
+                .inc();
+            state
+                .metrics
+                .http_request_latency_seconds
+                .with_label_values(&[endpoint, source])
+                .observe(start_time.elapsed().as_secs_f64());
             return Ok(Json(checkpoint_info));
         }
 
@@ -855,17 +1053,50 @@ async fn proxy_app_checkpoint(
             Ok(data) => data,
             Err(e) => {
                 tracing::error!("failed to fetch checkpoint content: {}", e);
-                // TODO: return a more detailed error message.
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, "500"])
+                    .inc();
+                state
+                    .metrics
+                    .http_request_latency_seconds
+                    .with_label_values(&[endpoint, source])
+                    .observe(start_time.elapsed().as_secs_f64());
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
         };
 
         // Serialize checkpoint data and convert Vec<u8> fields to base64.
-        let checkpoint_value = serde_json::to_value(checkpoint_data).map_err(|e| {
-            tracing::error!("failed to serialize checkpoint data: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        let checkpoint_value = match serde_json::to_value(checkpoint_data) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!("failed to serialize checkpoint data: {}", e);
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, "500"])
+                    .inc();
+                state
+                    .metrics
+                    .http_request_latency_seconds
+                    .with_label_values(&[endpoint, source])
+                    .observe(start_time.elapsed().as_secs_f64());
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        };
         let checkpoint_value_with_base64 = convert_bytes_to_base64(checkpoint_value);
+
+        state
+            .metrics
+            .http_requests_total
+            .with_label_values(&[endpoint, source, "200"])
+            .inc();
+        state
+            .metrics
+            .http_request_latency_seconds
+            .with_label_values(&[endpoint, source])
+            .observe(start_time.elapsed().as_secs_f64());
 
         Ok(Json(AppCheckpointInfo {
             checkpoint_number: checkpoint_info.checkpoint_number,
@@ -883,7 +1114,22 @@ async fn proxy_app_checkpoint(
         } else {
             format!("checkpoint={}", params.checkpoint)
         };
-        proxy_with_cache::<AppCheckpointInfo>(&state, "v1/app_checkpoint", &query_string).await
+        let result =
+            proxy_with_cache::<AppCheckpointInfo>(&state, "v1/app_checkpoint", &query_string).await;
+
+        let status = if result.is_ok() { "200" } else { "error" };
+        state
+            .metrics
+            .http_requests_total
+            .with_label_values(&[endpoint, source, status])
+            .inc();
+        state
+            .metrics
+            .http_request_latency_seconds
+            .with_label_values(&[endpoint, source])
+            .observe(start_time.elapsed().as_secs_f64());
+
+        result
     }
 }
 
@@ -893,35 +1139,81 @@ async fn proxy_refresh_blob_end_epoch(
     State(state): State<AppState>,
     Json(request): Json<RefreshBlobEndEpochRequest>,
 ) -> impl IntoResponse {
+    let start_time = Instant::now();
+    let endpoint = "app_refresh_blob_end_epoch";
+    let source = "backend"; // Always goes to backend
+
+    state.metrics.backend_requests_total.inc();
+
     let url = format!("{}/v1/app_refresh_blob_end_epoch", state.backend_url);
 
     // Always forward to backend without caching.
-    match state.http_client.post(&url).json(&request).send().await {
+    let result = match state.http_client.post(&url).json(&request).send().await {
         Ok(response) => {
             if response.status().is_success() {
                 match response.json::<RefreshBlobEndEpochResponse>().await {
                     Ok(data) => {
                         tracing::info!("successfully forwarded refresh blob end epoch request");
+                        state
+                            .metrics
+                            .http_requests_total
+                            .with_label_values(&[endpoint, source, "200"])
+                            .inc();
                         Ok(Json(data))
                     }
                     Err(e) => {
                         tracing::error!("failed to parse response from backend: {}", e);
+                        state.metrics.backend_request_failures.inc();
+                        state
+                            .metrics
+                            .http_requests_total
+                            .with_label_values(&[endpoint, source, "500"])
+                            .inc();
                         Err(StatusCode::INTERNAL_SERVER_ERROR)
                     }
                 }
             } else {
                 tracing::error!("backend returned error status: {}", response.status());
+                state.metrics.backend_request_failures.inc();
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, &response.status().as_u16().to_string()])
+                    .inc();
                 Err(response.status())
             }
         }
         Err(e) => {
             tracing::error!("failed to contact backend: {}", e);
+            state.metrics.backend_request_failures.inc();
+            state
+                .metrics
+                .http_requests_total
+                .with_label_values(&[endpoint, source, "502"])
+                .inc();
             Err(StatusCode::BAD_GATEWAY)
         }
-    }
+    };
+
+    state
+        .metrics
+        .http_request_latency_seconds
+        .with_label_values(&[endpoint, source])
+        .observe(start_time.elapsed().as_secs_f64());
+    state
+        .metrics
+        .backend_request_latency_seconds
+        .observe(start_time.elapsed().as_secs_f64());
+
+    result
 }
 
 /// Handler for /v1/health endpoint.
 async fn health_check() -> StatusCode {
     StatusCode::OK
+}
+
+/// Handler for /metrics endpoint.
+async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+    state.metrics.encode()
 }
