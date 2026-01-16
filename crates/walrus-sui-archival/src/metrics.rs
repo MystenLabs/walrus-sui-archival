@@ -85,6 +85,56 @@ pub struct Metrics {
     /// Metrics for the Walrus client.
     pub walrus_client_metrics: Arc<ClientMetrics>,
 
+    // PostgreSQL metrics.
+    /// Total PostgreSQL insert operations.
+    pub pg_inserts_total: IntCounter,
+    /// Total PostgreSQL insert failures.
+    pub pg_insert_failures: IntCounter,
+    /// PostgreSQL insert latency histogram.
+    pub pg_insert_latency_seconds: Histogram,
+    /// Total PostgreSQL update operations.
+    pub pg_updates_total: IntCounter,
+    /// Total PostgreSQL update failures.
+    pub pg_update_failures: IntCounter,
+    /// PostgreSQL update latency histogram.
+    pub pg_update_latency_seconds: Histogram,
+    /// Total PostgreSQL delete operations.
+    pub pg_deletes_total: IntCounter,
+    /// Total PostgreSQL delete failures.
+    pub pg_delete_failures: IntCounter,
+    /// Total PostgreSQL query operations.
+    pub pg_queries_total: IntCounter,
+    /// Total PostgreSQL query failures.
+    pub pg_query_failures: IntCounter,
+    /// PostgreSQL query latency histogram.
+    pub pg_query_latency_seconds: Histogram,
+
+    // RocksDB metrics.
+    /// Total RocksDB insert operations.
+    pub rocksdb_inserts_total: IntCounter,
+    /// Total RocksDB insert failures.
+    pub rocksdb_insert_failures: IntCounter,
+    /// RocksDB insert latency histogram.
+    pub rocksdb_insert_latency_seconds: Histogram,
+    /// Total RocksDB update operations.
+    pub rocksdb_updates_total: IntCounter,
+    /// Total RocksDB update failures.
+    pub rocksdb_update_failures: IntCounter,
+    /// RocksDB update latency histogram.
+    pub rocksdb_update_latency_seconds: Histogram,
+    /// Total RocksDB delete operations.
+    pub rocksdb_deletes_total: IntCounter,
+    /// Total RocksDB delete failures.
+    pub rocksdb_delete_failures: IntCounter,
+    /// Total RocksDB query operations.
+    pub rocksdb_queries_total: IntCounter,
+    /// Total RocksDB query failures.
+    pub rocksdb_query_failures: IntCounter,
+    /// RocksDB query latency histogram.
+    pub rocksdb_query_latency_seconds: Histogram,
+    /// Total consistency check gaps found.
+    pub rocksdb_consistency_gaps: IntCounter,
+
     /// The prometheus registry used for all metrics.
     pub registry: Registry,
 }
@@ -293,6 +343,138 @@ impl Metrics {
         )
         .expect("metrics defined at compile time must be valid");
 
+        // PostgreSQL metrics.
+        let pg_inserts_total =
+            IntCounter::new("pg_inserts_total", "Total PostgreSQL insert operations")
+                .expect("metrics defined at compile time must be valid");
+
+        let pg_insert_failures =
+            IntCounter::new("pg_insert_failures", "Total PostgreSQL insert failures")
+                .expect("metrics defined at compile time must be valid");
+
+        let pg_insert_latency_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "pg_insert_latency_seconds",
+                "PostgreSQL insert latency in seconds",
+            )
+            .buckets(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]),
+        )
+        .expect("metrics defined at compile time must be valid");
+
+        let pg_updates_total =
+            IntCounter::new("pg_updates_total", "Total PostgreSQL update operations")
+                .expect("metrics defined at compile time must be valid");
+
+        let pg_update_failures =
+            IntCounter::new("pg_update_failures", "Total PostgreSQL update failures")
+                .expect("metrics defined at compile time must be valid");
+
+        let pg_update_latency_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "pg_update_latency_seconds",
+                "PostgreSQL update latency in seconds",
+            )
+            .buckets(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]),
+        )
+        .expect("metrics defined at compile time must be valid");
+
+        let pg_deletes_total =
+            IntCounter::new("pg_deletes_total", "Total PostgreSQL delete operations")
+                .expect("metrics defined at compile time must be valid");
+
+        let pg_delete_failures =
+            IntCounter::new("pg_delete_failures", "Total PostgreSQL delete failures")
+                .expect("metrics defined at compile time must be valid");
+
+        let pg_queries_total =
+            IntCounter::new("pg_queries_total", "Total PostgreSQL query operations")
+                .expect("metrics defined at compile time must be valid");
+
+        let pg_query_failures =
+            IntCounter::new("pg_query_failures", "Total PostgreSQL query failures")
+                .expect("metrics defined at compile time must be valid");
+
+        let pg_query_latency_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "pg_query_latency_seconds",
+                "PostgreSQL query latency in seconds",
+            )
+            .buckets(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]),
+        )
+        .expect("metrics defined at compile time must be valid");
+
+        // RocksDB metrics.
+        let rocksdb_inserts_total =
+            IntCounter::new("rocksdb_inserts_total", "Total RocksDB insert operations")
+                .expect("metrics defined at compile time must be valid");
+
+        let rocksdb_insert_failures =
+            IntCounter::new("rocksdb_insert_failures", "Total RocksDB insert failures")
+                .expect("metrics defined at compile time must be valid");
+
+        let rocksdb_insert_latency_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "rocksdb_insert_latency_seconds",
+                "RocksDB insert latency in seconds",
+            )
+            .buckets(vec![
+                0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0,
+            ]),
+        )
+        .expect("metrics defined at compile time must be valid");
+
+        let rocksdb_updates_total =
+            IntCounter::new("rocksdb_updates_total", "Total RocksDB update operations")
+                .expect("metrics defined at compile time must be valid");
+
+        let rocksdb_update_failures =
+            IntCounter::new("rocksdb_update_failures", "Total RocksDB update failures")
+                .expect("metrics defined at compile time must be valid");
+
+        let rocksdb_update_latency_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "rocksdb_update_latency_seconds",
+                "RocksDB update latency in seconds",
+            )
+            .buckets(vec![
+                0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0,
+            ]),
+        )
+        .expect("metrics defined at compile time must be valid");
+
+        let rocksdb_deletes_total =
+            IntCounter::new("rocksdb_deletes_total", "Total RocksDB delete operations")
+                .expect("metrics defined at compile time must be valid");
+
+        let rocksdb_delete_failures =
+            IntCounter::new("rocksdb_delete_failures", "Total RocksDB delete failures")
+                .expect("metrics defined at compile time must be valid");
+
+        let rocksdb_queries_total =
+            IntCounter::new("rocksdb_queries_total", "Total RocksDB query operations")
+                .expect("metrics defined at compile time must be valid");
+
+        let rocksdb_query_failures =
+            IntCounter::new("rocksdb_query_failures", "Total RocksDB query failures")
+                .expect("metrics defined at compile time must be valid");
+
+        let rocksdb_query_latency_seconds = Histogram::with_opts(
+            HistogramOpts::new(
+                "rocksdb_query_latency_seconds",
+                "RocksDB query latency in seconds",
+            )
+            .buckets(vec![
+                0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0,
+            ]),
+        )
+        .expect("metrics defined at compile time must be valid");
+
+        let rocksdb_consistency_gaps = IntCounter::new(
+            "rocksdb_consistency_gaps",
+            "Total consistency check gaps found",
+        )
+        .expect("metrics defined at compile time must be valid");
+
         // Register all metrics.
         registry
             .register(Box::new(total_downloaded_checkpoints.clone()))
@@ -382,6 +564,79 @@ impl Metrics {
             .register(Box::new(metadata_updates_failed.clone()))
             .expect("metrics defined at compile time must be valid");
 
+        // Register PostgreSQL metrics.
+        registry
+            .register(Box::new(pg_inserts_total.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(pg_insert_failures.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(pg_insert_latency_seconds.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(pg_updates_total.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(pg_update_failures.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(pg_update_latency_seconds.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(pg_deletes_total.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(pg_delete_failures.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(pg_queries_total.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(pg_query_failures.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(pg_query_latency_seconds.clone()))
+            .expect("metrics defined at compile time must be valid");
+
+        // Register RocksDB metrics.
+        registry
+            .register(Box::new(rocksdb_inserts_total.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(rocksdb_insert_failures.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(rocksdb_insert_latency_seconds.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(rocksdb_updates_total.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(rocksdb_update_failures.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(rocksdb_update_latency_seconds.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(rocksdb_deletes_total.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(rocksdb_delete_failures.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(rocksdb_queries_total.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(rocksdb_query_failures.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(rocksdb_query_latency_seconds.clone()))
+            .expect("metrics defined at compile time must be valid");
+        registry
+            .register(Box::new(rocksdb_consistency_gaps.clone()))
+            .expect("metrics defined at compile time must be valid");
+
         let walrus_sdk_registry = WalrusRegistry::new(registry.clone());
         let walrus_client_metrics = Arc::new(ClientMetrics::new(&walrus_sdk_registry));
 
@@ -418,6 +673,29 @@ impl Metrics {
             metadata_updates_failed,
             walrus_sdk_registry,
             walrus_client_metrics,
+            pg_inserts_total,
+            pg_insert_failures,
+            pg_insert_latency_seconds,
+            pg_updates_total,
+            pg_update_failures,
+            pg_update_latency_seconds,
+            pg_deletes_total,
+            pg_delete_failures,
+            pg_queries_total,
+            pg_query_failures,
+            pg_query_latency_seconds,
+            rocksdb_inserts_total,
+            rocksdb_insert_failures,
+            rocksdb_insert_latency_seconds,
+            rocksdb_updates_total,
+            rocksdb_update_failures,
+            rocksdb_update_latency_seconds,
+            rocksdb_deletes_total,
+            rocksdb_delete_failures,
+            rocksdb_queries_total,
+            rocksdb_query_failures,
+            rocksdb_query_latency_seconds,
+            rocksdb_consistency_gaps,
             registry: registry.clone(),
         }
     }
