@@ -63,6 +63,7 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
 
     // Initialize the archival state with RocksDB.
     let mut archival_state = ArchivalState::open(&config.db_path, false)?;
+    archival_state.set_metrics(metrics.clone());
     tracing::info!(
         "initialized archival state with database at {:?}",
         config.db_path
