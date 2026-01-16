@@ -35,6 +35,9 @@ pub struct Config {
     pub backend_url: String,
     /// The address to bind the server to.
     pub bind_address: SocketAddr,
+    /// The address to bind the Prometheus metrics server to.
+    /// Metrics will be available at /metrics on this server.
+    pub metrics_address: SocketAddr,
     /// Cache freshness duration in seconds.
     pub cache_freshness_secs: u64,
     /// Cache refresh interval in seconds.
@@ -48,6 +51,7 @@ impl Config {
     pub fn new(
         env: &str,
         bind_address: SocketAddr,
+        metrics_address: SocketAddr,
         cache_freshness_secs: u64,
         cache_refresh_interval_secs: u64,
         database_url: Option<String>,
@@ -62,6 +66,7 @@ impl Config {
         Self {
             backend_url,
             bind_address,
+            metrics_address,
             cache_freshness_secs,
             cache_refresh_interval_secs,
             database_url,
@@ -396,9 +401,28 @@ struct RefreshBlobEndEpochResponse {
 }
 
 /// Start the caching server.
-pub async fn start_server(config: Config) -> Result<()> {
-    // Initialize metrics.
-    let metrics = Arc::new(Metrics::new());
+pub async fn start_server(config: Config, version: &'static str) -> Result<()> {
+    // Initialize metrics with Prometheus server.
+    let registry_service = mysten_metrics::start_prometheus_server(config.metrics_address);
+    let registry = registry_service.default_registry();
+
+    // Register uptime metric.
+    let registry_clone = registry.clone();
+    tokio::spawn(async move {
+        registry_clone
+            .register(mysten_metrics::uptime_metric(
+                "caching-server",
+                version,
+                "walrus-sui-archival",
+            ))
+            .expect("metrics defined at compile time must be valid");
+    });
+
+    tracing::info!(
+        "Prometheus metrics server started on {}",
+        config.metrics_address
+    );
+    let metrics = Arc::new(Metrics::new_with_registry(&registry));
 
     // Initialize PostgreSQL pool if database URL is provided.
     // If DATABASE_URL is set, use PostgreSQL exclusively; otherwise use backend proxy.

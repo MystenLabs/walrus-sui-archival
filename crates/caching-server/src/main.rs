@@ -6,9 +6,12 @@ use std::net::SocketAddr;
 use caching_server::Config;
 use clap::Parser;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Parser, Debug)]
 #[command(name = "caching-server")]
 #[command(about = "Caching server for walrus-sui-archival API")]
+#[command(version = VERSION)]
 struct Args {
     /// Backend environment: mainnet, testnet, localnet, or custom URL.
     #[arg(long, default_value = "mainnet")]
@@ -17,6 +20,11 @@ struct Args {
     /// Address to bind the server to.
     #[arg(long, default_value = "0.0.0.0:9185")]
     bind_address: String,
+
+    /// Address to bind the Prometheus metrics server to.
+    /// Metrics will be available at /metrics on this server.
+    #[arg(long, default_value = "0.0.0.0:9184")]
+    metrics_address: String,
 
     /// Cache freshness duration in seconds.
     #[arg(long, default_value = "300")]
@@ -46,10 +54,17 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid bind address: {}", e))?;
 
+    // Parse metrics address.
+    let metrics_address: SocketAddr = args
+        .metrics_address
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid metrics address: {}", e))?;
+
     // Create config.
     let config = Config::new(
         &args.backend,
         bind_address,
+        metrics_address,
         args.cache_freshness_secs,
         args.cache_refresh_interval_secs,
         args.database_url,
@@ -61,8 +76,13 @@ async fn main() -> anyhow::Result<()> {
         config.cache_freshness_secs
     );
 
+    tracing::info!(
+        "Prometheus metrics server will be started on {}",
+        config.metrics_address
+    );
+
     // Start server.
-    caching_server::start_server(config).await?;
+    caching_server::start_server(config, VERSION).await?;
 
     Ok(())
 }
