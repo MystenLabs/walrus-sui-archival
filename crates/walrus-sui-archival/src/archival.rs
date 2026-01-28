@@ -23,6 +23,7 @@ use crate::{
     checkpoint_downloader,
     checkpoint_monitor,
     config::{CheckpointDownloaderType, Config},
+    graphql_checkpoint_downloader,
     ingestion_service_checkpoint_downloader,
     metrics::Metrics,
     postgres::create_shared_pool_from_env,
@@ -261,6 +262,15 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
                     metrics.clone(),
                     in_memory_holder.clone(),
                 );
+            let (receiver, watermark_tx, handle) = downloader.start(initial_checkpoint).await?;
+            (receiver, None, Some(watermark_tx), handle)
+        }
+        CheckpointDownloaderType::GraphQL(downloader_config) => {
+            let downloader = graphql_checkpoint_downloader::GraphqlCheckpointDownloader::new(
+                downloader_config.clone(),
+                metrics.clone(),
+                in_memory_holder.clone(),
+            );
             let (receiver, watermark_tx, handle) = downloader.start(initial_checkpoint).await?;
             (receiver, None, Some(watermark_tx), handle)
         }
