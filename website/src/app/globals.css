@@ -868,3 +868,85 @@ code {
     color: #28a745;
     margin: 0 5px;
 }
+
+/* Technical Documentation Page Styles */
+.tech-header {
+    margin-bottom: 40px;
+}
+
+.tech-header h1 {
+    margin-top: 20px;
+}
+
+.architecture-diagram {
+    text-align: center;
+    margin: 40px 0 60px 0;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 10px;
+    border: 2px solid #dee2e6;
+}
+
+.tech-section {
+    margin-bottom: 50px;
+    line-height: 1.8;
+}
+
+.tech-section h2 {
+    color: #667eea;
+    font-size: 1.8em;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 3px solid #667eea;
+}
+
+.tech-section p {
+    color: #333;
+    font-size: 1.05em;
+    margin-bottom: 20px;
+    line-height: 1.8;
+}
+
+.tech-section ul {
+    margin: 20px 0;
+    padding-left: 30px;
+}
+
+.tech-section li {
+    color: #333;
+    font-size: 1.05em;
+    margin-bottom: 15px;
+    line-height: 1.8;
+}
+
+.tech-section strong {
+    color: #667eea;
+    font-weight: 600;
+}
+
+.tech-footer {
+    margin-top: 60px;
+    padding-top: 40px;
+    border-top: 2px solid #dee2e6;
+    text-align: center;
+}
+
+/* Footer Links */
+.footer-links {
+    text-align: center;
+    margin-top: 50px;
+    padding-top: 30px;
+    border-top: 1px solid #dee2e6;
+}
+
+.footer-link {
+    color: #667eea;
+    text-decoration: none;
+    font-size: 1.9em;
+    transition: color 0.3s;
+}
+
+.footer-link:hover {
+    color: #5568d3;
+    text-decoration: underline;
+}

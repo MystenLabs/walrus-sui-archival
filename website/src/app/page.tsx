@@ -384,6 +384,13 @@ export default function HomePage() {
         </div>
       )}
 
+      {/* Technical Documentation Link */}
+      <div className="footer-links">
+        <Link href="/tech" className="footer-link">
+          Technical Documentation
+        </Link>
+      </div>
+
       {/* Extend Blobs Confirmation Modal */}
       <Modal
         isOpen={showExtendModal}
