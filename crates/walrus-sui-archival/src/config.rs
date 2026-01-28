@@ -81,6 +81,9 @@ pub enum CheckpointDownloaderType {
     Bucket(CheckpointDownloaderConfig),
     /// Use the ingestion service checkpoint downloader.
     IngestionService(IngestionServiceCheckpointDownloaderConfig),
+    /// Use the GraphQL checkpoint downloader.
+    #[serde(rename = "graphql")]
+    GraphQL(GraphqlCheckpointDownloaderConfig),
 }
 
 impl CheckpointDownloaderType {
@@ -89,6 +92,7 @@ impl CheckpointDownloaderType {
         match self {
             CheckpointDownloaderType::Bucket(config) => &config.downloaded_checkpoint_dir,
             CheckpointDownloaderType::IngestionService(config) => &config.downloaded_checkpoint_dir,
+            CheckpointDownloaderType::GraphQL(config) => &config.downloaded_checkpoint_dir,
         }
     }
 }
@@ -131,6 +135,36 @@ pub struct IngestionServiceCheckpointDownloaderConfig {
     /// Configuration for the ingestion service.
     #[serde(default)]
     pub ingestion_config: IngestionConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphqlCheckpointDownloaderConfig {
+    /// GraphQL endpoint URL.
+    pub graphql_url: Url,
+
+    /// Number of worker threads for processing checkpoints.
+    #[serde(default = "default_num_workers")]
+    pub num_workers: usize,
+
+    /// Directory to store downloaded checkpoint data.
+    #[serde(default = "default_downloaded_checkpoint_dir")]
+    pub downloaded_checkpoint_dir: PathBuf,
+
+    /// Number of checkpoints to fetch per GraphQL query.
+    #[serde(default = "default_graphql_batch_size")]
+    pub batch_size: usize,
+
+    /// HTTP request timeout for GraphQL queries.
+    #[serde(default = "default_graphql_request_timeout", with = "humantime_serde")]
+    pub request_timeout: Duration,
+
+    /// Minimum wait time for retry on failure.
+    #[serde(default = "default_min_download_retry_wait", with = "humantime_serde")]
+    pub min_retry_wait: Duration,
+
+    /// Maximum wait time for retry on failure.
+    #[serde(default = "default_max_download_retry_wait", with = "humantime_serde")]
+    pub max_retry_wait: Duration,
 }
 
 impl IngestionServiceCheckpointDownloaderConfig {
@@ -193,6 +227,14 @@ fn default_min_download_retry_wait() -> Duration {
 
 fn default_max_download_retry_wait() -> Duration {
     Duration::from_secs(60)
+}
+
+fn default_graphql_batch_size() -> usize {
+    10
+}
+
+fn default_graphql_request_timeout() -> Duration {
+    Duration::from_secs(30)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
