@@ -951,7 +951,6 @@ async fn proxy_app_blobs(
     result
 }
 
-
 /// Handler for /v1/app_checkpoint.
 async fn proxy_app_checkpoint(
     State(state): State<AppState>,

@@ -481,7 +481,6 @@ struct AppCheckpointQuery {
     show_content: bool,
 }
 
-
 /// Handler for getting checkpoint information as JSON.
 async fn get_app_checkpoint(
     State(app_state): State<AppState>,
