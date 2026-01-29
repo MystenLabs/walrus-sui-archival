@@ -187,7 +187,7 @@ impl CheckpointBlobExtender {
 
         // Extend regular blobs one by one.
         for (object_id, start_checkpoint, blob_id) in regular_blobs_to_extend {
-            if let Err(e) = self.extend_blob(object_id, false).await {
+            if let Err(e) = self.extend_regular_blob(object_id).await {
                 tracing::error!("failed to extend regular blob {}: {}", object_id, e);
                 // Continue with other blobs even if one fails.
                 continue;
@@ -671,7 +671,7 @@ impl CheckpointBlobExtender {
     }
 
     /// Extend a single blob with retry logic.
-    async fn extend_blob(&self, object_id: ObjectID, is_shared_blob: bool) -> Result<()> {
+    async fn extend_regular_blob(&self, object_id: ObjectID) -> Result<()> {
         // Increment the attempted counter.
         self.metrics.blob_extensions_attempted.inc();
 
@@ -680,28 +680,36 @@ impl CheckpointBlobExtender {
 
         loop {
             tracing::info!(
-                "attempting to extend {} blob {} by {} epochs",
-                if is_shared_blob { "shared" } else { "regular" },
+                "attempting to extend regular blob {} by {} epochs",
                 object_id,
                 self.config.extend_epoch_length
             );
 
-            let result = if is_shared_blob {
-                self.extend_shared_blob_using_contract(object_id).await
-            } else {
-                self.extend_regular_blob(object_id).await
+            let result = {
+                let extend_epoch_length = self.config.extend_epoch_length;
+                self.sui_interactive_client
+                    .with_walrus_client_async(|client| {
+                        Box::pin(async move {
+                            client
+                                .sui_client()
+                                .extend_blob(object_id, extend_epoch_length)
+                                .await
+                                .map_err(|e| anyhow!("failed to extend blob: {}", e))
+                        })
+                    })
+                    .await
             };
 
             match result {
                 Ok(_) => {
-                    tracing::info!("successfully extended blob {}", object_id);
+                    tracing::info!("successfully extended regular blob {}", object_id);
                     // Increment the success counter.
                     self.metrics.blob_extensions_succeeded.inc();
                     return Ok(());
                 }
                 Err(e) => {
                     tracing::error!(
-                        "failed to extend blob {}: {}, retrying in {:?}",
+                        "failed to extend regular blob {}: {}, retrying in {:?}",
                         object_id,
                         e,
                         retry_delay
@@ -715,22 +723,6 @@ impl CheckpointBlobExtender {
                 }
             }
         }
-    }
-
-    /// Extend a regular blob using the Walrus SDK.
-    async fn extend_regular_blob(&self, object_id: ObjectID) -> Result<()> {
-        let extend_epoch_length = self.config.extend_epoch_length;
-        self.sui_interactive_client
-            .with_walrus_client_async(|client| {
-                Box::pin(async move {
-                    client
-                        .sui_client()
-                        .extend_blob(object_id, extend_epoch_length)
-                        .await
-                        .map_err(|e| anyhow!("failed to extend blob: {}", e))
-                })
-            })
-            .await
     }
 
     /// Get the expiration epoch of a shared blob by parsing the object.
@@ -778,160 +770,6 @@ impl CheckpointBlobExtender {
             .ok_or_else(|| anyhow!("end_epoch is not a number"))? as u32;
 
         Ok(end_epoch)
-    }
-
-    /// Extend a shared blob using the Move contract call.
-    async fn extend_shared_blob_using_contract(&self, shared_blob_id: ObjectID) -> Result<()> {
-        let package_id = self.contract_package_id;
-        let extend_epoch_length = self.config.extend_epoch_length;
-        let system_object_id = self.system_object_id;
-        let wal_token_package_id = self.wal_token_package_id;
-
-        self.sui_interactive_client
-            .with_wallet_mut_async(|wallet| {
-                Box::pin(async move {
-                    let sui_client = wallet.get_client().await?;
-                    let active_address = wallet.active_address()?;
-
-                    // Fetch System object to get initial shared version.
-                    let system_obj = sui_client
-                        .read_api()
-                        .get_object_with_options(
-                            system_object_id,
-                            sui_sdk::rpc_types::SuiObjectDataOptions::new()
-                                .with_owner()
-                                .with_previous_transaction(),
-                        )
-                        .await?;
-
-                    let system_data = system_obj
-                        .data
-                        .ok_or_else(|| anyhow!("system object data not found"))?;
-
-                    let system_initial_shared_version = match system_data.owner {
-                        Some(Owner::Shared {
-                            initial_shared_version,
-                        }) => initial_shared_version,
-                        _ => return Err(anyhow!("system object is not a shared object")),
-                    };
-
-                    // Fetch shared blob object to get initial shared version.
-                    let shared_blob_obj = sui_client
-                        .read_api()
-                        .get_object_with_options(
-                            shared_blob_id,
-                            sui_sdk::rpc_types::SuiObjectDataOptions::new()
-                                .with_owner()
-                                .with_previous_transaction(),
-                        )
-                        .await?;
-
-                    let shared_blob_data = shared_blob_obj
-                        .data
-                        .ok_or_else(|| anyhow!("shared blob object data not found"))?;
-
-                    let shared_blob_initial_shared_version = match shared_blob_data.owner {
-                        Some(Owner::Shared {
-                            initial_shared_version,
-                        }) => initial_shared_version,
-                        _ => return Err(anyhow!("shared blob object is not a shared object")),
-                    };
-
-                    // Construct WAL coin type from package ID.
-                    let wal_coin_type = format!("{}::wal::WAL", wal_token_package_id);
-
-                    // Get WAL coins for payment.
-                    let wal_coins = sui_client
-                        .coin_read_api()
-                        .get_coins(active_address, Some(wal_coin_type), None, None)
-                        .await?;
-
-                    if wal_coins.data.is_empty() {
-                        return Err(anyhow!(
-                            "no WAL coins available for address {}",
-                            active_address
-                        ));
-                    }
-
-                    // Get SUI coins for gas.
-                    let sui_coins = sui_client
-                        .coin_read_api()
-                        .get_coins(active_address, None, None, None)
-                        .await?;
-
-                    if sui_coins.data.is_empty() {
-                        return Err(anyhow!(
-                            "no SUI coins available for address {}",
-                            active_address
-                        ));
-                    }
-
-                    // Build programmable transaction.
-                    let mut ptb = ProgrammableTransactionBuilder::new();
-
-                    // Create arguments for the function call.
-                    let system_arg = ptb.obj(ObjectArg::SharedObject {
-                        id: system_object_id,
-                        initial_shared_version: system_initial_shared_version,
-                        mutability: SharedObjectMutability::Mutable,
-                    })?;
-                    let shared_blob_arg = ptb.obj(ObjectArg::SharedObject {
-                        id: shared_blob_id,
-                        initial_shared_version: shared_blob_initial_shared_version,
-                        mutability: SharedObjectMutability::Mutable,
-                    })?;
-                    let extend_epochs_arg = ptb.pure(extend_epoch_length)?;
-
-                    // Create a mutable payment coin argument using WAL tokens.
-                    // We'll use the first WAL coin and make it mutable.
-                    let payment_coin_ref = wal_coins.data[0].object_ref();
-                    let payment_arg = ptb.obj(ObjectArg::ImmOrOwnedObject(payment_coin_ref))?;
-
-                    // Call extend_shared_blob_using_token function.
-                    ptb.programmable_move_call(
-                        package_id,
-                        Identifier::new("archival_blob")?,
-                        Identifier::new("extend_shared_blob_using_token")?,
-                        vec![],
-                        vec![system_arg, shared_blob_arg, extend_epochs_arg, payment_arg],
-                    );
-
-                    let pt = ptb.finish();
-
-                    tracing::info!(
-                        "executing extend_shared_blob_using_token transaction - package: {}, shared_blob: {}, epochs: {}",
-                        package_id,
-                        shared_blob_id,
-                        extend_epoch_length
-                    );
-
-                    // Create transaction data.
-                    let gas_budget = 500_000_000; // 0.5 SUI.
-                    let gas_price = sui_client.read_api().get_reference_gas_price().await?;
-
-                    // Use the first SUI coin for gas.
-                    let gas_coin = &sui_coins.data[0];
-
-                    let tx_data = TransactionData::new(
-                        TransactionKind::ProgrammableTransaction(pt),
-                        active_address,
-                        gas_coin.object_ref(),
-                        gas_budget,
-                        gas_price,
-                    );
-
-                    let response = execute_transaction_and_check_status(wallet, tx_data).await?;
-
-                    tracing::info!(
-                        "successfully extended shared blob {}, tx digest: {:?}",
-                        shared_blob_id,
-                        response.digest
-                    );
-
-                    Ok(())
-                })
-            })
-            .await
     }
 
     /// Extend multiple shared blobs in a batch using a single PTB transaction.

@@ -50,6 +50,7 @@ walrus-core.workspace = true
 walrus-sdk.workspace = true
 postgres-store.workspace = true
 hex.workspace = true
+walrus-common.workspace = true
 
 [build-dependencies]
 prost-build = "0.13"

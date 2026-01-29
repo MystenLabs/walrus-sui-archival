@@ -1625,6 +1625,7 @@ dependencies = [
  "tower-http 0.6.8",
  "tracing",
  "tracing-subscriber",
+ "walrus-common",
 ]
 
 [[package]]
@@ -10984,6 +10985,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "walrus-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "sui-storage",
+ "sui-types",
+ "tracing",
+]
+
+[[package]]
 name = "walrus-core"
 version = "1.39.1"
 source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.39.1#685377c58a12637acfc027244a7b813eaf6499aa"
@@ -11180,6 +11192,7 @@ dependencies = [
  "tower-http 0.6.8",
  "tracing",
  "tracing-subscriber",
+ "walrus-common",
  "walrus-core",
  "walrus-sdk",
 ]

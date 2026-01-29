@@ -78,38 +78,6 @@ impl IngestionServiceCheckpointDownloadWorker {
                 checkpoint_number
             );
 
-            // TODO: fix this bug:
-            // // If the checkpoint file already exists, skip it.
-            // let checkpoint_file = self
-            //     .config
-            //     .downloaded_checkpoint_dir
-            //     .join(format!("{checkpoint_number}"));
-            // if checkpoint_file.exists() {
-            //     tracing::info!(
-            //         "worker {} skipping checkpoint {}, file already exists",
-            //         self.worker_id,
-            //         checkpoint_number
-            //     );
-
-            //     // Still need to send checkpoint info even if file exists.
-            //     let checkpoint_info = CheckpointInfo {
-            //         checkpoint_number,
-            //         epoch: checkpoint.summary.epoch,
-            //         is_end_of_epoch: checkpoint_data
-            //             .summary
-            //             .end_of_epoch_data
-            //             .is_some(),
-            //         timestamp_ms: checkpoint.summary.timestamp_ms,
-            //         checkpoint_byte_size: 0, // We don't know the size if we skipped it.
-            //     };
-
-            //     if let Err(e) = self.tx.send(checkpoint_info).await {
-            //         tracing::debug!("worker {} failed to send result: {}", self.worker_id, e);
-            //         break;
-            //     }
-            //     continue;
-            // }
-
             // Convert Checkpoint to CheckpointData for serialization.
             let checkpoint_data = CheckpointData::from((*checkpoint).clone());
 
@@ -279,7 +247,7 @@ impl IngestionServiceCheckpointDownloader {
         watermark_tx.send(("checkpoint_monitor", initial_checkpoint))?;
 
         // Create channels for worker communication.
-        // TODO: apply this to the other downloader if needed.
+        // TODO: apply this to the CheckpointDownloader if needed.
         let (download_tx, download_rx) = async_channel::bounded::<Arc<Checkpoint>>(10);
         let (result_tx, result_rx) = sync::mpsc::channel::<CheckpointInfo>(100);
 

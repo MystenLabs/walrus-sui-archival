@@ -3,7 +3,9 @@
     "/blobs": "/blobs/index.html",
     "/blobs/": "/blobs/index.html",
     "/checkpoint": "/checkpoint/index.html",
-    "/checkpoint/": "/checkpoint/index.html"
+    "/checkpoint/": "/checkpoint/index.html",
+    "/tech": "/tech/index.html",
+    "/tech/": "/tech/index.html"
   },
   "metadata": {
     "link": "https://walrus-sui-archival.wal.app",
