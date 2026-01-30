@@ -401,11 +401,36 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Technical Documentation Link */}
-      <div className="footer-links">
-        <Link href="/tech" className="footer-link">
-          Technical Documentation
-        </Link>
+      {/* To Learn More */}
+      <div className="application-section">
+        <h2>To Learn More:</h2>
+        <div className="application-links">
+          <p>
+            <Link href="/tech" className="app-link">
+              Technical Documentation
+            </Link>
+          </p>
+          <p>
+            <a
+              href="https://github.com/MystenLabs/walrus-sui-archival"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="app-link"
+            >
+              GitHub Repository
+            </a>
+          </p>
+          <p>
+            <a
+              href="https://docs.wal.app/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="app-link"
+            >
+              Walrus Documentation
+            </a>
+          </p>
+        </div>
       </div>
 
       {/* Extend Blobs Confirmation Modal */}

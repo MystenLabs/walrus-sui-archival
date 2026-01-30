@@ -958,6 +958,45 @@ code {
     text-align: center;
 }
 
+/* Application Links Section */
+.application-section {
+    margin: 40px 0;
+    padding: 20px;
+    background: #f0f8ff;
+    border-radius: 8px;
+    border: 1px solid #667eea;
+}
+
+.application-section h2 {
+    color: #333;
+    margin-top: 0;
+    margin-bottom: 15px;
+}
+
+.application-links {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-left: 30px;
+}
+
+.application-links p {
+    margin: 0;
+}
+
+.app-link {
+    color: #667eea;
+    text-decoration: none;
+    font-size: 1.1em;
+    font-weight: bold;
+    transition: color 0.3s;
+}
+
+.app-link:hover {
+    color: #5568d3;
+    text-decoration: underline;
+}
+
 /* Footer Links */
 .footer-links {
     text-align: center;
