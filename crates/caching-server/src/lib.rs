@@ -53,6 +53,7 @@ pub struct Config {
 
 impl Config {
     /// Create a new config from environment string.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         env: &str,
         bind_address: SocketAddr,
@@ -170,7 +171,7 @@ impl AppState {
         // Fetch metadata blob ID from on-chain.
         let metadata_blob_id = walrus_common::fetch_metadata_blob_id_from_sui_client(
             &self.sui_client,
-            self.metadata_pointer_object_id.clone(),
+            self.metadata_pointer_object_id,
         )
         .await
         .ok()?;
@@ -475,7 +476,7 @@ pub async fn start_server(config: Config, version: &'static str) -> Result<()> {
         cache_freshness_duration: Duration::from_secs(config.cache_freshness_secs),
         postgres_pool,
         sui_client,
-        metadata_pointer_object_id: config.metadata_pointer_object_id.clone(),
+        metadata_pointer_object_id: config.metadata_pointer_object_id,
         metrics,
     };
 
