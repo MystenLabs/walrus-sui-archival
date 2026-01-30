@@ -21,6 +21,7 @@ rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sui-sdk.workspace = true
 sui-storage.workspace = true
 sui-types.workspace = true
 tokio.workspace = true

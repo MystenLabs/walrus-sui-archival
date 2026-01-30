@@ -5,6 +5,8 @@ use std::net::SocketAddr;
 
 use caching_server::Config;
 use clap::Parser;
+use sui_sdk::SUI_MAINNET_URL;
+use sui_types::base_types::ObjectID;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -39,6 +41,14 @@ struct Args {
     /// Can also be set via DATABASE_URL environment variable.
     #[arg(long, env = "DATABASE_URL")]
     database_url: Option<String>,
+
+    /// Metadata pointer object ID (required).
+    #[arg(long)]
+    metadata_pointer_object_id: ObjectID,
+
+    /// Sui RPC URL (required).
+    #[arg(long, default_value = SUI_MAINNET_URL)]
+    sui_rpc_url: String,
 }
 
 #[tokio::main]
@@ -68,6 +78,8 @@ async fn main() -> anyhow::Result<()> {
         args.cache_freshness_secs,
         args.cache_refresh_interval_secs,
         args.database_url,
+        args.metadata_pointer_object_id,
+        args.sui_rpc_url,
     );
 
     tracing::info!(
