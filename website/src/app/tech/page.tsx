@@ -14,6 +14,21 @@ export default function TechPage() {
         <div className="subtitle">How Walrus Sui Archival Works</div>
       </div>
 
+      {/* Open Source Repository */}
+      <div className="repo-section">
+        <p>
+          <strong>Open Source:</strong> This application is open source and available on GitHub at{" "}
+          <a
+            href="https://github.com/MystenLabs/walrus-sui-archival"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="repo-link"
+          >
+            github.com/MystenLabs/walrus-sui-archival
+          </a>
+        </p>
+      </div>
+
       {/* System Architecture Diagram */}
       <div className="architecture-diagram">
         <Image

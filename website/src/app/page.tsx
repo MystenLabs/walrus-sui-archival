@@ -368,16 +368,33 @@ export default function HomePage() {
       {/* Metadata Info */}
       {homepageInfo?.metadata_info && (
         <div className="metadata-section" style={{ display: "block" }}>
-          <h2>Metadata Tracking</h2>
+          <h2>Archival Metadata Snapshot</h2>
+          <p className="metadata-description">
+            Archival metadata (Sui checkpoints to blobs indexes) is periodically saved and stored
+            in a Walrus blob for highest availability for the Sui checkpoint data set.
+            See details in the technical documentation.
+          </p>
           <div className="metadata-info">
             <p>
-              <strong>Metadata Pointer:</strong>{" "}
-              <code>{formatAddress(homepageInfo.metadata_info.metadata_pointer_object_id, 16)}</code>
+              <strong>Metadata Pointer Object ID:</strong>{" "}
+              <a
+                href={`https://suivision.xyz/object/${homepageInfo.metadata_info.metadata_pointer_object_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <code>{homepageInfo.metadata_info.metadata_pointer_object_id}</code>
+              </a>
             </p>
             {homepageInfo.metadata_info.current_metadata_blob_id && (
               <p>
-                <strong>Current Metadata Blob:</strong>{" "}
-                <code>{homepageInfo.metadata_info.current_metadata_blob_id}</code>
+                <strong>Current Metadata Blob ID:</strong>{" "}
+                <a
+                  href={`https://walruscan.com/mainnet/blob/${homepageInfo.metadata_info.current_metadata_blob_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <code>{homepageInfo.metadata_info.current_metadata_blob_id}</code>
+                </a>
               </p>
             )}
           </div>

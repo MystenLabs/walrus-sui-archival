@@ -309,9 +309,9 @@ h1 {
 .metadata-section {
     margin: 40px 0;
     padding: 20px;
-    background: #f8f9fa;
+    background: #f0f8ff;
     border-radius: 8px;
-    border: 1px solid #dee2e6;
+    border: 1px solid #667eea;
 }
 
 .metadata-section h2 {
@@ -871,11 +871,38 @@ code {
 
 /* Technical Documentation Page Styles */
 .tech-header {
-    margin-bottom: 40px;
+    margin-bottom: 20px;
 }
 
 .tech-header h1 {
     margin-top: 20px;
+}
+
+.repo-section {
+    margin: 20px 0 40px 0;
+    padding: 15px 20px;
+    background: #f0f8ff;
+    border-radius: 8px;
+    border: 1px solid #667eea;
+    text-align: center;
+}
+
+.repo-section p {
+    margin: 0;
+    font-size: 1.05em;
+    color: #333;
+}
+
+.repo-link {
+    color: #667eea;
+    text-decoration: none;
+    font-weight: bold;
+    transition: color 0.3s;
+}
+
+.repo-link:hover {
+    color: #5568d3;
+    text-decoration: underline;
 }
 
 .architecture-diagram {
