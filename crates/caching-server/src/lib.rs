@@ -23,6 +23,8 @@ use metrics::Metrics;
 use postgres_store::{PostgresPool, SharedPostgresPool};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sui_sdk::{SuiClient, SuiClientBuilder};
+use sui_types::base_types::ObjectID;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 use walrus_common::fetch_checkpoint_content;
@@ -43,10 +45,15 @@ pub struct Config {
     pub cache_refresh_interval_secs: u64,
     /// PostgreSQL database URL for direct queries.
     pub database_url: Option<String>,
+    /// Metadata pointer object ID.
+    pub metadata_pointer_object_id: ObjectID,
+    /// Sui RPC URL.
+    pub sui_rpc_url: String,
 }
 
 impl Config {
     /// Create a new config from environment string.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         env: &str,
         bind_address: SocketAddr,
@@ -54,6 +61,8 @@ impl Config {
         cache_freshness_secs: u64,
         cache_refresh_interval_secs: u64,
         database_url: Option<String>,
+        metadata_pointer_object_id: ObjectID,
+        sui_rpc_url: String,
     ) -> Self {
         let backend_url = match env {
             "mainnet" => "https://walrus-sui-archival.mainnet.walrus.space".to_string(),
@@ -69,6 +78,8 @@ impl Config {
             cache_freshness_secs,
             cache_refresh_interval_secs,
             database_url,
+            metadata_pointer_object_id,
+            sui_rpc_url,
         }
     }
 }
@@ -128,6 +139,10 @@ struct AppState {
     cache_freshness_duration: Duration,
     /// PostgreSQL connection pool for direct database queries.
     postgres_pool: Option<SharedPostgresPool>,
+    /// Sui client for fetching metadata blob ID from on-chain.
+    sui_client: SuiClient,
+    /// Metadata pointer object ID.
+    metadata_pointer_object_id: ObjectID,
     /// Metrics for tracking server operations.
     metrics: Arc<Metrics>,
 }
@@ -153,13 +168,25 @@ impl AppState {
             0
         };
 
+        // Fetch metadata blob ID from on-chain.
+        let metadata_blob_id = walrus_common::fetch_metadata_blob_id_from_sui_client(
+            &self.sui_client,
+            self.metadata_pointer_object_id,
+        )
+        .await
+        .ok()?;
+
         Some(HomepageInfo {
             blob_count: stats.blob_count as usize,
             total_checkpoints,
             earliest_checkpoint: stats.earliest_checkpoint as u64,
             latest_checkpoint: stats.latest_checkpoint as u64,
             total_size: stats.total_size as u64,
-            metadata_info: None, // Metadata info requires on-chain query.
+            metadata_info: metadata_blob_id.map(|id| MetadataInfo {
+                metadata_pointer_object_id: self.metadata_pointer_object_id.to_string(),
+                contract_package_id: "N/A".to_string(),
+                current_metadata_blob_id: Some(id.to_string()),
+            }),
         })
     }
 
@@ -437,6 +464,10 @@ pub async fn start_server(config: Config, version: &'static str) -> Result<()> {
         None
     };
 
+    let sui_client = SuiClientBuilder::default()
+        .build(config.sui_rpc_url)
+        .await?;
+
     let app_state = AppState {
         backend_url: config.backend_url.clone(),
         http_client: reqwest::Client::new(),
@@ -444,6 +475,8 @@ pub async fn start_server(config: Config, version: &'static str) -> Result<()> {
         cache_refresh_interval: Duration::from_secs(config.cache_refresh_interval_secs),
         cache_freshness_duration: Duration::from_secs(config.cache_freshness_secs),
         postgres_pool,
+        sui_client,
+        metadata_pointer_object_id: config.metadata_pointer_object_id,
         metrics,
     };
 

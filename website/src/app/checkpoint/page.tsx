@@ -203,11 +203,11 @@ function CheckpointContent() {
                 </tr>
                 <tr>
                   <td>Offset</td>
-                  <td>{formatNumber(checkpoint.offset)} bytes</td>
+                  <td>{checkpoint.offset}</td>
                 </tr>
                 <tr>
                   <td>Length</td>
-                  <td>{formatSize(checkpoint.length)}</td>
+                  <td>{checkpoint.length} bytes</td>
                 </tr>
               </tbody>
             </table>

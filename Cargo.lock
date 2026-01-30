@@ -1619,6 +1619,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sui-sdk",
  "sui-storage",
  "sui-types",
  "tokio",
@@ -10989,10 +10990,14 @@ name = "walrus-common"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bcs",
  "reqwest",
+ "serde",
+ "sui-sdk",
  "sui-storage",
  "sui-types",
  "tracing",
+ "walrus-core",
 ]
 
 [[package]]

@@ -368,27 +368,69 @@ export default function HomePage() {
       {/* Metadata Info */}
       {homepageInfo?.metadata_info && (
         <div className="metadata-section" style={{ display: "block" }}>
-          <h2>Metadata Tracking</h2>
+          <h2>Archival Metadata Snapshot</h2>
+          <p className="metadata-description">
+            Archival metadata (Sui checkpoints to blobs indexes) is periodically saved and stored
+            in a Walrus blob for highest availability for the Sui checkpoint data set.
+            See details in the technical documentation.
+          </p>
           <div className="metadata-info">
             <p>
-              <strong>Metadata Pointer:</strong>{" "}
-              <code>{formatAddress(homepageInfo.metadata_info.metadata_pointer_object_id, 16)}</code>
+              <strong>Metadata Pointer Object ID:</strong>{" "}
+              <a
+                href={`https://suivision.xyz/object/${homepageInfo.metadata_info.metadata_pointer_object_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <code>{homepageInfo.metadata_info.metadata_pointer_object_id}</code>
+              </a>
             </p>
             {homepageInfo.metadata_info.current_metadata_blob_id && (
               <p>
-                <strong>Current Metadata Blob:</strong>{" "}
-                <code>{homepageInfo.metadata_info.current_metadata_blob_id}</code>
+                <strong>Current Metadata Blob ID:</strong>{" "}
+                <a
+                  href={`https://walruscan.com/mainnet/blob/${homepageInfo.metadata_info.current_metadata_blob_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <code>{homepageInfo.metadata_info.current_metadata_blob_id}</code>
+                </a>
               </p>
             )}
           </div>
         </div>
       )}
 
-      {/* Technical Documentation Link */}
-      <div className="footer-links">
-        <Link href="/tech" className="footer-link">
-          Technical Documentation
-        </Link>
+      {/* To Learn More */}
+      <div className="application-section">
+        <h2>To Learn More:</h2>
+        <div className="application-links">
+          <p>
+            <Link href="/tech" className="app-link">
+              Technical Documentation
+            </Link>
+          </p>
+          <p>
+            <a
+              href="https://github.com/MystenLabs/walrus-sui-archival"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="app-link"
+            >
+              GitHub Repository
+            </a>
+          </p>
+          <p>
+            <a
+              href="https://docs.wal.app/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="app-link"
+            >
+              Walrus Documentation
+            </a>
+          </p>
+        </div>
       </div>
 
       {/* Extend Blobs Confirmation Modal */}
