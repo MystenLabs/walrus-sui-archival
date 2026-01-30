@@ -325,4 +325,4 @@ To deploy to Walrus Sites:
 npm run build
 site-builder publish ./out
 ```
-AWS_KEY_ID="ABCDTHISISANEXAMPLE"
+AWS_KEY_ID="AKIAIOSFODNN7EXAMPLE"
