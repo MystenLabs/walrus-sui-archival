@@ -17,6 +17,7 @@ pub mod delete_all_shared_archival_blobs;
 pub mod dump_metadata_blob;
 pub mod extend_shared_blob;
 pub mod get_metadata_blob_id;
+pub mod graphql_checkpoint_downloader;
 pub mod ingestion_service_checkpoint_downloader;
 pub mod inspect_blob;
 pub mod inspect_db;
