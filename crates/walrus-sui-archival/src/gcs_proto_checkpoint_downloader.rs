@@ -111,7 +111,7 @@ impl GcsProtoCheckpointDownloadWorker {
     ) -> Result<CheckpointInfo> {
         let url = self
             .bucket_url
-            .join(&format!("{}.zst", checkpoint_number))?;
+            .join(&format!("{}.binpd.zst", checkpoint_number))?;
 
         let mut retry_count = 0;
         let mut wait_duration = self.config.min_download_retry_wait;
