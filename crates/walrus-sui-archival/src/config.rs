@@ -81,6 +81,8 @@ pub enum CheckpointDownloaderType {
     Bucket(CheckpointDownloaderConfig),
     /// Use the ingestion service checkpoint downloader.
     IngestionService(IngestionServiceCheckpointDownloaderConfig),
+    /// Use the GCS proto checkpoint downloader (zstd-compressed protobuf).
+    GcsProto(GcsProtoCheckpointDownloaderConfig),
 }
 
 impl CheckpointDownloaderType {
@@ -89,6 +91,7 @@ impl CheckpointDownloaderType {
         match self {
             CheckpointDownloaderType::Bucket(config) => &config.downloaded_checkpoint_dir,
             CheckpointDownloaderType::IngestionService(config) => &config.downloaded_checkpoint_dir,
+            CheckpointDownloaderType::GcsProto(config) => &config.downloaded_checkpoint_dir,
         }
     }
 }
@@ -131,6 +134,28 @@ pub struct IngestionServiceCheckpointDownloaderConfig {
     /// Configuration for the ingestion service.
     #[serde(default)]
     pub ingestion_config: IngestionConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GcsProtoCheckpointDownloaderConfig {
+    /// Base URL for the GCS bucket containing zstd-compressed protobuf checkpoints.
+    pub bucket_url: String,
+
+    /// Number of worker threads for downloading checkpoints.
+    #[serde(default = "default_num_workers")]
+    pub num_workers: usize,
+
+    /// Directory to store downloaded checkpoint data.
+    #[serde(default = "default_downloaded_checkpoint_dir")]
+    pub downloaded_checkpoint_dir: PathBuf,
+
+    /// Minimum wait time for download retry.
+    #[serde(default = "default_min_download_retry_wait", with = "humantime_serde")]
+    pub min_download_retry_wait: Duration,
+
+    /// Maximum wait time for download retry.
+    #[serde(default = "default_max_download_retry_wait", with = "humantime_serde")]
+    pub max_download_retry_wait: Duration,
 }
 
 impl IngestionServiceCheckpointDownloaderConfig {

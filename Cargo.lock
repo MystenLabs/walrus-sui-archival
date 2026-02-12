@@ -11178,6 +11178,7 @@ dependencies = [
  "postgres-store",
  "prometheus",
  "prost 0.13.5",
+ "prost 0.14.3",
  "prost-build 0.13.5",
  "prost-types 0.13.5",
  "protoc-bin-vendored",
@@ -11187,6 +11188,7 @@ dependencies = [
  "serde_json",
  "serde_yaml 0.9.34+deprecated",
  "sui-indexer-alt-framework",
+ "sui-rpc",
  "sui-sdk",
  "sui-storage",
  "sui-types",
@@ -11200,6 +11202,7 @@ dependencies = [
  "walrus-common",
  "walrus-core",
  "walrus-sdk",
+ "zstd 0.13.3",
 ]
 
 [[package]]
