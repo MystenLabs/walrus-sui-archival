@@ -23,7 +23,6 @@ use crate::{
     checkpoint_downloader,
     checkpoint_monitor,
     config::{CheckpointDownloaderType, Config},
-    gcs_proto_checkpoint_downloader,
     ingestion_service_checkpoint_downloader,
     metrics::Metrics,
     postgres::create_shared_pool_from_env,
@@ -264,15 +263,6 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
                 );
             let (receiver, watermark_tx, handle) = downloader.start(initial_checkpoint).await?;
             (receiver, None, Some(watermark_tx), handle)
-        }
-        CheckpointDownloaderType::GcsProto(downloader_config) => {
-            let downloader = gcs_proto_checkpoint_downloader::GcsProtoCheckpointDownloader::new(
-                downloader_config.clone(),
-                metrics.clone(),
-                in_memory_holder.clone(),
-            );
-            let (receiver, pause_tx, handle) = downloader.start(initial_checkpoint).await?;
-            (receiver, Some(pause_tx), None, handle)
         }
     };
 

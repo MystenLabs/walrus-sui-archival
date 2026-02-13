@@ -14,7 +14,11 @@ use sui_types::{
 };
 use tokio::{fs, sync, task, time};
 
-use crate::{config::CheckpointDownloaderConfig, metrics::Metrics};
+use crate::{
+    checkpoint_proto,
+    config::{CheckpointDownloaderConfig, CheckpointFormat},
+    metrics::Metrics,
+};
 
 /// Guard that decrements active worker count when dropped.
 struct WorkerGuard {
@@ -116,9 +120,14 @@ impl CheckpointDownloadWorker {
         &self,
         checkpoint_number: CheckpointSequenceNumber,
     ) -> Result<CheckpointInfo> {
-        let url = self
-            .bucket_base_url
-            .join(&format!("{}.chk", checkpoint_number))?;
+        let url = match self.config.checkpoint_format {
+            CheckpointFormat::Bcs => self
+                .bucket_base_url
+                .join(&format!("{}.chk", checkpoint_number))?,
+            CheckpointFormat::Proto => self
+                .bucket_base_url
+                .join(&format!("{}.binpd.zst", checkpoint_number))?,
+        };
 
         let mut retry_count = 0;
         let mut wait_duration = self.config.min_download_retry_wait;
@@ -131,19 +140,8 @@ impl CheckpointDownloadWorker {
             );
 
             // We are doing unlimited retries here since we cannot miss any checkpoint.
-            // TODO: do not return checkpoint data to the caller, and create CheckpointInfo inside
-            // to reduce the memory usage.
             match self.try_download_checkpoint(&url).await {
-                Ok((bytes, checkpoint)) => {
-                    // Create checkpoint info.
-                    let checkpoint_info = CheckpointInfo {
-                        checkpoint_number,
-                        epoch: checkpoint.checkpoint_summary.epoch,
-                        is_end_of_epoch: checkpoint.checkpoint_summary.end_of_epoch_data.is_some(),
-                        timestamp_ms: checkpoint.checkpoint_summary.timestamp_ms,
-                        checkpoint_byte_size: bytes.len(),
-                    };
-
+                Ok((bytes, checkpoint_info)) => {
                     // Store checkpoint either in memory or on disk.
                     if let Some(ref holder) = self.in_memory_holder {
                         // Store in memory.
@@ -215,7 +213,7 @@ impl CheckpointDownloadWorker {
         }
     }
 
-    async fn try_download_checkpoint(&self, url: &Url) -> Result<(Vec<u8>, CheckpointData)> {
+    async fn try_download_checkpoint(&self, url: &Url) -> Result<(Vec<u8>, CheckpointInfo)> {
         let response = self
             .client
             .get(url.clone())
@@ -224,9 +222,23 @@ impl CheckpointDownloadWorker {
             .error_for_status()?;
         let bytes = response.bytes().await?;
         let bytes_vec = bytes.to_vec();
-        let checkpoint = Blob::from_bytes::<CheckpointData>(&bytes_vec)
-            .map_err(|e| anyhow::anyhow!("failed to deserialize checkpoint: {}", e))?;
-        Ok((bytes_vec, checkpoint))
+
+        let checkpoint_info = match self.config.checkpoint_format {
+            CheckpointFormat::Bcs => {
+                let checkpoint = Blob::from_bytes::<CheckpointData>(&bytes_vec)
+                    .map_err(|e| anyhow::anyhow!("failed to deserialize checkpoint: {}", e))?;
+                CheckpointInfo {
+                    checkpoint_number: checkpoint.checkpoint_summary.sequence_number,
+                    epoch: checkpoint.checkpoint_summary.epoch,
+                    is_end_of_epoch: checkpoint.checkpoint_summary.end_of_epoch_data.is_some(),
+                    timestamp_ms: checkpoint.checkpoint_summary.timestamp_ms,
+                    checkpoint_byte_size: bytes_vec.len(),
+                }
+            }
+            CheckpointFormat::Proto => checkpoint_proto::extract_checkpoint_info(&bytes_vec)?,
+        };
+
+        Ok((bytes_vec, checkpoint_info))
     }
 }
 
@@ -401,6 +413,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::config::CheckpointFormat;
 
     fn create_test_metrics() -> Arc<Metrics> {
         let registry = Registry::new();
@@ -457,8 +470,9 @@ mod tests {
             .create();
 
         let config = CheckpointDownloaderConfig {
-            num_workers: 1,
             bucket_base_url: server.url(),
+            checkpoint_format: CheckpointFormat::Bcs,
+            num_workers: 1,
             downloaded_checkpoint_dir: checkpoint_dir.clone(),
             min_download_retry_wait: Duration::from_millis(100),
             max_download_retry_wait: Duration::from_secs(1),
@@ -533,8 +547,9 @@ mod tests {
 
         // Create and start worker with short retry intervals.
         let config = CheckpointDownloaderConfig {
-            num_workers: 1,
             bucket_base_url: server.url(),
+            checkpoint_format: CheckpointFormat::Bcs,
+            num_workers: 1,
             downloaded_checkpoint_dir: checkpoint_dir.clone(),
             min_download_retry_wait: Duration::from_millis(10),
             max_download_retry_wait: Duration::from_millis(100),
@@ -599,8 +614,9 @@ mod tests {
 
         // Create and start worker.
         let config = CheckpointDownloaderConfig {
-            num_workers: 1,
             bucket_base_url: server.url(),
+            checkpoint_format: CheckpointFormat::Bcs,
+            num_workers: 1,
             downloaded_checkpoint_dir: checkpoint_dir.clone(),
             min_download_retry_wait: Duration::from_millis(100),
             max_download_retry_wait: Duration::from_secs(1),
@@ -644,8 +660,9 @@ mod tests {
     async fn test_checkpoint_downloader_initialization() {
         let _ = tracing_subscriber::fmt::try_init();
         let config = CheckpointDownloaderConfig {
-            num_workers: 4,
             bucket_base_url: "https://example.com/bucket/".to_string(),
+            checkpoint_format: CheckpointFormat::Bcs,
+            num_workers: 4,
             downloaded_checkpoint_dir: PathBuf::from("/tmp/checkpoints"),
             min_download_retry_wait: Duration::from_millis(100),
             max_download_retry_wait: Duration::from_secs(10),
@@ -694,8 +711,9 @@ mod tests {
 
         // Create and start downloader.
         let config = CheckpointDownloaderConfig {
-            num_workers: 2,
             bucket_base_url: server.url(),
+            checkpoint_format: CheckpointFormat::Bcs,
+            num_workers: 2,
             downloaded_checkpoint_dir: checkpoint_dir.clone(),
             min_download_retry_wait: Duration::from_millis(10),
             max_download_retry_wait: Duration::from_millis(100),
@@ -773,8 +791,9 @@ mod tests {
 
         // Create and start worker with very short retry intervals.
         let config = CheckpointDownloaderConfig {
-            num_workers: 1,
             bucket_base_url: server.url(),
+            checkpoint_format: CheckpointFormat::Bcs,
+            num_workers: 1,
             downloaded_checkpoint_dir: checkpoint_dir.clone(),
             min_download_retry_wait: Duration::from_millis(1),
             max_download_retry_wait: Duration::from_millis(2),
@@ -836,8 +855,9 @@ mod tests {
 
         // Create and start downloader.
         let config = CheckpointDownloaderConfig {
-            num_workers: 1,
             bucket_base_url: server.url(),
+            checkpoint_format: CheckpointFormat::Bcs,
+            num_workers: 1,
             downloaded_checkpoint_dir: checkpoint_dir.clone(),
             min_download_retry_wait: Duration::from_millis(10),
             max_download_retry_wait: Duration::from_millis(100),
