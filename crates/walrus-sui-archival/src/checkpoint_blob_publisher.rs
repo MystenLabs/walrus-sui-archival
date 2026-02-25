@@ -40,8 +40,8 @@ fn get_blob_build_semaphore() -> &'static tokio::sync::Semaphore {
 static BLOB_UPLOAD_SEMAPHORE: std::sync::OnceLock<tokio::sync::Semaphore> =
     std::sync::OnceLock::new();
 
-fn get_blob_upload_semaphore() -> &'static tokio::sync::Semaphore {
-    BLOB_UPLOAD_SEMAPHORE.get_or_init(|| tokio::sync::Semaphore::new(2))
+fn get_blob_upload_semaphore(max_concurrent_blob_uploads: usize) -> &'static tokio::sync::Semaphore {
+    BLOB_UPLOAD_SEMAPHORE.get_or_init(|| tokio::sync::Semaphore::new(max_concurrent_blob_uploads))
 }
 /// Message sent from CheckpointMonitor to CheckpointBlobPublisher.
 #[derive(Debug, Clone)]
@@ -551,7 +551,7 @@ impl CheckpointBlobPublisher {
             1
         };
 
-        let _upload_permit = get_blob_upload_semaphore()
+        let _upload_permit = get_blob_upload_semaphore(config.max_concurrent_blob_uploads)
             .acquire_many(upload_permit_size)
             .await
             .unwrap();
