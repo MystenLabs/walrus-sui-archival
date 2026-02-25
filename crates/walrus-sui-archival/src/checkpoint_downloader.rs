@@ -9,7 +9,8 @@ use in_memory_checkpoint_holder::InMemoryCheckpointHolder;
 use reqwest::Url;
 use sui_storage::blob::Blob;
 use sui_types::{
-    full_checkpoint_content::CheckpointData, messages_checkpoint::CheckpointSequenceNumber,
+    full_checkpoint_content::CheckpointData,
+    messages_checkpoint::CheckpointSequenceNumber,
 };
 use tokio::{fs, sync, task, time};
 
