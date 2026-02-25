@@ -9,8 +9,7 @@ use in_memory_checkpoint_holder::InMemoryCheckpointHolder;
 use reqwest::Url;
 use sui_storage::blob::Blob;
 use sui_types::{
-    full_checkpoint_content::CheckpointData,
-    messages_checkpoint::CheckpointSequenceNumber,
+    full_checkpoint_content::CheckpointData, messages_checkpoint::CheckpointSequenceNumber,
 };
 use tokio::{fs, sync, task, time};
 
@@ -126,7 +125,7 @@ impl CheckpointDownloadWorker {
                 .join(&format!("{}.chk", checkpoint_number))?,
             CheckpointFormat::Proto => self
                 .bucket_base_url
-                .join(&format!("{}.binpd.zst", checkpoint_number))?,
+                .join(&format!("{}.binpb.zst", checkpoint_number))?,
         };
 
         let mut retry_count = 0;
