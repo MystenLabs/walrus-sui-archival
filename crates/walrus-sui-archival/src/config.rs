@@ -12,9 +12,7 @@ use anyhow::Result;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use sui_indexer_alt_framework::ingestion::{
-    ClientArgs,
-    IngestionConfig,
-    ingestion_client::IngestionClientArgs,
+    ClientArgs, IngestionConfig, ingestion_client::IngestionClientArgs,
     streaming_client::StreamingClientArgs,
 };
 use sui_types::base_types::{ObjectID, SequenceNumber};
@@ -107,7 +105,7 @@ pub struct CheckpointDownloaderConfig {
     pub bucket_base_url: String,
 
     /// Checkpoint format to download. Defaults to BCS (.chk files).
-    /// Use "proto" for zstd-compressed protobuf (.binpd.zst files).
+    /// Use "proto" for zstd-compressed protobuf (.binpb.zst files).
     #[serde(default)]
     pub checkpoint_format: CheckpointFormat,
 
