@@ -701,6 +701,32 @@ impl CheckpointBlobPublisher {
 
         upload_timer.observe_duration();
 
+        // Fetch blob object ref using the sub wallet's client, which is guaranteed
+        // to have the latest state since it just executed the certify_blob transaction.
+        // This avoids a stale read from the main wallet's RPC node.
+        let blob_object_ref = if config.create_shared_blobs && transfer_to_address {
+            let ref_result = sui_interactive_client
+                .with_wallet_async(|wallet| {
+                    let blob_oid = object_id;
+                    Box::pin(async move {
+                        let sui_client = wallet.get_client().await?;
+                        let resp = sui_client
+                            .read_api()
+                            .get_object_with_options(
+                                blob_oid,
+                                sui_sdk::rpc_types::SuiObjectDataOptions::default(),
+                            )
+                            .await?;
+                        resp.object_ref_if_exists()
+                            .ok_or_else(|| anyhow::anyhow!("blob object not found after upload"))
+                    })
+                })
+                .await?;
+            Some(ref_result)
+        } else {
+            None
+        };
+
         // Log the index map for debugging.
         tracing::debug!("blob index map:");
         for (id, (offset, length)) in &index_map {
@@ -721,30 +747,41 @@ impl CheckpointBlobPublisher {
                     let admin_cap_object_id_clone = admin_cap_object_id;
                     let blob_object_id = object_id;
                     let worker_name_clone = worker_name.to_string();
+                    let blob_object_ref_clone = blob_object_ref;
 
                     Box::pin(async move {
                         let sui_client = wallet.get_client().await?;
                         let active_address = wallet.active_address()?;
 
                         // Fetch AdminCap object to get version and digest.
-                        let fetched_objects = sui_client
+                        let admin_cap_obj = sui_client
                             .read_api()
-                            .multi_get_object_with_options(
-                                vec![admin_cap_object_id_clone, blob_object_id],
+                            .get_object_with_options(
+                                admin_cap_object_id_clone,
                                 sui_sdk::rpc_types::SuiObjectDataOptions::default(),
                             )
                             .await?;
-
-                        let admin_cap_obj = fetched_objects[0].clone();
-                        let blob_obj = fetched_objects[1].clone();
-
                         let admin_cap_ref = admin_cap_obj
                             .object_ref_if_exists()
                             .ok_or_else(|| anyhow::anyhow!("admin cap object not found"))?;
 
-                        let blob_ref = blob_obj
-                            .object_ref_if_exists()
-                            .ok_or_else(|| anyhow::anyhow!("blob object not found"))?;
+                        // Use the blob ref fetched from the sub wallet's client if
+                        // available, otherwise fetch it from the main wallet's client.
+                        let blob_ref = match blob_object_ref_clone {
+                            Some(r) => r,
+                            None => {
+                                let blob_obj = sui_client
+                                    .read_api()
+                                    .get_object_with_options(
+                                        blob_object_id,
+                                        sui_sdk::rpc_types::SuiObjectDataOptions::default(),
+                                    )
+                                    .await?;
+                                blob_obj
+                                    .object_ref_if_exists()
+                                    .ok_or_else(|| anyhow::anyhow!("blob object not found"))?
+                            }
+                        };
 
                         // Build programmable transaction.
                         let mut ptb = ProgrammableTransactionBuilder::new();
