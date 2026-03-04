@@ -346,7 +346,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ingestion_service_checkpoint_downloader_initialization() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let temp_dir = TempDir::new().unwrap();
         let config = IngestionServiceCheckpointDownloaderConfig {
