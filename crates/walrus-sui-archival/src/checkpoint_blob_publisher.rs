@@ -1014,7 +1014,7 @@ impl CheckpointBlobPublisher {
 
                                 // If object_changes is missing from the response, re-query the
                                 // transaction to get them. The tx already succeeded on-chain so
-                                // we must not retry it.
+                                // we must not retry the tx itself — only retry the query.
                                 let object_changes = if response.object_changes.is_some() {
                                     response.object_changes.unwrap()
                                 } else {
@@ -1022,17 +1022,53 @@ impl CheckpointBlobPublisher {
                                         "finalizer: object_changes missing from tx response, re-querying tx {}",
                                         response.digest
                                     );
-                                    let re_queried = sui_client
-                                        .read_api()
-                                        .get_transaction_with_options(
-                                            response.digest,
-                                            sui_sdk::rpc_types::SuiTransactionBlockResponseOptions::new()
-                                                .with_object_changes(),
-                                        )
-                                        .await?;
-                                    re_queried.object_changes.ok_or_else(|| {
+                                    let mut re_query_result = None;
+                                    for re_query_attempt in 1..=5 {
+                                        tokio::time::sleep(std::time::Duration::from_secs(
+                                            re_query_attempt * 2,
+                                        ))
+                                        .await;
+                                        tracing::info!(
+                                            "finalizer: re-query attempt {}/5 for tx {}",
+                                            re_query_attempt,
+                                            response.digest
+                                        );
+                                        match sui_client
+                                            .read_api()
+                                            .get_transaction_with_options(
+                                                response.digest,
+                                                sui_sdk::rpc_types::SuiTransactionBlockResponseOptions::new()
+                                                    .with_object_changes(),
+                                            )
+                                            .await
+                                        {
+                                            Ok(re_queried)
+                                                if re_queried.object_changes.is_some() =>
+                                            {
+                                                re_query_result =
+                                                    Some(re_queried.object_changes.unwrap());
+                                                break;
+                                            }
+                                            Ok(_) => {
+                                                tracing::warn!(
+                                                    "finalizer: re-query attempt {}/5 returned no object_changes for tx {}",
+                                                    re_query_attempt,
+                                                    response.digest
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    "finalizer: re-query attempt {}/5 failed for tx {}: {}",
+                                                    re_query_attempt,
+                                                    response.digest,
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    }
+                                    re_query_result.ok_or_else(|| {
                                         anyhow::anyhow!(
-                                            "object_changes still missing after re-querying tx {}",
+                                            "object_changes still missing after 5 re-query attempts for tx {}",
                                             response.digest
                                         )
                                     })?
