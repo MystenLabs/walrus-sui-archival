@@ -920,7 +920,7 @@ impl CheckpointBlobPublisher {
                 let mut last_error = None;
                 let mut shared_blob_id = None;
 
-                for attempt in 1..=3 {
+                for attempt in 1..=5 {
                     let result = main_sui_interactive_client
                         .with_wallet_mut_async(|wallet| {
                             let package_id = contract_package_id;
@@ -932,30 +932,62 @@ impl CheckpointBlobPublisher {
                                 let active_address = wallet.active_address()?;
 
                                 // Fetch AdminCap object to get version and digest.
-                                let admin_cap_obj = sui_client
-                                    .read_api()
-                                    .get_object_with_options(
+                                // Retry a few times with delay in case of RPC lag.
+                                let mut admin_cap_ref = None;
+                                for fetch_attempt in 1..=5u64 {
+                                    let admin_cap_obj = sui_client
+                                        .read_api()
+                                        .get_object_with_options(
+                                            admin_cap_object_id_clone,
+                                            sui_sdk::rpc_types::SuiObjectDataOptions::default(),
+                                        )
+                                        .await?;
+                                    if let Some(r) = admin_cap_obj.object_ref_if_exists() {
+                                        admin_cap_ref = Some(r);
+                                        break;
+                                    }
+                                    tracing::warn!(
+                                        "finalizer: admin cap object {} not found (attempt {}/5), retrying after delay",
                                         admin_cap_object_id_clone,
-                                        sui_sdk::rpc_types::SuiObjectDataOptions::default(),
-                                    )
-                                    .await?;
-                                let admin_cap_ref = admin_cap_obj
-                                    .object_ref_if_exists()
-                                    .ok_or_else(|| {
-                                        anyhow::anyhow!("admin cap object not found")
-                                    })?;
+                                        fetch_attempt,
+                                    );
+                                    tokio::time::sleep(std::time::Duration::from_secs(
+                                        fetch_attempt * 2,
+                                    ))
+                                    .await;
+                                }
+                                let admin_cap_ref = admin_cap_ref.ok_or_else(|| {
+                                    anyhow::anyhow!("admin cap object not found after 5 attempts")
+                                })?;
 
                                 // Fetch blob ref - ownership already confirmed above.
-                                let blob_obj = sui_client
-                                    .read_api()
-                                    .get_object_with_options(
+                                // Retry a few times with delay in case of RPC lag.
+                                let mut blob_ref = None;
+                                for fetch_attempt in 1..=5u64 {
+                                    let blob_obj = sui_client
+                                        .read_api()
+                                        .get_object_with_options(
+                                            blob_object_id,
+                                            sui_sdk::rpc_types::SuiObjectDataOptions::default(),
+                                        )
+                                        .await?;
+                                    if let Some(r) = blob_obj.object_ref_if_exists() {
+                                        blob_ref = Some(r);
+                                        break;
+                                    }
+                                    tracing::warn!(
+                                        "finalizer: blob object {} not found (attempt {}/5), retrying after delay",
                                         blob_object_id,
-                                        sui_sdk::rpc_types::SuiObjectDataOptions::default(),
-                                    )
-                                    .await?;
-                                let blob_ref = blob_obj
-                                    .object_ref_if_exists()
-                                    .ok_or_else(|| anyhow::anyhow!("blob object not found"))?;
+                                        fetch_attempt,
+                                    );
+                                    tokio::time::sleep(std::time::Duration::from_secs(
+                                        fetch_attempt * 2,
+                                    ))
+                                    .await;
+                                }
+                                let blob_ref = blob_ref.ok_or_else(|| {
+                                    anyhow::anyhow!("blob object {} not found after 5 attempts", blob_object_id)
+                                })?;
 
                                 // Build programmable transaction.
                                 let mut ptb = ProgrammableTransactionBuilder::new();
@@ -1121,8 +1153,8 @@ impl CheckpointBlobPublisher {
                                 e
                             );
                             last_error = Some(e);
-                            if attempt < 3 {
-                                tokio::time::sleep(Duration::from_secs(2)).await;
+                            if attempt < 5 {
+                                tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
                             }
                         }
                     }
