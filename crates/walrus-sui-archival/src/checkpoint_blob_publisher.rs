@@ -1012,11 +1012,31 @@ impl CheckpointBlobPublisher {
                                 let response =
                                     wallet.execute_transaction_may_fail(signed_tx).await?;
 
-                                // Extract the SharedArchivalBlob object ID from object changes.
-                                let object_changes =
-                                    response.object_changes.as_ref().ok_or_else(|| {
-                                        anyhow::anyhow!("transaction object changes not found")
-                                    })?;
+                                // If object_changes is missing from the response, re-query the
+                                // transaction to get them. The tx already succeeded on-chain so
+                                // we must not retry it.
+                                let object_changes = if response.object_changes.is_some() {
+                                    response.object_changes.unwrap()
+                                } else {
+                                    tracing::warn!(
+                                        "finalizer: object_changes missing from tx response, re-querying tx {}",
+                                        response.digest
+                                    );
+                                    let re_queried = sui_client
+                                        .read_api()
+                                        .get_transaction_with_options(
+                                            response.digest,
+                                            sui_sdk::rpc_types::SuiTransactionBlockResponseOptions::new()
+                                                .with_object_changes(),
+                                        )
+                                        .await?;
+                                    re_queried.object_changes.ok_or_else(|| {
+                                        anyhow::anyhow!(
+                                            "object_changes still missing after re-querying tx {}",
+                                            response.digest
+                                        )
+                                    })?
+                                };
 
                                 let created_id = object_changes
                                     .iter()
