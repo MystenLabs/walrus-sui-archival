@@ -915,168 +915,169 @@ impl CheckpointBlobPublisher {
                     ));
                 }
 
-                let shared_blob_id = main_sui_interactive_client
-                    .with_wallet_mut_async(|wallet| {
-                        let package_id = contract_package_id;
-                        let admin_cap_object_id_clone = admin_cap_object_id;
-                        let blob_object_id = object_id;
+                // Retry the entire transaction (re-fetching object refs each time)
+                // to handle stale object versions from concurrent wallet usage.
+                let mut last_error = None;
+                let mut shared_blob_id = None;
 
-                        Box::pin(async move {
-                            let sui_client = wallet.get_client().await?;
-                            let active_address = wallet.active_address()?;
+                for attempt in 1..=3 {
+                    let result = main_sui_interactive_client
+                        .with_wallet_mut_async(|wallet| {
+                            let package_id = contract_package_id;
+                            let admin_cap_object_id_clone = admin_cap_object_id;
+                            let blob_object_id = object_id;
 
-                            // Fetch AdminCap object to get version and digest.
-                            let admin_cap_obj = sui_client
-                                .read_api()
-                                .get_object_with_options(
-                                    admin_cap_object_id_clone,
-                                    sui_sdk::rpc_types::SuiObjectDataOptions::default(),
-                                )
-                                .await?;
-                            let admin_cap_ref = admin_cap_obj
-                                .object_ref_if_exists()
-                                .ok_or_else(|| anyhow::anyhow!("admin cap object not found"))?;
+                            Box::pin(async move {
+                                let sui_client = wallet.get_client().await?;
+                                let active_address = wallet.active_address()?;
 
-                            // Fetch blob ref - ownership already confirmed above.
-                            let blob_obj = sui_client
-                                .read_api()
-                                .get_object_with_options(
-                                    blob_object_id,
-                                    sui_sdk::rpc_types::SuiObjectDataOptions::default(),
-                                )
-                                .await?;
-                            let blob_ref = blob_obj
-                                .object_ref_if_exists()
-                                .ok_or_else(|| anyhow::anyhow!("blob object not found"))?;
-
-                            // Build programmable transaction.
-                            let mut ptb = ProgrammableTransactionBuilder::new();
-
-                            let admin_cap_arg =
-                                ptb.obj(ObjectArg::ImmOrOwnedObject(admin_cap_ref))?;
-                            let blob_arg = ptb.obj(ObjectArg::ImmOrOwnedObject(blob_ref))?;
-
-                            ptb.programmable_move_call(
-                                package_id,
-                                Identifier::new("archival_blob")?,
-                                Identifier::new("create_shared_blob")?,
-                                vec![],
-                                vec![admin_cap_arg, blob_arg],
-                            );
-
-                            let pt = ptb.finish();
-
-                            tracing::info!(
-                                "finalizer executing create_shared_blob transaction - package: {}, blob: {}",
-                                package_id,
-                                blob_object_id
-                            );
-
-                            // Get gas payment object.
-                            let coins = sui_client
-                                .coin_read_api()
-                                .get_coins(active_address, None, None, None)
-                                .await?;
-
-                            if coins.data.is_empty() {
-                                return Err(anyhow::anyhow!(
-                                    "no gas coins available for address {}",
-                                    active_address
-                                ));
-                            }
-
-                            let gas_coin = &coins.data[0];
-
-                            let gas_budget = 100_000_000; // 0.1 SUI.
-                            let gas_price =
-                                sui_client.read_api().get_reference_gas_price().await?;
-
-                            let tx_data = TransactionData::new(
-                                TransactionKind::ProgrammableTransaction(pt),
-                                active_address,
-                                gas_coin.object_ref(),
-                                gas_budget,
-                                gas_price,
-                            );
-
-                            let signed_tx = wallet.sign_transaction(&tx_data).await;
-
-                            // Retry transaction execution up to 3 times with 1s delay.
-                            let mut last_error = None;
-                            let mut response = None;
-
-                            for attempt in 1..=3 {
-                                match wallet
-                                    .execute_transaction_may_fail(signed_tx.clone())
-                                    .await
-                                {
-                                    Ok(resp) => {
-                                        response = Some(resp);
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "finalizer transaction execution attempt {} failed: {}",
-                                            attempt,
-                                            e
-                                        );
-                                        last_error = Some(e);
-                                        if attempt < 3 {
-                                            tokio::time::sleep(Duration::from_secs(1)).await;
-                                        } else {
-                                            return Err(anyhow::anyhow!(
-                                                "finalizer transaction execution failed after 3 attempts: {:?}",
-                                                last_error
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-
-                            let response = response.ok_or_else(|| {
-                                last_error.unwrap_or_else(|| {
-                                    anyhow::anyhow!("transaction execution failed")
-                                })
-                            })?;
-
-                            // Extract the SharedArchivalBlob object ID from object changes.
-                            let object_changes =
-                                response.object_changes.as_ref().ok_or_else(|| {
-                                    anyhow::anyhow!("transaction object changes not found")
-                                })?;
-
-                            let shared_blob_id = object_changes
-                                .iter()
-                                .find_map(|change| {
-                                    if let sui_sdk::rpc_types::ObjectChange::Created {
-                                        object_id,
-                                        object_type,
-                                        ..
-                                    } = change
-                                        && object_type
-                                            .to_string()
-                                            .ends_with("::archival_blob::SharedArchivalBlob")
-                                    {
-                                        return Some(*object_id);
-                                    }
-                                    None
-                                })
-                                .ok_or_else(|| {
-                                    anyhow::anyhow!(
-                                        "failed to find SharedArchivalBlob in created objects"
+                                // Fetch AdminCap object to get version and digest.
+                                let admin_cap_obj = sui_client
+                                    .read_api()
+                                    .get_object_with_options(
+                                        admin_cap_object_id_clone,
+                                        sui_sdk::rpc_types::SuiObjectDataOptions::default(),
                                     )
-                                })?;
+                                    .await?;
+                                let admin_cap_ref = admin_cap_obj
+                                    .object_ref_if_exists()
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!("admin cap object not found")
+                                    })?;
 
-                            tracing::info!(
-                                "finalizer successfully created shared blob, tx digest: {:?}, shared_blob_id: {}",
-                                response.digest,
-                                shared_blob_id
-                            );
+                                // Fetch blob ref - ownership already confirmed above.
+                                let blob_obj = sui_client
+                                    .read_api()
+                                    .get_object_with_options(
+                                        blob_object_id,
+                                        sui_sdk::rpc_types::SuiObjectDataOptions::default(),
+                                    )
+                                    .await?;
+                                let blob_ref = blob_obj
+                                    .object_ref_if_exists()
+                                    .ok_or_else(|| anyhow::anyhow!("blob object not found"))?;
 
-                            Ok(shared_blob_id)
+                                // Build programmable transaction.
+                                let mut ptb = ProgrammableTransactionBuilder::new();
+
+                                let admin_cap_arg =
+                                    ptb.obj(ObjectArg::ImmOrOwnedObject(admin_cap_ref))?;
+                                let blob_arg =
+                                    ptb.obj(ObjectArg::ImmOrOwnedObject(blob_ref))?;
+
+                                ptb.programmable_move_call(
+                                    package_id,
+                                    Identifier::new("archival_blob")?,
+                                    Identifier::new("create_shared_blob")?,
+                                    vec![],
+                                    vec![admin_cap_arg, blob_arg],
+                                );
+
+                                let pt = ptb.finish();
+
+                                tracing::info!(
+                                    "finalizer executing create_shared_blob transaction - package: {}, blob: {}",
+                                    package_id,
+                                    blob_object_id
+                                );
+
+                                // Get gas payment object.
+                                let coins = sui_client
+                                    .coin_read_api()
+                                    .get_coins(active_address, None, None, None)
+                                    .await?;
+
+                                if coins.data.is_empty() {
+                                    return Err(anyhow::anyhow!(
+                                        "no gas coins available for address {}",
+                                        active_address
+                                    ));
+                                }
+
+                                let gas_coin = &coins.data[0];
+
+                                let gas_budget = 100_000_000; // 0.1 SUI.
+                                let gas_price =
+                                    sui_client.read_api().get_reference_gas_price().await?;
+
+                                let tx_data = TransactionData::new(
+                                    TransactionKind::ProgrammableTransaction(pt),
+                                    active_address,
+                                    gas_coin.object_ref(),
+                                    gas_budget,
+                                    gas_price,
+                                );
+
+                                let signed_tx = wallet.sign_transaction(&tx_data).await;
+                                let response =
+                                    wallet.execute_transaction_may_fail(signed_tx).await?;
+
+                                // Extract the SharedArchivalBlob object ID from object changes.
+                                let object_changes =
+                                    response.object_changes.as_ref().ok_or_else(|| {
+                                        anyhow::anyhow!("transaction object changes not found")
+                                    })?;
+
+                                let created_id = object_changes
+                                    .iter()
+                                    .find_map(|change| {
+                                        if let sui_sdk::rpc_types::ObjectChange::Created {
+                                            object_id,
+                                            object_type,
+                                            ..
+                                        } = change
+                                            && object_type
+                                                .to_string()
+                                                .ends_with(
+                                                    "::archival_blob::SharedArchivalBlob",
+                                                )
+                                        {
+                                            return Some(*object_id);
+                                        }
+                                        None
+                                    })
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!(
+                                            "failed to find SharedArchivalBlob in created objects"
+                                        )
+                                    })?;
+
+                                tracing::info!(
+                                    "finalizer successfully created shared blob, tx digest: {:?}, shared_blob_id: {}",
+                                    response.digest,
+                                    created_id
+                                );
+
+                                Ok(created_id)
+                            })
                         })
-                    })
-                    .await?;
+                        .await;
+
+                    match result {
+                        Ok(id) => {
+                            shared_blob_id = Some(id);
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "finalizer create_shared_blob attempt {} failed: {}",
+                                attempt,
+                                e
+                            );
+                            last_error = Some(e);
+                            if attempt < 3 {
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                            }
+                        }
+                    }
+                }
+
+                let shared_blob_id = shared_blob_id.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "finalizer create_shared_blob failed after 3 attempts: {:?}",
+                        last_error
+                    )
+                })?;
 
                 (shared_blob_id, true)
             } else {
