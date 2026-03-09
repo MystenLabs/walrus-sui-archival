@@ -20,7 +20,7 @@ use sui_types::{
     messages_checkpoint::CheckpointSequenceNumber,
 };
 use tower_http::cors::CorsLayer;
-use walrus_common::fetch_checkpoint_content;
+use walrus_common::fetch_checkpoint_content_proto;
 use walrus_core::{BlobId, encoding::Primary};
 use walrus_sdk::{ObjectID, SuiReadClient, client::WalrusNodeClient};
 
@@ -514,16 +514,10 @@ async fn get_app_checkpoint(
         .map(|id| id.to_string())
         .unwrap_or_else(|_| ObjectID::ZERO.to_string());
 
-    // Fetch content if requested.
+    // Fetch content if requested (proto zstd format).
     let content = if params.show_content {
-        match fetch_checkpoint_content(&blob_id, entry.offset, entry.length).await {
-            Ok(checkpoint_data) => match serde_json::to_value(&checkpoint_data) {
-                Ok(value) => Some(value),
-                Err(e) => {
-                    tracing::error!("failed to serialize checkpoint data to json: {}", e);
-                    None
-                }
-            },
+        match fetch_checkpoint_content_proto(&blob_id, entry.offset, entry.length).await {
+            Ok(value) => Some(value),
             Err(e) => {
                 tracing::error!("failed to fetch checkpoint content: {}", e);
                 None

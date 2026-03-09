@@ -3,11 +3,13 @@
 
 //! Common utilities and helper functions shared across walrus-sui-archival crates.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use prost_014::Message as _;
 use serde::Deserialize;
+use sui_rpc::proto::sui::rpc::v2::Checkpoint;
 use sui_sdk::{SuiClient, types::base_types::ObjectID as SuiObjectID};
 use sui_storage::blob::Blob;
-use sui_types::full_checkpoint_content::CheckpointData;
+use sui_types::{full_checkpoint_content::CheckpointData, messages_checkpoint::CheckpointSummary};
 use walrus_core::BlobId;
 
 #[derive(Deserialize)]
@@ -55,6 +57,108 @@ pub async fn fetch_checkpoint_content(
         .map_err(|e| anyhow::anyhow!("failed to decode checkpoint data: {}", e))?;
 
     Ok(checkpoint_data)
+}
+
+/// Fetch checkpoint content from aggregator, decoding zstd-compressed protobuf format.
+///
+/// Returns a `serde_json::Value` with key checkpoint fields extracted from the proto message.
+pub async fn fetch_checkpoint_content_proto(
+    blob_id: &str,
+    offset: u64,
+    length: u64,
+) -> Result<serde_json::Value> {
+    let url = format!(
+        "https://aggregator.walrus-mainnet.walrus.space/v1/blobs/{}/byte-range?start={}&length={}",
+        blob_id, offset, length
+    );
+
+    tracing::info!("fetching proto checkpoint content from: {}", url);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to fetch from aggregator: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "aggregator returned error status: {}",
+            response.status()
+        ));
+    }
+
+    let compressed = response
+        .bytes()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to read response body: {}", e))?;
+
+    // 1. Decompress zstd.
+    let proto_bytes =
+        zstd::decode_all(compressed.as_ref()).context("failed to zstd-decompress checkpoint")?;
+
+    // 2. Decode protobuf Checkpoint message.
+    let proto_checkpoint = Checkpoint::decode(proto_bytes.as_slice())
+        .context("failed to decode protobuf checkpoint")?;
+
+    let sequence_number = proto_checkpoint.sequence_number.unwrap_or_default();
+
+    // 3. BCS-decode the CheckpointSummary from the proto summary to get rich metadata.
+    let summary_json = if let Some(summary) = proto_checkpoint.summary.as_ref() {
+        if let Some(bcs_field) = summary.bcs.as_ref() {
+            if let Some(bcs_bytes) = bcs_field.value.as_ref() {
+                match bcs::from_bytes::<CheckpointSummary>(bcs_bytes) {
+                    Ok(cs) => serde_json::json!({
+                        "epoch": cs.epoch,
+                        "sequence_number": cs.sequence_number,
+                        "network_total_transactions": cs.network_total_transactions,
+                        "timestamp_ms": cs.timestamp_ms,
+                        "previous_digest": cs.previous_digest.map(|d| d.to_string()),
+                        "end_of_epoch_data": cs.end_of_epoch_data.is_some(),
+                        "content_digest": cs.content_digest.to_string(),
+                        "epoch_rolling_gas_cost_summary": {
+                            "computation_cost": cs.epoch_rolling_gas_cost_summary.computation_cost,
+                            "storage_cost": cs.epoch_rolling_gas_cost_summary.storage_cost,
+                            "storage_rebate": cs.epoch_rolling_gas_cost_summary.storage_rebate,
+                            "non_refundable_storage_fee": cs.epoch_rolling_gas_cost_summary.non_refundable_storage_fee,
+                        },
+                    }),
+                    Err(e) => {
+                        tracing::warn!("failed to BCS-decode CheckpointSummary: {}", e);
+                        serde_json::Value::Null
+                    }
+                }
+            } else {
+                serde_json::Value::Null
+            }
+        } else {
+            serde_json::Value::Null
+        }
+    } else {
+        serde_json::Value::Null
+    };
+
+    // 4. Extract transaction digests from the proto checkpoint.
+    let transactions: Vec<serde_json::Value> = proto_checkpoint
+        .transactions
+        .iter()
+        .filter_map(|tx| {
+            tx.digest.as_ref().map(|d| {
+                serde_json::json!({
+                    "digest": d,
+                })
+            })
+        })
+        .collect();
+
+    let result = serde_json::json!({
+        "sequence_number": sequence_number,
+        "summary": summary_json,
+        "transaction_count": transactions.len(),
+        "transactions": transactions,
+    });
+
+    Ok(result)
 }
 
 /// Fetches the blob ID from the metadata pointer object on-chain using a Sui client.

@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Walrus Sui Archival",
-  description: "Sui Checkpoint Archival on Walrus",
+  description: "Sui Checkpoint Archival on Walrus (Proto Zstd Format)",
 };
 
 export default function RootLayout({

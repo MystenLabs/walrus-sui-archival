@@ -11024,13 +11024,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bcs",
+ "prost 0.14.3",
  "reqwest",
  "serde",
+ "serde_json",
+ "sui-rpc",
  "sui-sdk",
  "sui-storage",
  "sui-types",
  "tracing",
  "walrus-core",
+ "zstd 0.13.3",
 ]
 
 [[package]]
