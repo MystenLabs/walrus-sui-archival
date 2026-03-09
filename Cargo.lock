@@ -1610,7 +1610,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.8.8",
- "base64 0.22.1",
  "clap",
  "mysten-metrics",
  "postgres-store",
@@ -1620,7 +1619,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sui-sdk",
- "sui-storage",
  "sui-types",
  "tokio",
  "tower-http 0.6.8",

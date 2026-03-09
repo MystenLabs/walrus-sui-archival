@@ -18,7 +18,6 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use metrics::Metrics;
 use postgres_store::{PostgresPool, SharedPostgresPool};
 use rand::Rng;
@@ -27,7 +26,7 @@ use sui_sdk::{SuiClient, SuiClientBuilder};
 use sui_types::base_types::ObjectID;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
-use walrus_common::fetch_checkpoint_content;
+use walrus_common::fetch_checkpoint_content_proto;
 
 /// Configuration for the caching server.
 #[derive(Debug, Clone)]
@@ -81,44 +80,6 @@ impl Config {
             metadata_pointer_object_id,
             sui_rpc_url,
         }
-    }
-}
-
-/// Helper function to convert Vec<u8> fields in a JSON value to base64 strings.
-/// This recursively processes JSON arrays and objects.
-fn convert_bytes_to_base64(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Array(arr) => {
-            // Check if this is a byte array (array of numbers 0-255).
-            if arr.iter().all(|v| {
-                if let serde_json::Value::Number(n) = v {
-                    n.as_u64().is_some_and(|num| num <= 255)
-                } else {
-                    false
-                }
-            }) && !arr.is_empty()
-            {
-                // Convert to base64 string.
-                let bytes: Vec<u8> = arr
-                    .iter()
-                    .filter_map(|v| v.as_u64().map(|n| n as u8))
-                    .collect();
-                serde_json::Value::String(BASE64.encode(&bytes))
-            } else {
-                // Recursively process array elements.
-                serde_json::Value::Array(arr.into_iter().map(convert_bytes_to_base64).collect())
-            }
-        }
-        serde_json::Value::Object(map) => {
-            // Recursively process object fields.
-            serde_json::Value::Object(
-                map.into_iter()
-                    .map(|(k, v)| (k, convert_bytes_to_base64(v)))
-                    .collect(),
-            )
-        }
-        // Leave other types unchanged.
-        other => other,
     }
 }
 
@@ -1034,7 +995,7 @@ async fn proxy_app_checkpoint(
             return Ok(Json(checkpoint_info));
         }
 
-        let checkpoint_data = match fetch_checkpoint_content(
+        let checkpoint_content = match fetch_checkpoint_content_proto(
             &checkpoint_info.blob_id,
             checkpoint_info.offset,
             checkpoint_info.length,
@@ -1058,26 +1019,6 @@ async fn proxy_app_checkpoint(
             }
         };
 
-        // Serialize checkpoint data and convert Vec<u8> fields to base64.
-        let checkpoint_value = match serde_json::to_value(checkpoint_data) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!("failed to serialize checkpoint data: {}", e);
-                state
-                    .metrics
-                    .http_requests_total
-                    .with_label_values(&[endpoint, source, "500"])
-                    .inc();
-                state
-                    .metrics
-                    .http_request_latency_seconds
-                    .with_label_values(&[endpoint, source])
-                    .observe(start_time.elapsed().as_secs_f64());
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
-            }
-        };
-        let checkpoint_value_with_base64 = convert_bytes_to_base64(checkpoint_value);
-
         state
             .metrics
             .http_requests_total
@@ -1096,7 +1037,7 @@ async fn proxy_app_checkpoint(
             index: checkpoint_info.index,
             offset: checkpoint_info.offset,
             length: checkpoint_info.length,
-            content: Some(checkpoint_value_with_base64),
+            content: Some(checkpoint_content),
         }))
     } else {
         // Backend proxy mode.
