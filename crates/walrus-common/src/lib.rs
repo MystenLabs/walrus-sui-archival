@@ -9,7 +9,12 @@ use serde::Deserialize;
 use sui_rpc::proto::sui::rpc::v2::Checkpoint;
 use sui_sdk::{SuiClient, types::base_types::ObjectID as SuiObjectID};
 use sui_storage::blob::Blob;
-use sui_types::{full_checkpoint_content::CheckpointData, messages_checkpoint::CheckpointSummary};
+use sui_types::{
+    effects::{TransactionEffects, TransactionEffectsAPI},
+    execution_status::ExecutionStatus,
+    full_checkpoint_content::CheckpointData,
+    messages_checkpoint::CheckpointSummary,
+};
 use walrus_core::BlobId;
 
 #[derive(Deserialize)]
@@ -139,42 +144,61 @@ pub async fn fetch_checkpoint_content_proto(
     };
 
     // 4. Extract transaction info from the proto checkpoint.
+    // The GCS proto format stores data in BCS sub-fields, so we BCS-decode effects
+    // to get digest, status, and gas info.
     let transactions: Vec<serde_json::Value> = proto_checkpoint
         .transactions
         .iter()
         .map(|tx| {
-            let digest = tx
-                .digest
-                .clone()
-                .or_else(|| {
-                    tx.effects
-                        .as_ref()
-                        .and_then(|e| e.transaction_digest.clone())
-                })
-                .unwrap_or_default();
-
-            let status = tx
+            // Try to get effects from BCS first (GCS format), then structured fields.
+            let effects_bcs = tx
                 .effects
                 .as_ref()
-                .and_then(|e| e.status.as_ref())
-                .map(|s| s.success.unwrap_or(false));
+                .and_then(|e| e.bcs.as_ref())
+                .and_then(|b| b.value.as_ref());
 
-            let gas_used = tx.effects.as_ref().and_then(|e| {
-                e.gas_used.as_ref().map(|g| {
-                    serde_json::json!({
-                        "computation_cost": g.computation_cost.unwrap_or(0),
-                        "storage_cost": g.storage_cost.unwrap_or(0),
-                        "storage_rebate": g.storage_rebate.unwrap_or(0),
-                        "non_refundable_storage_fee": g.non_refundable_storage_fee.unwrap_or(0),
+            if let Some(bcs_bytes) = effects_bcs {
+                match bcs::from_bytes::<TransactionEffects>(bcs_bytes) {
+                    Ok(effects) => {
+                        let gas = effects.gas_cost_summary();
+                        let success = matches!(effects.status(), ExecutionStatus::Success);
+                        serde_json::json!({
+                            "digest": effects.transaction_digest().to_string(),
+                            "success": success,
+                            "gas_used": {
+                                "computation_cost": gas.computation_cost,
+                                "storage_cost": gas.storage_cost,
+                                "storage_rebate": gas.storage_rebate,
+                                "non_refundable_storage_fee": gas.non_refundable_storage_fee,
+                            },
+                        })
+                    }
+                    Err(e) => {
+                        tracing::warn!("failed to BCS-decode TransactionEffects: {}", e);
+                        let digest = tx
+                            .digest
+                            .clone()
+                            .or_else(|| {
+                                tx.effects
+                                    .as_ref()
+                                    .and_then(|e| e.transaction_digest.clone())
+                            })
+                            .unwrap_or_default();
+                        serde_json::json!({ "digest": digest })
+                    }
+                }
+            } else {
+                let digest = tx
+                    .digest
+                    .clone()
+                    .or_else(|| {
+                        tx.effects
+                            .as_ref()
+                            .and_then(|e| e.transaction_digest.clone())
                     })
-                })
-            });
-
-            serde_json::json!({
-                "digest": digest,
-                "success": status,
-                "gas_used": gas_used,
-            })
+                    .unwrap_or_default();
+                serde_json::json!({ "digest": digest })
+            }
         })
         .collect();
 
