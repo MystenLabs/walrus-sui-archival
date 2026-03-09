@@ -138,15 +138,42 @@ pub async fn fetch_checkpoint_content_proto(
         serde_json::Value::Null
     };
 
-    // 4. Extract transaction digests from the proto checkpoint.
+    // 4. Extract transaction info from the proto checkpoint.
     let transactions: Vec<serde_json::Value> = proto_checkpoint
         .transactions
         .iter()
-        .filter_map(|tx| {
-            tx.digest.as_ref().map(|d| {
-                serde_json::json!({
-                    "digest": d,
+        .map(|tx| {
+            let digest = tx
+                .digest
+                .clone()
+                .or_else(|| {
+                    tx.effects
+                        .as_ref()
+                        .and_then(|e| e.transaction_digest.clone())
                 })
+                .unwrap_or_default();
+
+            let status = tx
+                .effects
+                .as_ref()
+                .and_then(|e| e.status.as_ref())
+                .map(|s| s.success.unwrap_or(false));
+
+            let gas_used = tx.effects.as_ref().and_then(|e| {
+                e.gas_used.as_ref().map(|g| {
+                    serde_json::json!({
+                        "computation_cost": g.computation_cost.unwrap_or(0),
+                        "storage_cost": g.storage_cost.unwrap_or(0),
+                        "storage_rebate": g.storage_rebate.unwrap_or(0),
+                        "non_refundable_storage_fee": g.non_refundable_storage_fee.unwrap_or(0),
+                    })
+                })
+            });
+
+            serde_json::json!({
+                "digest": digest,
+                "success": status,
+                "gas_used": gas_used,
             })
         })
         .collect();
