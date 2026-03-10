@@ -29,9 +29,9 @@ const configs: Record<NetworkType, NetworkConfig> = {
     walrusSystemObjectId: "0x6c2547cbbc38025cf3adac45f63cb0a8d12ecf777cdc75a4971612bf97fdf6af",
   },
   mainnet: {
-    apiEndpoint: "https://walrus-sui-archival.mainnet.walrus.space",
+    apiEndpoint: "https://walrus-sui-archival-proto.mainnet.walrus.space",
     suiRpcUrl: "https://fullnode.mainnet.sui.io:443",
-    packageId: "0x88fe0bdce11ce0c0a8fc37b2e9682e21d05051cd31522ac88dcff3076c051dc6",
+    packageId: "0xabd713497874d48e4d49e956c5dd0f1e0792b1f2f663f8d0866792b56177504d",
     sharedFundObjectId: "0x1aed91664f6a2a929b795d2b71dd8707f674131367b8ae4650565685e8eeba62",
     walCoinType: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL",
     walrusSystemObjectId: "0x2134d52768ea07e8c43570ef975eb3e4c27a39fa6396bef985b5abc58d03ddd2",
