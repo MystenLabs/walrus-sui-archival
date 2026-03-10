@@ -9,12 +9,7 @@ use serde::Deserialize;
 use sui_rpc::proto::sui::rpc::v2::Checkpoint;
 use sui_sdk::{SuiClient, types::base_types::ObjectID as SuiObjectID};
 use sui_storage::blob::Blob;
-use sui_types::{
-    effects::{TransactionEffects, TransactionEffectsAPI, TransactionEvents},
-    full_checkpoint_content::CheckpointData,
-    messages_checkpoint::CheckpointSummary,
-    transaction::Transaction,
-};
+use sui_types::full_checkpoint_content::{self, CheckpointData};
 use walrus_core::BlobId;
 
 #[derive(Deserialize)]
@@ -66,7 +61,8 @@ pub async fn fetch_checkpoint_content(
 
 /// Fetch checkpoint content from aggregator, decoding zstd-compressed protobuf format.
 ///
-/// Returns a `serde_json::Value` with key checkpoint fields extracted from the proto message.
+/// Converts the proto checkpoint to `CheckpointData` (same as the BCS format), which includes
+/// full transaction data with input_objects and output_objects per transaction.
 pub async fn fetch_checkpoint_content_proto(
     blob_id: &str,
     offset: u64,
@@ -106,134 +102,18 @@ pub async fn fetch_checkpoint_content_proto(
     let proto_checkpoint = Checkpoint::decode(proto_bytes.as_slice())
         .context("failed to decode protobuf checkpoint")?;
 
-    let sequence_number = proto_checkpoint.sequence_number.unwrap_or_default();
+    // 3. Convert proto Checkpoint → sui-types Checkpoint → CheckpointData.
+    // This reconstructs per-transaction input_objects and output_objects from the
+    // checkpoint-level deduped ObjectSet, matching the BCS format exactly.
+    let sui_checkpoint = full_checkpoint_content::Checkpoint::try_from(&proto_checkpoint)
+        .map_err(|e| anyhow::anyhow!("failed to convert proto to sui-types checkpoint: {}", e))?;
+    let checkpoint_data = CheckpointData::from(sui_checkpoint);
 
-    // 3. BCS-decode the CheckpointSummary from the proto summary to get rich metadata.
-    let summary_json = if let Some(summary) = proto_checkpoint.summary.as_ref() {
-        if let Some(bcs_field) = summary.bcs.as_ref() {
-            if let Some(bcs_bytes) = bcs_field.value.as_ref() {
-                match bcs::from_bytes::<CheckpointSummary>(bcs_bytes) {
-                    Ok(cs) => serde_json::json!({
-                        "epoch": cs.epoch,
-                        "sequence_number": cs.sequence_number,
-                        "network_total_transactions": cs.network_total_transactions,
-                        "timestamp_ms": cs.timestamp_ms,
-                        "previous_digest": cs.previous_digest.map(|d| d.to_string()),
-                        "end_of_epoch_data": cs.end_of_epoch_data.is_some(),
-                        "content_digest": cs.content_digest.to_string(),
-                        "epoch_rolling_gas_cost_summary": {
-                            "computation_cost": cs.epoch_rolling_gas_cost_summary.computation_cost,
-                            "storage_cost": cs.epoch_rolling_gas_cost_summary.storage_cost,
-                            "storage_rebate": cs.epoch_rolling_gas_cost_summary.storage_rebate,
-                            "non_refundable_storage_fee": cs.epoch_rolling_gas_cost_summary.non_refundable_storage_fee,
-                        },
-                    }),
-                    Err(e) => {
-                        tracing::warn!("failed to BCS-decode CheckpointSummary: {}", e);
-                        serde_json::Value::Null
-                    }
-                }
-            } else {
-                serde_json::Value::Null
-            }
-        } else {
-            serde_json::Value::Null
-        }
-    } else {
-        serde_json::Value::Null
-    };
+    // 4. Serialize to JSON.
+    let value = serde_json::to_value(checkpoint_data)
+        .context("failed to serialize CheckpointData to JSON")?;
 
-    // 4. Extract full transaction data from the proto checkpoint.
-    // The GCS proto format stores transaction, effects, and events as BCS sub-fields.
-    // We BCS-decode each to get the full data matching what the BCS checkpoint format provides.
-    let transactions: Vec<serde_json::Value> = proto_checkpoint
-        .transactions
-        .iter()
-        .map(|tx| {
-            let mut result = serde_json::Map::new();
-
-            // BCS-decode the Transaction.
-            if let Some(bcs_bytes) = tx
-                .transaction
-                .as_ref()
-                .and_then(|t| t.bcs.as_ref())
-                .and_then(|b| b.value.as_ref())
-            {
-                match bcs::from_bytes::<Transaction>(bcs_bytes) {
-                    Ok(transaction) => {
-                        result.insert(
-                            "digest".to_string(),
-                            serde_json::json!(transaction.digest().to_string()),
-                        );
-                        if let Ok(v) = serde_json::to_value(&transaction) {
-                            result.insert("transaction".to_string(), v);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("failed to BCS-decode Transaction: {}", e);
-                    }
-                }
-            }
-
-            // BCS-decode the TransactionEffects.
-            if let Some(bcs_bytes) = tx
-                .effects
-                .as_ref()
-                .and_then(|e| e.bcs.as_ref())
-                .and_then(|b| b.value.as_ref())
-            {
-                match bcs::from_bytes::<TransactionEffects>(bcs_bytes) {
-                    Ok(effects) => {
-                        // Set digest from effects if not already set from transaction.
-                        result.entry("digest".to_string()).or_insert_with(|| {
-                            serde_json::json!(effects.transaction_digest().to_string())
-                        });
-                        if let Ok(v) = serde_json::to_value(&effects) {
-                            result.insert("effects".to_string(), v);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("failed to BCS-decode TransactionEffects: {}", e);
-                    }
-                }
-            }
-
-            // BCS-decode the TransactionEvents.
-            if let Some(bcs_bytes) = tx
-                .events
-                .as_ref()
-                .and_then(|e| e.bcs.as_ref())
-                .and_then(|b| b.value.as_ref())
-            {
-                match bcs::from_bytes::<TransactionEvents>(bcs_bytes) {
-                    Ok(events) => {
-                        if let Ok(v) = serde_json::to_value(&events) {
-                            result.insert("events".to_string(), v);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("failed to BCS-decode TransactionEvents: {}", e);
-                    }
-                }
-            }
-
-            // Fall back to proto digest field if we still don't have one.
-            result
-                .entry("digest".to_string())
-                .or_insert_with(|| serde_json::json!(tx.digest.clone().unwrap_or_default()));
-
-            serde_json::Value::Object(result)
-        })
-        .collect();
-
-    let result = serde_json::json!({
-        "sequence_number": sequence_number,
-        "summary": summary_json,
-        "transaction_count": transactions.len(),
-        "transactions": transactions,
-    });
-
-    Ok(result)
+    Ok(value)
 }
 
 /// Fetches the blob ID from the metadata pointer object on-chain using a Sui client.
