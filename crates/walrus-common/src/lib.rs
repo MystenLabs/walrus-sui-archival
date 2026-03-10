@@ -10,10 +10,10 @@ use sui_rpc::proto::sui::rpc::v2::Checkpoint;
 use sui_sdk::{SuiClient, types::base_types::ObjectID as SuiObjectID};
 use sui_storage::blob::Blob;
 use sui_types::{
-    effects::{TransactionEffects, TransactionEffectsAPI},
-    execution_status::ExecutionStatus,
+    effects::{TransactionEffects, TransactionEffectsAPI, TransactionEvents},
     full_checkpoint_content::CheckpointData,
     messages_checkpoint::CheckpointSummary,
+    transaction::Transaction,
 };
 use walrus_core::BlobId;
 
@@ -143,62 +143,86 @@ pub async fn fetch_checkpoint_content_proto(
         serde_json::Value::Null
     };
 
-    // 4. Extract transaction info from the proto checkpoint.
-    // The GCS proto format stores data in BCS sub-fields, so we BCS-decode effects
-    // to get digest, status, and gas info.
+    // 4. Extract full transaction data from the proto checkpoint.
+    // The GCS proto format stores transaction, effects, and events as BCS sub-fields.
+    // We BCS-decode each to get the full data matching what the BCS checkpoint format provides.
     let transactions: Vec<serde_json::Value> = proto_checkpoint
         .transactions
         .iter()
         .map(|tx| {
-            // Try to get effects from BCS first (GCS format), then structured fields.
-            let effects_bcs = tx
+            let mut result = serde_json::Map::new();
+
+            // BCS-decode the Transaction.
+            if let Some(bcs_bytes) = tx
+                .transaction
+                .as_ref()
+                .and_then(|t| t.bcs.as_ref())
+                .and_then(|b| b.value.as_ref())
+            {
+                match bcs::from_bytes::<Transaction>(bcs_bytes) {
+                    Ok(transaction) => {
+                        result.insert(
+                            "digest".to_string(),
+                            serde_json::json!(transaction.digest().to_string()),
+                        );
+                        if let Ok(v) = serde_json::to_value(&transaction) {
+                            result.insert("transaction".to_string(), v);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("failed to BCS-decode Transaction: {}", e);
+                    }
+                }
+            }
+
+            // BCS-decode the TransactionEffects.
+            if let Some(bcs_bytes) = tx
                 .effects
                 .as_ref()
                 .and_then(|e| e.bcs.as_ref())
-                .and_then(|b| b.value.as_ref());
-
-            if let Some(bcs_bytes) = effects_bcs {
+                .and_then(|b| b.value.as_ref())
+            {
                 match bcs::from_bytes::<TransactionEffects>(bcs_bytes) {
                     Ok(effects) => {
-                        let gas = effects.gas_cost_summary();
-                        let success = matches!(effects.status(), ExecutionStatus::Success);
-                        serde_json::json!({
-                            "digest": effects.transaction_digest().to_string(),
-                            "success": success,
-                            "gas_used": {
-                                "computation_cost": gas.computation_cost,
-                                "storage_cost": gas.storage_cost,
-                                "storage_rebate": gas.storage_rebate,
-                                "non_refundable_storage_fee": gas.non_refundable_storage_fee,
-                            },
-                        })
+                        // Set digest from effects if not already set from transaction.
+                        result.entry("digest".to_string()).or_insert_with(|| {
+                            serde_json::json!(effects.transaction_digest().to_string())
+                        });
+                        if let Ok(v) = serde_json::to_value(&effects) {
+                            result.insert("effects".to_string(), v);
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("failed to BCS-decode TransactionEffects: {}", e);
-                        let digest = tx
-                            .digest
-                            .clone()
-                            .or_else(|| {
-                                tx.effects
-                                    .as_ref()
-                                    .and_then(|e| e.transaction_digest.clone())
-                            })
-                            .unwrap_or_default();
-                        serde_json::json!({ "digest": digest })
                     }
                 }
-            } else {
-                let digest = tx
-                    .digest
-                    .clone()
-                    .or_else(|| {
-                        tx.effects
-                            .as_ref()
-                            .and_then(|e| e.transaction_digest.clone())
-                    })
-                    .unwrap_or_default();
-                serde_json::json!({ "digest": digest })
             }
+
+            // BCS-decode the TransactionEvents.
+            if let Some(bcs_bytes) = tx
+                .events
+                .as_ref()
+                .and_then(|e| e.bcs.as_ref())
+                .and_then(|b| b.value.as_ref())
+            {
+                match bcs::from_bytes::<TransactionEvents>(bcs_bytes) {
+                    Ok(events) => {
+                        if let Ok(v) = serde_json::to_value(&events) {
+                            result.insert("events".to_string(), v);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("failed to BCS-decode TransactionEvents: {}", e);
+                    }
+                }
+            }
+
+            // Fall back to proto digest field if we still don't have one.
+            result
+                .entry("digest".to_string())
+                .or_insert_with(|| serde_json::json!(tx.digest.clone().unwrap_or_default()));
+
+            serde_json::Value::Object(result)
         })
         .collect();
 
