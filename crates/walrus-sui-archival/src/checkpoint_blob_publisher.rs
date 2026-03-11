@@ -1047,8 +1047,8 @@ impl CheckpointBlobPublisher {
                                 // If object_changes is missing from the response, re-query the
                                 // transaction to get them. The tx already succeeded on-chain so
                                 // we must not retry the tx itself — only retry the query.
-                                let object_changes = if response.object_changes.is_some() {
-                                    response.object_changes.unwrap()
+                                let object_changes = if let Some(changes) = response.object_changes {
+                                    changes
                                 } else {
                                     tracing::warn!(
                                         "finalizer: object_changes missing from tx response, re-querying tx {}",
