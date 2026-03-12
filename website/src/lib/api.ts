@@ -39,6 +39,7 @@ export interface CheckpointInfo {
   index: number;
   offset: number;
   length: number;
+  download_url: string;
   content?: unknown;
 }
 
