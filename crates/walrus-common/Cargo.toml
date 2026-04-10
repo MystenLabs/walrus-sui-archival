@@ -8,10 +8,14 @@ edition.workspace = true
 [dependencies]
 anyhow.workspace = true
 bcs.workspace = true
+prost_014 = { package = "prost", version = "0.14" }
 reqwest.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+sui-rpc.workspace = true
 sui-sdk.workspace = true
 sui-storage.workspace = true
 sui-types.workspace = true
 tracing.workspace = true
 walrus-core.workspace = true
+zstd.workspace = true

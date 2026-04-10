@@ -209,6 +209,14 @@ function CheckpointContent() {
                   <td>Length</td>
                   <td>{checkpoint.length} bytes</td>
                 </tr>
+                <tr>
+                  <td>Download URL</td>
+                  <td>
+                    <a href={checkpoint.download_url} target="_blank" rel="noopener noreferrer">
+                      <code>{formatAddress(checkpoint.download_url, 80)}</code>
+                    </a>
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>

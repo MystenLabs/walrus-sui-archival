@@ -3,11 +3,13 @@
 
 //! Common utilities and helper functions shared across walrus-sui-archival crates.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use prost_014::Message as _;
 use serde::Deserialize;
+use sui_rpc::proto::sui::rpc::v2::Checkpoint;
 use sui_sdk::{SuiClient, types::base_types::ObjectID as SuiObjectID};
 use sui_storage::blob::Blob;
-use sui_types::full_checkpoint_content::CheckpointData;
+use sui_types::full_checkpoint_content::{self, CheckpointData};
 use walrus_core::BlobId;
 
 #[derive(Deserialize)]
@@ -55,6 +57,63 @@ pub async fn fetch_checkpoint_content(
         .map_err(|e| anyhow::anyhow!("failed to decode checkpoint data: {}", e))?;
 
     Ok(checkpoint_data)
+}
+
+/// Fetch checkpoint content from aggregator, decoding zstd-compressed protobuf format.
+///
+/// Converts the proto checkpoint to `CheckpointData` (same as the BCS format), which includes
+/// full transaction data with input_objects and output_objects per transaction.
+pub async fn fetch_checkpoint_content_proto(
+    blob_id: &str,
+    offset: u64,
+    length: u64,
+) -> Result<serde_json::Value> {
+    let url = format!(
+        "https://aggregator.walrus-mainnet.walrus.space/v1/blobs/{}/byte-range?start={}&length={}",
+        blob_id, offset, length
+    );
+
+    tracing::info!("fetching proto checkpoint content from: {}", url);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to fetch from aggregator: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "aggregator returned error status: {}",
+            response.status()
+        ));
+    }
+
+    let compressed = response
+        .bytes()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to read response body: {}", e))?;
+
+    // 1. Decompress zstd.
+    let proto_bytes =
+        zstd::decode_all(compressed.as_ref()).context("failed to zstd-decompress checkpoint")?;
+
+    // 2. Decode protobuf Checkpoint message.
+    let proto_checkpoint = Checkpoint::decode(proto_bytes.as_slice())
+        .context("failed to decode protobuf checkpoint")?;
+
+    // 3. Convert proto Checkpoint → sui-types Checkpoint → CheckpointData.
+    // This reconstructs per-transaction input_objects and output_objects from the
+    // checkpoint-level deduped ObjectSet, matching the BCS format exactly.
+    let sui_checkpoint = full_checkpoint_content::Checkpoint::try_from(&proto_checkpoint)
+        .map_err(|e| anyhow::anyhow!("failed to convert proto to sui-types checkpoint: {}", e))?;
+    let checkpoint_data = CheckpointData::from(sui_checkpoint);
+
+    // 4. Serialize to JSON.
+    let value = serde_json::to_value(checkpoint_data)
+        .context("failed to serialize CheckpointData to JSON")?;
+
+    Ok(value)
 }
 
 /// Fetches the blob ID from the metadata pointer object on-chain using a Sui client.

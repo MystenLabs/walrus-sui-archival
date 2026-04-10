@@ -1893,7 +1893,7 @@ mod tests {
 
     #[test]
     fn test_list_all_blobs_omit_index_entries() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_db");

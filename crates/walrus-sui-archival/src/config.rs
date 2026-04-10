@@ -93,10 +93,23 @@ impl CheckpointDownloaderType {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointFormat {
+    #[default]
+    Bcs,
+    Proto,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointDownloaderConfig {
     /// Base URL for the S3 bucket containing checkpoints.
     pub bucket_base_url: String,
+
+    /// Checkpoint format to download. Defaults to BCS (.chk files).
+    /// Use "proto" for zstd-compressed protobuf (.binpb.zst files).
+    #[serde(default)]
+    pub checkpoint_format: CheckpointFormat,
 
     /// Number of worker threads for downloading checkpoints.
     #[serde(default = "default_num_workers")]
@@ -261,6 +274,11 @@ pub struct CheckpointBlobPublisherConfig {
     /// Whether to build blobs in memory.
     #[serde(default = "default_in_memory_build")]
     pub in_memory_build: bool,
+
+    /// Maximum number of concurrent blob uploads.
+    /// Default: 2.
+    #[serde(default = "default_max_concurrent_blob_uploads")]
+    pub max_concurrent_blob_uploads: usize,
 }
 
 impl Default for CheckpointBlobPublisherConfig {
@@ -273,6 +291,7 @@ impl Default for CheckpointBlobPublisherConfig {
             create_shared_blobs: default_create_shared_blobs(),
             concurrent_publishing_tasks: default_concurrent_publishing_tasks(),
             in_memory_build: default_in_memory_build(),
+            max_concurrent_blob_uploads: default_max_concurrent_blob_uploads(),
         }
     }
 }
@@ -311,6 +330,10 @@ fn default_metrics_address() -> SocketAddr {
 
 fn default_in_memory_build() -> bool {
     true
+}
+
+fn default_max_concurrent_blob_uploads() -> usize {
+    2
 }
 
 fn default_download_to_memory() -> bool {

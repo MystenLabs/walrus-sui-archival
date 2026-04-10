@@ -11,6 +11,8 @@ pub mod checkpoint_blob_extender;
 pub mod checkpoint_blob_publisher;
 pub mod checkpoint_downloader;
 pub mod checkpoint_monitor;
+pub mod checkpoint_proto;
+
 pub mod clear_metadata_blob_id;
 pub mod config;
 pub mod delete_all_shared_archival_blobs;

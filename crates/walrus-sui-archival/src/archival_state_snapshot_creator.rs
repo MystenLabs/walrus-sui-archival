@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_create_and_parse_parquet_file() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         // Create a temporary directory for the test database.
         let temp_dir = TempDir::new().unwrap();

@@ -18,7 +18,6 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use metrics::Metrics;
 use postgres_store::{PostgresPool, SharedPostgresPool};
 use rand::Rng;
@@ -27,7 +26,7 @@ use sui_sdk::{SuiClient, SuiClientBuilder};
 use sui_types::base_types::ObjectID;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
-use walrus_common::fetch_checkpoint_content;
+use walrus_common::fetch_checkpoint_content_proto;
 
 /// Configuration for the caching server.
 #[derive(Debug, Clone)]
@@ -81,44 +80,6 @@ impl Config {
             metadata_pointer_object_id,
             sui_rpc_url,
         }
-    }
-}
-
-/// Helper function to convert Vec<u8> fields in a JSON value to base64 strings.
-/// This recursively processes JSON arrays and objects.
-fn convert_bytes_to_base64(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Array(arr) => {
-            // Check if this is a byte array (array of numbers 0-255).
-            if arr.iter().all(|v| {
-                if let serde_json::Value::Number(n) = v {
-                    n.as_u64().is_some_and(|num| num <= 255)
-                } else {
-                    false
-                }
-            }) && !arr.is_empty()
-            {
-                // Convert to base64 string.
-                let bytes: Vec<u8> = arr
-                    .iter()
-                    .filter_map(|v| v.as_u64().map(|n| n as u8))
-                    .collect();
-                serde_json::Value::String(BASE64.encode(&bytes))
-            } else {
-                // Recursively process array elements.
-                serde_json::Value::Array(arr.into_iter().map(convert_bytes_to_base64).collect())
-            }
-        }
-        serde_json::Value::Object(map) => {
-            // Recursively process object fields.
-            serde_json::Value::Object(
-                map.into_iter()
-                    .map(|(k, v)| (k, convert_bytes_to_base64(v)))
-                    .collect(),
-            )
-        }
-        // Leave other types unchanged.
-        other => other,
     }
 }
 
@@ -316,13 +277,21 @@ impl AppState {
             .iter()
             .find(|e| e.checkpoint_number == checkpoint as i64)?;
 
+        let offset = entry.offset_bytes as u64;
+        let length = entry.length_bytes as u64;
+        let download_url = format!(
+            "https://aggregator.walrus-mainnet.walrus.space/v1/blobs/{}/byte-range?start={}&length={}",
+            blob.blob_id, offset, length
+        );
+
         Some(AppCheckpointInfo {
             checkpoint_number: checkpoint,
             blob_id: blob.blob_id,
             object_id: blob.object_id,
             index,
-            offset: entry.offset_bytes as u64,
-            length: entry.length_bytes as u64,
+            offset,
+            length,
+            download_url,
             content: None, // Content requires fetching from Walrus.
         })
     }
@@ -401,6 +370,8 @@ struct AppCheckpointInfo {
     index: usize,
     offset: u64,
     length: u64,
+    /// Direct URL to download the raw checkpoint bytes from the Walrus aggregator.
+    download_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<serde_json::Value>,
 }
@@ -411,6 +382,23 @@ struct AppCheckpointQuery {
     checkpoint: u64,
     #[serde(default)]
     show_content: bool,
+}
+
+/// Response structure for checkpoint blob info API endpoint.
+/// Returns only the blob location info needed for downstream apps to fetch data directly.
+#[derive(Serialize, Deserialize)]
+struct CheckpointBlobLocation {
+    checkpoint_number: u64,
+    blob_id: String,
+    offset: u64,
+    length: u64,
+    download_url: String,
+}
+
+/// Query parameters for checkpoint blob info endpoint.
+#[derive(Deserialize)]
+struct CheckpointBlobInfoQuery {
+    checkpoint: u64,
 }
 
 /// Request structure for refresh blob end epoch endpoint.
@@ -497,6 +485,7 @@ pub async fn start_server(config: Config, version: &'static str) -> Result<()> {
         )
         .route("/v1/app_blobs", get(proxy_app_blobs))
         .route("/v1/app_checkpoint", get(proxy_app_checkpoint))
+        .route("/v1/checkpoint_blob_info", get(get_checkpoint_blob_info))
         .route(
             "/v1/app_refresh_blob_end_epoch",
             post(proxy_refresh_blob_end_epoch),
@@ -1034,7 +1023,7 @@ async fn proxy_app_checkpoint(
             return Ok(Json(checkpoint_info));
         }
 
-        let checkpoint_data = match fetch_checkpoint_content(
+        let checkpoint_content = match fetch_checkpoint_content_proto(
             &checkpoint_info.blob_id,
             checkpoint_info.offset,
             checkpoint_info.length,
@@ -1058,26 +1047,6 @@ async fn proxy_app_checkpoint(
             }
         };
 
-        // Serialize checkpoint data and convert Vec<u8> fields to base64.
-        let checkpoint_value = match serde_json::to_value(checkpoint_data) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!("failed to serialize checkpoint data: {}", e);
-                state
-                    .metrics
-                    .http_requests_total
-                    .with_label_values(&[endpoint, source, "500"])
-                    .inc();
-                state
-                    .metrics
-                    .http_request_latency_seconds
-                    .with_label_values(&[endpoint, source])
-                    .observe(start_time.elapsed().as_secs_f64());
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
-            }
-        };
-        let checkpoint_value_with_base64 = convert_bytes_to_base64(checkpoint_value);
-
         state
             .metrics
             .http_requests_total
@@ -1096,7 +1065,8 @@ async fn proxy_app_checkpoint(
             index: checkpoint_info.index,
             offset: checkpoint_info.offset,
             length: checkpoint_info.length,
-            content: Some(checkpoint_value_with_base64),
+            download_url: checkpoint_info.download_url,
+            content: Some(checkpoint_content),
         }))
     } else {
         // Backend proxy mode.
@@ -1121,6 +1091,91 @@ async fn proxy_app_checkpoint(
             .observe(start_time.elapsed().as_secs_f64());
 
         result
+    }
+}
+
+/// Handler for /v1/checkpoint_blob_info.
+/// Returns the blob ID and byte range for a given checkpoint, so downstream apps can fetch
+/// the raw checkpoint data directly from the Walrus aggregator.
+async fn get_checkpoint_blob_info(
+    State(state): State<AppState>,
+    Query(params): Query<CheckpointBlobInfoQuery>,
+) -> impl IntoResponse {
+    let start_time = Instant::now();
+    let endpoint = "checkpoint_blob_info";
+    let source = if state.postgres_pool.is_some() {
+        "postgres"
+    } else {
+        "backend"
+    };
+
+    if state.postgres_pool.is_some() {
+        let checkpoint_info = match state
+            .query_checkpoint_from_postgres(params.checkpoint)
+            .await
+        {
+            Some(result) => result,
+            None => {
+                state
+                    .metrics
+                    .http_requests_total
+                    .with_label_values(&[endpoint, source, "404"])
+                    .inc();
+                state
+                    .metrics
+                    .http_request_latency_seconds
+                    .with_label_values(&[endpoint, source])
+                    .observe(start_time.elapsed().as_secs_f64());
+                return Err(StatusCode::NOT_FOUND);
+            }
+        };
+
+        state
+            .metrics
+            .http_requests_total
+            .with_label_values(&[endpoint, source, "200"])
+            .inc();
+        state
+            .metrics
+            .http_request_latency_seconds
+            .with_label_values(&[endpoint, source])
+            .observe(start_time.elapsed().as_secs_f64());
+
+        Ok(Json(CheckpointBlobLocation {
+            checkpoint_number: checkpoint_info.checkpoint_number,
+            blob_id: checkpoint_info.blob_id,
+            offset: checkpoint_info.offset,
+            length: checkpoint_info.length,
+            download_url: checkpoint_info.download_url,
+        }))
+    } else {
+        // Backend proxy mode: query the existing app_checkpoint endpoint without content.
+        let query_string = format!("checkpoint={}", params.checkpoint);
+        let result =
+            proxy_with_cache::<AppCheckpointInfo>(&state, "v1/app_checkpoint", &query_string).await;
+
+        let status = if result.is_ok() { "200" } else { "error" };
+        state
+            .metrics
+            .http_requests_total
+            .with_label_values(&[endpoint, source, status])
+            .inc();
+        state
+            .metrics
+            .http_request_latency_seconds
+            .with_label_values(&[endpoint, source])
+            .observe(start_time.elapsed().as_secs_f64());
+
+        match result {
+            Ok(Json(info)) => Ok(Json(CheckpointBlobLocation {
+                checkpoint_number: info.checkpoint_number,
+                blob_id: info.blob_id,
+                offset: info.offset,
+                length: info.length,
+                download_url: info.download_url,
+            })),
+            Err(e) => Err(e),
+        }
     }
 }
 
