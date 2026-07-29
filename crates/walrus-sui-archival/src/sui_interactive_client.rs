@@ -7,7 +7,7 @@ use anyhow::Result;
 use sui_sdk::wallet_context::WalletContext;
 use sui_types::base_types::SuiAddress;
 use tokio::sync::Mutex;
-use walrus_sdk::{SuiReadClient, client::WalrusNodeClient, sui::client::SuiContractClient};
+use walrus_sdk::{SuiReadClient, node_client::WalrusNodeClient, sui::client::SuiContractClient};
 
 /// A client that wraps both WalrusNodeClient and WalletContext with mutex protection.
 /// This ensures that walrus_client and wallet cannot be used at the same time.

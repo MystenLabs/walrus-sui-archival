@@ -25,7 +25,7 @@ pub async fn clear_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()>
             .path()
             .ok_or_else(|| anyhow::anyhow!("wallet config path is required"))?,
     )?;
-    let sui_client = wallet.get_client().await?;
+    let sui_client = crate::util::build_sui_client_from_wallet(&wallet).await?;
     let active_address = wallet.active_address()?;
 
     tracing::info!("clearing metadata blob id for pointer object");

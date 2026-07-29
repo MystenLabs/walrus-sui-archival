@@ -876,7 +876,8 @@ impl CheckpointBlobPublisher {
                         .with_wallet_async(|wallet| {
                             let blob_oid = object_id;
                             Box::pin(async move {
-                                let sui_client = wallet.get_client().await?;
+                                let sui_client =
+                                    crate::util::build_sui_client_from_wallet(wallet).await?;
                                 let resp = sui_client
                                     .read_api()
                                     .get_object_with_options(
@@ -928,7 +929,7 @@ impl CheckpointBlobPublisher {
                             let blob_object_id = object_id;
 
                             Box::pin(async move {
-                                let sui_client = wallet.get_client().await?;
+                                let sui_client = crate::util::build_sui_client_from_wallet(wallet).await?;
                                 let active_address = wallet.active_address()?;
 
                                 // Fetch AdminCap object to get version and digest.
@@ -1041,8 +1042,18 @@ impl CheckpointBlobPublisher {
                                 );
 
                                 let signed_tx = wallet.sign_transaction(&tx_data).await;
-                                let response =
-                                    wallet.execute_transaction_may_fail(signed_tx).await?;
+                                let response = sui_client
+                                    .quorum_driver_api()
+                                    .execute_transaction_block(
+                                        signed_tx,
+                                        sui_sdk::rpc_types::SuiTransactionBlockResponseOptions::new()
+                                            .with_effects()
+                                            .with_object_changes(),
+                                        Some(
+                                            sui_types::transaction_driver_types::ExecuteTransactionRequestType::WaitForLocalExecution,
+                                        ),
+                                    )
+                                    .await?;
 
                                 // If object_changes is missing from the response, re-query the
                                 // transaction to get them. The tx already succeeded on-chain so

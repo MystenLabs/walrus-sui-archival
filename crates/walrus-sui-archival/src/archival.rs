@@ -10,8 +10,8 @@ use sui_types::messages_checkpoint::CheckpointSequenceNumber;
 use tokio::{select, sync::mpsc};
 use walrus_sdk::{
     SuiReadClient,
-    client::WalrusNodeClient,
     config::ClientConfig,
+    node_client::WalrusNodeClient,
     sui::client::SuiContractClient,
 };
 
@@ -239,32 +239,28 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
         tokio::spawn(async move { blob_publisher.start_v2(blob_publisher_rx).await });
 
     // Start the checkpoint downloader based on the configured type.
-    let (
-        checkpoint_receiver,
-        downloader_pause_tx,
-        watermark_tx,
-        checkpoint_downloading_driver_handle,
-    ) = match &config.checkpoint_downloader {
-        CheckpointDownloaderType::Bucket(downloader_config) => {
-            let downloader = checkpoint_downloader::CheckpointDownloader::new(
-                downloader_config.clone(),
-                metrics.clone(),
-                in_memory_holder.clone(),
-            );
-            let (receiver, pause_tx, handle) = downloader.start(initial_checkpoint).await?;
-            (receiver, Some(pause_tx), None, handle)
-        }
-        CheckpointDownloaderType::IngestionService(downloader_config) => {
-            let downloader =
-                ingestion_service_checkpoint_downloader::IngestionServiceCheckpointDownloader::new(
+    let (checkpoint_receiver, downloader_pause_tx, checkpoint_downloading_driver_handle) =
+        match &config.checkpoint_downloader {
+            CheckpointDownloaderType::Bucket(downloader_config) => {
+                let downloader = checkpoint_downloader::CheckpointDownloader::new(
                     downloader_config.clone(),
                     metrics.clone(),
                     in_memory_holder.clone(),
                 );
-            let (receiver, watermark_tx, handle) = downloader.start(initial_checkpoint).await?;
-            (receiver, None, Some(watermark_tx), handle)
-        }
-    };
+                let (receiver, pause_tx, handle) = downloader.start(initial_checkpoint).await?;
+                (receiver, Some(pause_tx), handle)
+            }
+            CheckpointDownloaderType::IngestionService(downloader_config) => {
+                let downloader =
+                    ingestion_service_checkpoint_downloader::IngestionServiceCheckpointDownloader::new(
+                        downloader_config.clone(),
+                        metrics.clone(),
+                        in_memory_holder.clone(),
+                    );
+                let (receiver, handle) = downloader.start(initial_checkpoint).await?;
+                (receiver, None, handle)
+            }
+        };
 
     // Start the checkpoint monitor with the receiver.
     let mut monitor = checkpoint_monitor::CheckpointMonitor::new(
@@ -275,10 +271,6 @@ async fn run_application_logic(config: Config, version: &'static str) -> Result<
     // Wire the backpressure channel from monitor to downloader.
     if let Some(downloader_pause_tx) = downloader_pause_tx {
         monitor.set_downloader_pause_channel(downloader_pause_tx);
-    }
-    // Wire the watermark channel from monitor to ingestion service.
-    if let Some(watermark_tx) = watermark_tx {
-        monitor.set_watermark_channel(watermark_tx);
     }
     let monitor_handle = monitor.start(initial_checkpoint, checkpoint_receiver);
 

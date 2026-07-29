@@ -125,7 +125,7 @@ impl ArchivalStateSnapshotCreator {
             .sui_interactive_client
             .with_wallet_mut_async(|wallet| {
                 Box::pin(async move {
-                    let sui_client = wallet.get_client().await?;
+                    let sui_client = crate::util::build_sui_client_from_wallet(wallet).await?;
 
                     tracing::info!("updating on-chain metadata pointer");
 

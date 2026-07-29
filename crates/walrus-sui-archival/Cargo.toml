@@ -12,7 +12,7 @@ path = "bin/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-arrow = "52.2"
+arrow = "57.3"
 async-channel.workspace = true
 async-trait.workspace = true
 axum = "0.8"
@@ -21,15 +21,15 @@ tower-http = { version = "0.6", features = ["cors"] }
 bincode.workspace = true
 blob-bundle.workspace = true
 bytes.workspace = true
-chrono = "=0.4.39"
+chrono = "=0.4.44"
 clap.workspace = true
 const-str = "0.5"
 git-version = "0.3.9"
 humantime-serde.workspace = true
 in-memory-checkpoint-holder.workspace = true
 mysten-metrics.workspace = true
-parquet = "52.2"
-prometheus = "0.13.4"
+parquet = "57.3"
+prometheus.workspace = true
 prost.workspace = true
 prost-types.workspace = true
 reqwest.workspace = true
