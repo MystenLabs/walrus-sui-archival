@@ -15,6 +15,7 @@ use in_memory_checkpoint_holder::InMemoryCheckpointHolder;
 use sui_types::{
     Identifier,
     base_types::ObjectID,
+    effects::TransactionEffectsAPI,
     messages_checkpoint::CheckpointSequenceNumber,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     transaction::{ObjectArg, TransactionData, TransactionKind},
@@ -876,17 +877,17 @@ impl CheckpointBlobPublisher {
                         .with_wallet_async(|wallet| {
                             let blob_oid = object_id;
                             Box::pin(async move {
-                                let sui_client =
-                                    crate::util::build_sui_client_from_wallet(wallet).await?;
-                                let resp = sui_client
-                                    .read_api()
-                                    .get_object_with_options(
-                                        blob_oid,
-                                        sui_sdk::rpc_types::SuiObjectDataOptions::new()
-                                            .with_owner(),
-                                    )
-                                    .await?;
-                                Ok(resp.owner().and_then(|o| o.get_owner_address().ok()))
+                                match wallet.get_object_owner(&blob_oid).await {
+                                    Ok(owner_address) => Ok(Some(owner_address)),
+                                    Err(e) => {
+                                        tracing::debug!(
+                                            "finalizer: failed to get owner of blob {}: {}",
+                                            blob_oid,
+                                            e
+                                        );
+                                        Ok(None)
+                                    }
+                                }
                             })
                         })
                         .await?;
@@ -929,33 +930,35 @@ impl CheckpointBlobPublisher {
                             let blob_object_id = object_id;
 
                             Box::pin(async move {
-                                let sui_client = crate::util::build_sui_client_from_wallet(wallet).await?;
                                 let active_address = wallet.active_address()?;
 
                                 // Fetch AdminCap object to get version and digest.
                                 // Retry a few times with delay in case of RPC lag.
                                 let mut admin_cap_ref = None;
                                 for fetch_attempt in 1..=5u64 {
-                                    let admin_cap_obj = sui_client
-                                        .read_api()
-                                        .get_object_with_options(
-                                            admin_cap_object_id_clone,
-                                            sui_sdk::rpc_types::SuiObjectDataOptions::default(),
-                                        )
-                                        .await?;
-                                    if let Some(r) = admin_cap_obj.object_ref_if_exists() {
-                                        admin_cap_ref = Some(r);
-                                        break;
-                                    }
-                                    tracing::warn!(
-                                        "finalizer: admin cap object {} not found (attempt {}/5), retrying after delay",
+                                    match crate::util::get_object_ref(
+                                        wallet,
                                         admin_cap_object_id_clone,
-                                        fetch_attempt,
-                                    );
-                                    tokio::time::sleep(std::time::Duration::from_secs(
-                                        fetch_attempt * 2,
-                                    ))
-                                    .await;
+                                    )
+                                    .await
+                                    {
+                                        Ok(r) => {
+                                            admin_cap_ref = Some(r);
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "finalizer: admin cap object {} not found (attempt {}/5): {}, retrying after delay",
+                                                admin_cap_object_id_clone,
+                                                fetch_attempt,
+                                                e,
+                                            );
+                                            tokio::time::sleep(std::time::Duration::from_secs(
+                                                fetch_attempt * 2,
+                                            ))
+                                            .await;
+                                        }
+                                    }
                                 }
                                 let admin_cap_ref = admin_cap_ref.ok_or_else(|| {
                                     anyhow::anyhow!("admin cap object not found after 5 attempts")
@@ -965,26 +968,25 @@ impl CheckpointBlobPublisher {
                                 // Retry a few times with delay in case of RPC lag.
                                 let mut blob_ref = None;
                                 for fetch_attempt in 1..=5u64 {
-                                    let blob_obj = sui_client
-                                        .read_api()
-                                        .get_object_with_options(
-                                            blob_object_id,
-                                            sui_sdk::rpc_types::SuiObjectDataOptions::default(),
-                                        )
-                                        .await?;
-                                    if let Some(r) = blob_obj.object_ref_if_exists() {
-                                        blob_ref = Some(r);
-                                        break;
+                                    match crate::util::get_object_ref(wallet, blob_object_id).await
+                                    {
+                                        Ok(r) => {
+                                            blob_ref = Some(r);
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "finalizer: blob object {} not found (attempt {}/5): {}, retrying after delay",
+                                                blob_object_id,
+                                                fetch_attempt,
+                                                e,
+                                            );
+                                            tokio::time::sleep(std::time::Duration::from_secs(
+                                                fetch_attempt * 2,
+                                            ))
+                                            .await;
+                                        }
                                     }
-                                    tracing::warn!(
-                                        "finalizer: blob object {} not found (attempt {}/5), retrying after delay",
-                                        blob_object_id,
-                                        fetch_attempt,
-                                    );
-                                    tokio::time::sleep(std::time::Duration::from_secs(
-                                        fetch_attempt * 2,
-                                    ))
-                                    .await;
                                 }
                                 let blob_ref = blob_ref.ok_or_else(|| {
                                     anyhow::anyhow!("blob object {} not found after 5 attempts", blob_object_id)
@@ -1015,135 +1017,66 @@ impl CheckpointBlobPublisher {
                                 );
 
                                 // Get gas payment object.
-                                let coins = sui_client
-                                    .coin_read_api()
-                                    .get_coins(active_address, None, None, None)
-                                    .await?;
-
-                                if coins.data.is_empty() {
-                                    return Err(anyhow::anyhow!(
-                                        "no gas coins available for address {}",
-                                        active_address
-                                    ));
-                                }
-
-                                let gas_coin = &coins.data[0];
-
                                 let gas_budget = 100_000_000; // 0.1 SUI.
-                                let gas_price =
-                                    sui_client.read_api().get_reference_gas_price().await?;
+                                let gas_coin_ref = crate::util::get_gas_coin_ref(
+                                    wallet,
+                                    active_address,
+                                    gas_budget,
+                                )
+                                .await?;
+                                let gas_price = wallet.get_reference_gas_price().await?;
 
                                 let tx_data = TransactionData::new(
                                     TransactionKind::ProgrammableTransaction(pt),
                                     active_address,
-                                    gas_coin.object_ref(),
+                                    gas_coin_ref,
                                     gas_budget,
                                     gas_price,
                                 );
 
-                                let signed_tx = wallet.sign_transaction(&tx_data).await;
-                                let response = sui_client
-                                    .quorum_driver_api()
-                                    .execute_transaction_block(
-                                        signed_tx,
-                                        sui_sdk::rpc_types::SuiTransactionBlockResponseOptions::new()
-                                            .with_effects()
-                                            .with_object_changes(),
-                                        Some(
-                                            sui_types::transaction_driver_types::ExecuteTransactionRequestType::WaitForLocalExecution,
-                                        ),
-                                    )
-                                    .await?;
+                                let response = crate::util::execute_transaction_and_check_status(
+                                    wallet, tx_data,
+                                )
+                                .await?;
+                                let tx_digest = *response.effects.transaction_digest();
 
-                                // If object_changes is missing from the response, re-query the
-                                // transaction to get them. The tx already succeeded on-chain so
-                                // we must not retry the tx itself — only retry the query.
-                                let object_changes = if let Some(changes) = response.object_changes {
-                                    changes
-                                } else {
-                                    tracing::warn!(
-                                        "finalizer: object_changes missing from tx response, re-querying tx {}",
-                                        response.digest
-                                    );
-                                    let mut re_query_result = None;
-                                    for re_query_attempt in 1..=5 {
-                                        tokio::time::sleep(std::time::Duration::from_secs(
-                                            re_query_attempt * 2,
-                                        ))
-                                        .await;
-                                        tracing::info!(
-                                            "finalizer: re-query attempt {}/5 for tx {}",
-                                            re_query_attempt,
-                                            response.digest
-                                        );
-                                        match sui_client
-                                            .read_api()
-                                            .get_transaction_with_options(
-                                                response.digest,
-                                                sui_sdk::rpc_types::SuiTransactionBlockResponseOptions::new()
-                                                    .with_object_changes(),
-                                            )
-                                            .await
-                                        {
-                                            Ok(re_queried)
-                                                if re_queried.object_changes.is_some() =>
-                                            {
-                                                re_query_result =
-                                                    Some(re_queried.object_changes.unwrap());
-                                                break;
-                                            }
-                                            Ok(_) => {
-                                                tracing::warn!(
-                                                    "finalizer: re-query attempt {}/5 returned no object_changes for tx {}",
-                                                    re_query_attempt,
-                                                    response.digest
-                                                );
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!(
-                                                    "finalizer: re-query attempt {}/5 failed for tx {}: {}",
-                                                    re_query_attempt,
-                                                    response.digest,
-                                                    e
-                                                );
-                                            }
-                                        }
-                                    }
-                                    re_query_result.ok_or_else(|| {
-                                        anyhow::anyhow!(
-                                            "object_changes still missing after 5 re-query attempts for tx {}",
-                                            response.digest
-                                        )
-                                    })?
-                                };
-
-                                let created_id = object_changes
-                                    .iter()
-                                    .find_map(|change| {
-                                        if let sui_sdk::rpc_types::ObjectChange::Created {
-                                            object_id,
-                                            object_type,
-                                            ..
-                                        } = change
-                                            && object_type
-                                                .to_string()
-                                                .ends_with(
+                                // Find the created SharedArchivalBlob among the objects created
+                                // by the transaction. Effects do not carry type information, so
+                                // fetch each created object to check its type.
+                                let mut grpc_client = wallet.grpc_client()?;
+                                let mut created_id = None;
+                                for (created_ref, _) in response.effects.created() {
+                                    let created_object_id = created_ref.0;
+                                    match grpc_client.get_object(created_object_id).await {
+                                        Ok(object) => {
+                                            if object.struct_tag().is_some_and(|tag| {
+                                                tag.to_string().ends_with(
                                                     "::archival_blob::SharedArchivalBlob",
                                                 )
-                                        {
-                                            return Some(*object_id);
+                                            }) {
+                                                created_id = Some(created_object_id);
+                                                break;
+                                            }
                                         }
-                                        None
-                                    })
-                                    .ok_or_else(|| {
-                                        anyhow::anyhow!(
-                                            "failed to find SharedArchivalBlob in created objects"
-                                        )
-                                    })?;
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "finalizer: failed to fetch created object {}: {}",
+                                                created_object_id,
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                                let created_id = created_id.ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "failed to find SharedArchivalBlob in created objects, tx digest: {:?}",
+                                        tx_digest
+                                    )
+                                })?;
 
                                 tracing::info!(
                                     "finalizer successfully created shared blob, tx digest: {:?}, shared_blob_id: {}",
-                                    response.digest,
+                                    tx_digest,
                                     created_id
                                 );
 

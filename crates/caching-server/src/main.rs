@@ -5,10 +5,12 @@ use std::net::SocketAddr;
 
 use caching_server::Config;
 use clap::Parser;
-use sui_sdk::SUI_MAINNET_URL;
 use sui_types::base_types::ObjectID;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Default Sui mainnet fullnode url; grpc is served on the same endpoint.
+const SUI_MAINNET_URL: &str = "https://fullnode.mainnet.sui.io:443";
 
 #[derive(Parser, Debug)]
 #[command(name = "caching-server")]

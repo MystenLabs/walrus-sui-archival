@@ -4,15 +4,20 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
+use serde::Deserialize;
 use sui_types::{
     Identifier,
     base_types::ObjectID,
-    object::Owner,
+    effects::TransactionEffectsAPI,
+    object::Object,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     transaction::{ObjectArg, SharedObjectMutability, TransactionData, TransactionKind},
 };
 use tokio::time;
-use walrus_sdk::{SuiReadClient, sui::client::ReadClient};
+use walrus_sdk::{
+    SuiReadClient,
+    sui::{client::ReadClient, types::Blob as WalrusBlob},
+};
 
 use crate::{
     archival_state::ArchivalState,
@@ -21,6 +26,14 @@ use crate::{
     sui_interactive_client::SuiInteractiveClient,
     util::execute_transaction_and_check_status,
 };
+
+/// Mirror of the on-chain `archival_blob::SharedArchivalBlob` struct for BCS decoding.
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct SharedArchivalBlob {
+    id: ObjectID,
+    blob: WalrusBlob,
+}
 
 /// Service that periodically checks and extends blob expiration epochs.
 pub struct CheckpointBlobExtender {
@@ -54,13 +67,35 @@ impl CheckpointBlobExtender {
         }
     }
 
-    /// Build a json-rpc sui client from the interactive client's wallet.
-    async fn build_sui_client(&self) -> Result<sui_sdk::SuiClient> {
+    /// Get a grpc client from the interactive client's wallet.
+    async fn grpc_client(&self) -> Result<sui_rpc_api::Client> {
         self.sui_interactive_client
-            .with_wallet_async(|wallet| {
-                Box::pin(async move { crate::util::build_sui_client_from_wallet(wallet).await })
-            })
+            .with_wallet_async(|wallet| Box::pin(async move { wallet.grpc_client() }))
             .await
+    }
+
+    /// Fetch objects in a batch via grpc, falling back to per-object fetches if the batch
+    /// fails (e.g. when one of the objects no longer exists on-chain).
+    async fn batch_get_objects_with_fallback(
+        &self,
+        grpc_client: &sui_rpc_api::Client,
+        object_ids: &[ObjectID],
+    ) -> Vec<Result<Object>> {
+        match grpc_client.batch_get_objects(object_ids).await {
+            Ok(objects) => objects.into_iter().map(Ok).collect(),
+            Err(e) => {
+                tracing::warn!(
+                    "batch object fetch failed: {}, falling back to per-object fetches",
+                    e
+                );
+                let mut results = Vec::with_capacity(object_ids.len());
+                for object_id in object_ids {
+                    let mut client = grpc_client.clone();
+                    results.push(client.get_object(*object_id).await.map_err(Into::into));
+                }
+                results
+            }
+        }
     }
 
     /// Start the background process that periodically checks and extends blobs.
@@ -285,8 +320,8 @@ impl CheckpointBlobExtender {
         let mut error_count = 0;
         let mut total_processed = 0;
 
-        // Get a json-rpc client for reading blob epochs.
-        let sui_client = self.build_sui_client().await?;
+        // Get a grpc client for reading blob epochs.
+        let grpc_client = self.grpc_client().await?;
 
         // Process blobs in batches.
         let batch_size = 50; // Sui RPC typically supports up to 50 objects per multi_get call.
@@ -333,34 +368,19 @@ impl CheckpointBlobExtender {
             }
 
             // Batch fetch all objects from on-chain.
-            let objects = match sui_client
-                .read_api()
-                .multi_get_object_with_options(
-                    object_ids.clone(),
-                    sui_sdk::rpc_types::SuiObjectDataOptions::new().with_content(),
-                )
-                .await
-            {
-                Ok(objs) => objs,
-                Err(e) => {
-                    tracing::error!("failed to batch fetch objects from on-chain: {}", e);
-                    error_count += valid_blobs.len();
-                    total_processed += valid_blobs.len();
-                    // Wait before retrying next batch.
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    continue;
-                }
-            };
+            let objects = self
+                .batch_get_objects_with_fallback(&grpc_client, &object_ids)
+                .await;
 
             // Process each object and compare epochs.
-            for (i, obj_response) in objects.into_iter().enumerate() {
+            for (i, object_result) in objects.into_iter().enumerate() {
                 total_processed += 1;
                 let (blob_info, blob_id, object_id) = &valid_blobs[i];
 
                 // Extract expiration epoch from object.
-                let on_chain_epoch = match self
-                    .extract_expiration_epoch_from_object(&obj_response, blob_info.is_shared_blob)
-                {
+                let on_chain_epoch = match object_result.and_then(|object| {
+                    self.extract_expiration_epoch_from_object(&object, blob_info.is_shared_blob)
+                }) {
                     Ok(epoch) => epoch,
                     Err(e) => {
                         tracing::error!(
@@ -435,8 +455,8 @@ impl CheckpointBlobExtender {
         let mut error_count = 0;
         let mut total_processed = 0;
 
-        // Get a json-rpc client for reading blob epochs from on-chain.
-        let sui_client = self.build_sui_client().await?;
+        // Get a grpc client for reading blob epochs from on-chain.
+        let grpc_client = self.grpc_client().await?;
 
         // Use cursor-based pagination to loop through all blobs.
         // Batch size for PostgreSQL query and on-chain fetch.
@@ -489,35 +509,20 @@ impl CheckpointBlobExtender {
             }
 
             // Batch fetch all objects from on-chain.
-            let objects = match sui_client
-                .read_api()
-                .multi_get_object_with_options(
-                    object_ids.clone(),
-                    sui_sdk::rpc_types::SuiObjectDataOptions::new().with_content(),
-                )
-                .await
-            {
-                Ok(objs) => objs,
-                Err(e) => {
-                    tracing::error!("failed to batch fetch objects from on-chain: {}", e);
-                    error_count += valid_blobs.len();
-                    total_processed += valid_blobs.len();
-                    // Wait before retrying next batch.
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    continue;
-                }
-            };
+            let objects = self
+                .batch_get_objects_with_fallback(&grpc_client, &object_ids)
+                .await;
 
             // Process each object and compare epochs.
-            for (i, obj_response) in objects.into_iter().enumerate() {
+            for (i, object_result) in objects.into_iter().enumerate() {
                 total_processed += 1;
                 let pg_blob = &valid_blobs[i];
                 let object_id = object_ids[i];
 
                 // Extract expiration epoch from object.
-                let on_chain_epoch = match self
-                    .extract_expiration_epoch_from_object(&obj_response, pg_blob.is_shared_blob)
-                {
+                let on_chain_epoch = match object_result.and_then(|object| {
+                    self.extract_expiration_epoch_from_object(&object, pg_blob.is_shared_blob)
+                }) {
                     Ok(epoch) => epoch,
                     Err(e) => {
                         tracing::error!(
@@ -579,48 +584,22 @@ impl CheckpointBlobExtender {
     /// Extract expiration epoch from a fetched object response.
     fn extract_expiration_epoch_from_object(
         &self,
-        obj_response: &sui_sdk::rpc_types::SuiObjectResponse,
+        object: &Object,
         is_shared_blob: bool,
     ) -> Result<u32> {
-        let obj_data = obj_response
+        let move_object = object
             .data
-            .as_ref()
-            .ok_or_else(|| anyhow!("object data not found"))?;
-
-        let content = obj_data
-            .content
-            .as_ref()
-            .ok_or_else(|| anyhow!("object content not found"))?;
-
-        let fields = match content {
-            sui_sdk::rpc_types::SuiParsedData::MoveObject(obj) => {
-                obj.fields.clone().to_json_value()
-            }
-            _ => return Err(anyhow!("unexpected object type")),
-        };
+            .try_as_move()
+            .ok_or_else(|| anyhow!("object is not a move object"))?;
 
         if is_shared_blob {
-            // SharedArchivalBlob structure: { id, blob: Blob { storage: { end_epoch } } }
-            fields
-                .get("blob")
-                .ok_or_else(|| anyhow!("blob field not found"))?
-                .get("storage")
-                .ok_or_else(|| anyhow!("blob.storage not found"))?
-                .get("end_epoch")
-                .ok_or_else(|| anyhow!("blob.storage.end_epoch not found"))?
-                .as_u64()
-                .map(|v| v as u32)
-                .ok_or_else(|| anyhow!("end_epoch is not a valid u64"))
+            // SharedArchivalBlob structure: { id, blob: Blob { storage: { end_epoch } } }.
+            let shared_blob: SharedArchivalBlob = bcs::from_bytes(move_object.contents())?;
+            Ok(shared_blob.blob.storage.end_epoch)
         } else {
-            // Regular Blob structure: { storage: { end_epoch } }
-            fields
-                .get("storage")
-                .ok_or_else(|| anyhow!("storage not found"))?
-                .get("end_epoch")
-                .ok_or_else(|| anyhow!("storage.end_epoch not found"))?
-                .as_u64()
-                .map(|v| v as u32)
-                .ok_or_else(|| anyhow!("end_epoch is not a valid u64"))
+            // Regular Blob structure: { storage: { end_epoch } }.
+            let blob: WalrusBlob = bcs::from_bytes(move_object.contents())?;
+            Ok(blob.storage.end_epoch)
         }
     }
 
@@ -637,8 +616,7 @@ impl CheckpointBlobExtender {
         loop {
             let result = if is_shared_blob {
                 // For shared blobs, parse the object to get expiration epoch.
-                self.get_shared_blob_expiration_epoch(object_id, sui_read_client.clone())
-                    .await
+                self.get_shared_blob_expiration_epoch(object_id).await
             } else {
                 async {
                     let blob = sui_read_client
@@ -735,51 +713,11 @@ impl CheckpointBlobExtender {
     }
 
     /// Get the expiration epoch of a shared blob by parsing the object.
-    async fn get_shared_blob_expiration_epoch(
-        &self,
-        shared_blob_id: ObjectID,
-        _sui_read_client: Arc<SuiReadClient>,
-    ) -> Result<u32> {
-        // Fetch shared blob object with content.
-        let sui_client = self.build_sui_client().await?;
-        let shared_blob_obj = sui_client
-            .read_api()
-            .get_object_with_options(
-                shared_blob_id,
-                sui_sdk::rpc_types::SuiObjectDataOptions::new().with_content(),
-            )
-            .await?;
-
-        let shared_blob_data = shared_blob_obj
-            .data
-            .ok_or_else(|| anyhow!("shared blob object data not found"))?;
-
-        // Parse the content to get the blob field.
-        let content = shared_blob_data
-            .content
-            .ok_or_else(|| anyhow!("shared blob object content not found"))?;
-
-        // Extract fields from the Move object.
-        let fields = match content {
-            sui_sdk::rpc_types::SuiParsedData::MoveObject(obj) => obj.fields.to_json_value(),
-            _ => return Err(anyhow!("unexpected object type")),
-        };
-
-        // Navigate to blob.storage.end_epoch.
-        // Structure: SharedArchivalBlob { id, blob: Blob { ... } }
-        // Blob contains a storage field with end_epoch.
-        // TODO: use a more generic and robust way to parse the onchain object.
-        let end_epoch = fields
-            .get("blob")
-            .ok_or_else(|| anyhow!("blob field not found"))?
-            .get("storage")
-            .ok_or_else(|| anyhow!("blob.storage not found"))?
-            .get("end_epoch")
-            .ok_or_else(|| anyhow!("blob.storage.end_epoch not found"))?
-            .as_u64()
-            .ok_or_else(|| anyhow!("end_epoch is not a number"))? as u32;
-
-        Ok(end_epoch)
+    async fn get_shared_blob_expiration_epoch(&self, shared_blob_id: ObjectID) -> Result<u32> {
+        // Fetch shared blob object and decode its BCS contents.
+        let mut grpc_client = self.grpc_client().await?;
+        let object = grpc_client.get_object(shared_blob_id).await?;
+        self.extract_expiration_epoch_from_object(&object, true)
     }
 
     /// Extend multiple shared blobs in a batch using a single PTB transaction.
@@ -814,59 +752,23 @@ impl CheckpointBlobExtender {
             .with_wallet_mut_async(|wallet| {
                 let blob_ids = blob_ids.clone();
                 Box::pin(async move {
-                    let sui_client = crate::util::build_sui_client_from_wallet(wallet).await?;
                     let active_address = wallet.active_address()?;
 
                     // Fetch System object to get initial shared version.
-                    let system_obj = sui_client
-                        .read_api()
-                        .get_object_with_options(
-                            system_object_id,
-                            sui_sdk::rpc_types::SuiObjectDataOptions::new()
-                                .with_owner()
-                                .with_previous_transaction(),
-                        )
-                        .await?;
-
-                    let system_data = system_obj
-                        .data
-                        .ok_or_else(|| anyhow!("system object data not found"))?;
-
-                    let system_initial_shared_version = match system_data.owner {
-                        Some(Owner::Shared {
-                            initial_shared_version,
-                        }) => initial_shared_version,
-                        _ => return Err(anyhow!("system object is not a shared object")),
-                    };
+                    let system_initial_shared_version =
+                        crate::util::get_initial_shared_version(wallet, system_object_id).await?;
 
                     // Construct WAL coin type from package ID.
-                    let wal_coin_type = format!("{}::wal::WAL", wal_token_package_id);
+                    let wal_coin_type: sui_types::TypeTag =
+                        format!("{}::wal::WAL", wal_token_package_id).parse()?;
 
-                    // Get WAL coins for payment.
-                    let wal_coins = sui_client
-                        .coin_read_api()
-                        .get_coins(active_address, Some(wal_coin_type), None, None)
-                        .await?;
-
-                    if wal_coins.data.is_empty() {
-                        return Err(anyhow!(
-                            "no WAL coins available for address {}",
-                            active_address
-                        ));
-                    }
-
-                    // Get SUI coins for gas.
-                    let sui_coins = sui_client
-                        .coin_read_api()
-                        .get_coins(active_address, None, None, None)
-                        .await?;
-
-                    if sui_coins.data.is_empty() {
-                        return Err(anyhow!(
-                            "no SUI coins available for address {}",
-                            active_address
-                        ));
-                    }
+                    // Get a WAL coin for payment.
+                    let payment_coin_ref = crate::util::get_one_coin_ref_of_type(
+                        wallet,
+                        active_address,
+                        wal_coin_type,
+                    )
+                    .await?;
 
                     // Build programmable transaction.
                     let mut ptb = ProgrammableTransactionBuilder::new();
@@ -879,7 +781,6 @@ impl CheckpointBlobExtender {
                     })?;
 
                     // Create payment coin argument (shared once for all calls).
-                    let payment_coin_ref = wal_coins.data[0].object_ref();
                     let payment_arg = ptb.obj(ObjectArg::ImmOrOwnedObject(payment_coin_ref))?;
 
                     // Create extend_epochs argument (shared once for all calls).
@@ -888,31 +789,9 @@ impl CheckpointBlobExtender {
                     // For each blob, fetch its initial shared version and add a move call.
                     for shared_blob_id in &blob_ids {
                         // Fetch shared blob object to get initial shared version.
-                        let shared_blob_obj = sui_client
-                            .read_api()
-                            .get_object_with_options(
-                                *shared_blob_id,
-                                sui_sdk::rpc_types::SuiObjectDataOptions::new()
-                                    .with_owner()
-                                    .with_previous_transaction(),
-                            )
-                            .await?;
-
-                        let shared_blob_data = shared_blob_obj
-                            .data
-                            .ok_or_else(|| anyhow!("shared blob object data not found"))?;
-
-                        let shared_blob_initial_shared_version = match shared_blob_data.owner {
-                            Some(Owner::Shared {
-                                initial_shared_version,
-                            }) => initial_shared_version,
-                            _ => {
-                                return Err(anyhow!(
-                                    "shared blob object {} is not a shared object",
-                                    shared_blob_id
-                                ))
-                            }
-                        };
+                        let shared_blob_initial_shared_version =
+                            crate::util::get_initial_shared_version(wallet, *shared_blob_id)
+                                .await?;
 
                         // Create shared blob argument for this call.
                         let shared_blob_arg = ptb.obj(ObjectArg::SharedObject {
@@ -942,15 +821,14 @@ impl CheckpointBlobExtender {
 
                     // Create transaction data.
                     let gas_budget = 1_000_000_000; // 1 SUI for batch operations.
-                    let gas_price = sui_client.read_api().get_reference_gas_price().await?;
-
-                    // Use the first SUI coin for gas.
-                    let gas_coin = &sui_coins.data[0];
+                    let gas_coin_ref =
+                        crate::util::get_gas_coin_ref(wallet, active_address, gas_budget).await?;
+                    let gas_price = wallet.get_reference_gas_price().await?;
 
                     let tx_data = TransactionData::new(
                         TransactionKind::ProgrammableTransaction(pt),
                         active_address,
-                        gas_coin.object_ref(),
+                        gas_coin_ref,
                         gas_budget,
                         gas_price,
                     );
@@ -960,7 +838,7 @@ impl CheckpointBlobExtender {
                     tracing::info!(
                         "successfully extended batch of {} shared blobs, tx digest: {:?}",
                         blob_ids.len(),
-                        response.digest
+                        response.effects.transaction_digest()
                     );
 
                     Ok(())

@@ -36,6 +36,7 @@ serde_json = "1.0.145"
 serde_yaml = "0.9"
 sui-indexer-alt-framework = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.75.1" }
 sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = "43c5bc13202ae398b1519a3eead1f40df8ca277b" }
+sui-rpc-api = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.75.1" }
 sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.75.1" }
 sui-storage = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.75.1" }
 sui-types = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.75.1" }
