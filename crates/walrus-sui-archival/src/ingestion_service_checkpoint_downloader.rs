@@ -6,20 +6,26 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_channel::Receiver;
 use in_memory_checkpoint_holder::InMemoryCheckpointHolder;
-use sui_indexer_alt_framework::ingestion::IngestionService;
+use sui_indexer_alt_framework::ingestion::{
+    IngestionService,
+    ingestion_client::CheckpointEnvelope,
+};
 use sui_storage::blob::Blob;
 use sui_types::{
     full_checkpoint_content::{Checkpoint, CheckpointData},
     messages_checkpoint::CheckpointSequenceNumber,
 };
 use tokio::{fs, select, sync, task};
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     checkpoint_downloader::CheckpointInfo,
     config::IngestionServiceCheckpointDownloaderConfig,
     metrics::Metrics,
 };
+
+/// Capacity of the bounded subscriber channel to the ingestion service. The channel acts as
+/// the backpressure signal: when the consumer falls behind, ingestion throttles fetching.
+const SUBSCRIBER_CHANNEL_SIZE: usize = 64;
 
 /// Guard that decrements active worker count when dropped.
 struct WorkerGuard {
@@ -213,11 +219,7 @@ impl IngestionServiceCheckpointDownloader {
     pub async fn start(
         mut self,
         initial_checkpoint: CheckpointSequenceNumber,
-    ) -> Result<(
-        sync::mpsc::Receiver<CheckpointInfo>,
-        sync::mpsc::UnboundedSender<(&'static str, CheckpointSequenceNumber)>,
-        task::JoinHandle<()>,
-    )> {
+    ) -> Result<(sync::mpsc::Receiver<CheckpointInfo>, task::JoinHandle<()>)> {
         tracing::info!(
             "starting ingestion service checkpoint downloader from checkpoint {} with {} workers",
             initial_checkpoint,
@@ -231,20 +233,16 @@ impl IngestionServiceCheckpointDownloader {
         self.cleanup_temp_files().await?;
 
         // Create the IngestionService.
-        let cancel = CancellationToken::new();
         let mut ingestion_service = IngestionService::new(
             self.config.to_client_args(),
             self.config.ingestion_config.clone(),
             None,
             &self.metrics.registry,
-            cancel.clone(),
         )?;
 
-        // Subscribe to the ingestion service.
-        let (checkpoint_rx, watermark_tx) = ingestion_service.subscribe();
-
-        // Set initial watermark prevent downloading too many checkpoints at beginning.
-        watermark_tx.send(("checkpoint_monitor", initial_checkpoint))?;
+        // Subscribe to the ingestion service. The bounded channel acts as the backpressure
+        // signal: when the consumer falls behind, ingestion throttles fetch concurrency.
+        let checkpoint_rx = ingestion_service.subscribe_bounded(SUBSCRIBER_CHANNEL_SIZE);
 
         // Create channels for worker communication.
         // TODO: apply this to the CheckpointDownloader if needed.
@@ -252,7 +250,7 @@ impl IngestionServiceCheckpointDownloader {
         let (result_tx, result_rx) = sync::mpsc::channel::<CheckpointInfo>(100);
 
         // Start the ingestion service.
-        let ingestion_service_handle = ingestion_service.run(initial_checkpoint.., None).await?;
+        let ingestion_service = ingestion_service.run(initial_checkpoint..).await?;
 
         // Start workers to process checkpoints.
         for worker_id in 0..self.num_workers {
@@ -287,7 +285,7 @@ impl IngestionServiceCheckpointDownloader {
         // This waits for any task to complete, allowing fast failure detection.
         let joined_handle = tokio::spawn(async move {
             select! {
-                result = ingestion_service_handle => {
+                result = ingestion_service.main() => {
                     tracing::info!("ingestion service task completed: {:?}", result);
                     if let Err(e) = result {
                         tracing::error!("ingestion service task failed: {}", e);
@@ -302,19 +300,19 @@ impl IngestionServiceCheckpointDownloader {
             }
         });
 
-        // Return the receiver for the CheckpointMonitor to consume, watermark sender, and the join handle.
-        Ok((result_rx, watermark_tx, joined_handle))
+        // Return the receiver for the CheckpointMonitor to consume, and the join handle.
+        Ok((result_rx, joined_handle))
     }
 
     async fn checkpoint_driver(
-        mut checkpoint_rx: sync::mpsc::Receiver<Arc<Checkpoint>>,
+        mut checkpoint_rx: sync::mpsc::Receiver<Arc<CheckpointEnvelope>>,
         download_tx: async_channel::Sender<Arc<Checkpoint>>,
     ) -> Result<()> {
         loop {
             // Receive checkpoint from ingestion service.
             match checkpoint_rx.recv().await {
-                Some(checkpoint_data) => {
-                    if let Err(e) = download_tx.send(checkpoint_data).await {
+                Some(envelope) => {
+                    if let Err(e) = download_tx.send(envelope.checkpoint.clone()).await {
                         tracing::debug!("failed to send checkpoint to workers: {}", e);
                         break;
                     }

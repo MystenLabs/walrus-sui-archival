@@ -54,6 +54,15 @@ impl CheckpointBlobExtender {
         }
     }
 
+    /// Build a json-rpc sui client from the interactive client's wallet.
+    async fn build_sui_client(&self) -> Result<sui_sdk::SuiClient> {
+        self.sui_interactive_client
+            .with_wallet_async(|wallet| {
+                Box::pin(async move { crate::util::build_sui_client_from_wallet(wallet).await })
+            })
+            .await
+    }
+
     /// Start the background process that periodically checks and extends blobs.
     pub async fn start(self) -> Result<()> {
         tracing::info!("starting checkpoint blob extender service");
@@ -276,8 +285,8 @@ impl CheckpointBlobExtender {
         let mut error_count = 0;
         let mut total_processed = 0;
 
-        // Get a read client for reading blob epoch.
-        let sui_read_client = self.sui_interactive_client.get_sui_read_client().await;
+        // Get a json-rpc client for reading blob epochs.
+        let sui_client = self.build_sui_client().await?;
 
         // Process blobs in batches.
         let batch_size = 50; // Sui RPC typically supports up to 50 objects per multi_get call.
@@ -324,10 +333,10 @@ impl CheckpointBlobExtender {
             }
 
             // Batch fetch all objects from on-chain.
-            let objects = match sui_read_client
-                .retriable_sui_client()
+            let objects = match sui_client
+                .read_api()
                 .multi_get_object_with_options(
-                    &object_ids,
+                    object_ids.clone(),
                     sui_sdk::rpc_types::SuiObjectDataOptions::new().with_content(),
                 )
                 .await
@@ -426,8 +435,8 @@ impl CheckpointBlobExtender {
         let mut error_count = 0;
         let mut total_processed = 0;
 
-        // Get a read client for reading blob epochs from on-chain.
-        let sui_read_client = self.sui_interactive_client.get_sui_read_client().await;
+        // Get a json-rpc client for reading blob epochs from on-chain.
+        let sui_client = self.build_sui_client().await?;
 
         // Use cursor-based pagination to loop through all blobs.
         // Batch size for PostgreSQL query and on-chain fetch.
@@ -480,10 +489,10 @@ impl CheckpointBlobExtender {
             }
 
             // Batch fetch all objects from on-chain.
-            let objects = match sui_read_client
-                .retriable_sui_client()
+            let objects = match sui_client
+                .read_api()
                 .multi_get_object_with_options(
-                    &object_ids,
+                    object_ids.clone(),
                     sui_sdk::rpc_types::SuiObjectDataOptions::new().with_content(),
                 )
                 .await
@@ -729,11 +738,12 @@ impl CheckpointBlobExtender {
     async fn get_shared_blob_expiration_epoch(
         &self,
         shared_blob_id: ObjectID,
-        sui_read_client: Arc<SuiReadClient>,
+        _sui_read_client: Arc<SuiReadClient>,
     ) -> Result<u32> {
         // Fetch shared blob object with content.
-        let shared_blob_obj = sui_read_client
-            .retriable_sui_client()
+        let sui_client = self.build_sui_client().await?;
+        let shared_blob_obj = sui_client
+            .read_api()
             .get_object_with_options(
                 shared_blob_id,
                 sui_sdk::rpc_types::SuiObjectDataOptions::new().with_content(),
@@ -804,7 +814,7 @@ impl CheckpointBlobExtender {
             .with_wallet_mut_async(|wallet| {
                 let blob_ids = blob_ids.clone();
                 Box::pin(async move {
-                    let sui_client = wallet.get_client().await?;
+                    let sui_client = crate::util::build_sui_client_from_wallet(wallet).await?;
                     let active_address = wallet.active_address()?;
 
                     // Fetch System object to get initial shared version.

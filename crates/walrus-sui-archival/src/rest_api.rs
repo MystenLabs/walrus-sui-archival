@@ -22,7 +22,7 @@ use sui_types::{
 use tower_http::cors::CorsLayer;
 use walrus_common::fetch_checkpoint_content_proto;
 use walrus_core::{BlobId, encoding::Primary};
-use walrus_sdk::{ObjectID, SuiReadClient, client::WalrusNodeClient};
+use walrus_sdk::{ObjectID, SuiReadClient, node_client::WalrusNodeClient};
 
 use crate::{
     archival_state::{ArchivalState, proto},

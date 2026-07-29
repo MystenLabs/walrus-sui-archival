@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use prometheus::{Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, Opts, Registry};
 use sui_indexer_alt_framework::metrics::IndexerMetrics;
-use walrus_sdk::{client::metrics::ClientMetrics, core_utils::metrics::Registry as WalrusRegistry};
+use walrus_sdk::{
+    core_utils::metrics::Registry as WalrusRegistry,
+    node_client::metrics::ClientMetrics,
+};
 
 /// Metrics for the walrus-sui-archival service.
 pub struct Metrics {

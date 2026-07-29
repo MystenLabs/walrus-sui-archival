@@ -16,7 +16,7 @@ use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksOptions};
 use sui_types::{base_types::ObjectID, messages_checkpoint::CheckpointSequenceNumber};
 use tokio::task::JoinHandle;
 use walrus_core::{BlobId, Epoch, encoding::Primary};
-use walrus_sdk::{SuiReadClient, client::WalrusNodeClient};
+use walrus_sdk::{SuiReadClient, node_client::WalrusNodeClient};
 
 use crate::{
     metrics::Metrics,

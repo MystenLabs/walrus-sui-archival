@@ -152,10 +152,7 @@ impl IngestionServiceCheckpointDownloaderConfig {
         ClientArgs {
             ingestion: IngestionClientArgs {
                 remote_store_url: Some(self.remote_store_url.clone()),
-                local_ingestion_path: None,
-                rpc_api_url: None,
-                rpc_username: None,
-                rpc_password: None,
+                ..Default::default()
             },
             streaming: StreamingClientArgs {
                 streaming_url: None,

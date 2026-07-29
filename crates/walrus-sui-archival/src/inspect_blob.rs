@@ -12,7 +12,7 @@ use walrus_core::{
     BlobId,
     encoding::{ConsistencyCheckType, Primary},
 };
-use walrus_sdk::{client::WalrusNodeClient, config::ClientConfig};
+use walrus_sdk::{config::ClientConfig, node_client::WalrusNodeClient};
 
 /// Inspect a blob - either from a local file or by fetching from Walrus.
 ///

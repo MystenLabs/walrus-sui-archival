@@ -5,8 +5,17 @@ use std::{path::Path, time::Duration};
 
 use anyhow::Result;
 use sui_sdk::{
-    rpc_types::{SuiTransactionBlockEffectsAPI, SuiTransactionBlockResponse},
-    types::base_types::ObjectID as SuiObjectID,
+    SuiClient,
+    SuiClientBuilder,
+    rpc_types::{
+        SuiTransactionBlockEffectsAPI,
+        SuiTransactionBlockResponse,
+        SuiTransactionBlockResponseOptions,
+    },
+    types::{
+        base_types::ObjectID as SuiObjectID,
+        transaction_driver_types::ExecuteTransactionRequestType,
+    },
     wallet_context::WalletContext,
 };
 use sui_types::{base_types::SuiAddress, transaction::TransactionData};
@@ -14,8 +23,8 @@ use walrus_core::{BlobId, Epoch};
 use walrus_sdk::{
     ObjectID,
     SuiReadClient,
-    client::{StoreArgs, StoreBlobsApi, WalrusNodeClient, responses::BlobStoreResult},
     config::ClientConfig,
+    node_client::{StoreArgs, StoreBlobsApi, WalrusNodeClient, responses::BlobStoreResult},
     store_optimizations::StoreOptimizations,
     sui::client::{BlobPersistence, PostStoreAction, SuiContractClient},
 };
@@ -203,7 +212,7 @@ pub async fn fetch_metadata_blob_id(
             .ok_or_else(|| anyhow::anyhow!("wallet config path is required"))?,
     )?;
 
-    let sui_client = wallet.get_client().await?;
+    let sui_client = crate::util::build_sui_client_from_wallet(&wallet).await?;
 
     walrus_common::fetch_metadata_blob_id_from_sui_client(&sui_client, metadata_pointer_object_id)
         .await
@@ -371,6 +380,15 @@ pub async fn initialize_walrus_read_client(
     Ok(walrus_read_client)
 }
 
+/// Build a json-rpc sui client from the wallet's active environment.
+///
+/// The wallet context no longer exposes a json-rpc client directly, so build one
+/// from the active environment's rpc url.
+pub async fn build_sui_client_from_wallet(wallet: &WalletContext) -> Result<SuiClient> {
+    let rpc_url = wallet.get_active_env()?.rpc.clone();
+    Ok(SuiClientBuilder::default().build(&rpc_url).await?)
+}
+
 /// Execute a transaction and check if it succeeded.
 ///
 /// Returns the transaction response if it succeeded.
@@ -378,8 +396,19 @@ pub async fn execute_transaction_and_check_status(
     wallet: &WalletContext,
     tx_data: TransactionData,
 ) -> Result<SuiTransactionBlockResponse> {
+    let sui_client = build_sui_client_from_wallet(wallet).await?;
     let signed_tx = wallet.sign_transaction(&tx_data).await;
-    let response = wallet.execute_transaction_may_fail(signed_tx).await?;
+    let response = sui_client
+        .quorum_driver_api()
+        .execute_transaction_block(
+            signed_tx,
+            SuiTransactionBlockResponseOptions::new()
+                .with_effects()
+                .with_events()
+                .with_object_changes(),
+            Some(ExecuteTransactionRequestType::WaitForLocalExecution),
+        )
+        .await?;
 
     if response.effects.is_none() {
         return Err(anyhow::anyhow!(
