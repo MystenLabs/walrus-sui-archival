@@ -22,7 +22,7 @@ use metrics::Metrics;
 use postgres_store::{PostgresPool, SharedPostgresPool};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sui_sdk::{SuiClient, SuiClientBuilder};
+use sui_rpc_api::Client as SuiGrpcClient;
 use sui_types::base_types::ObjectID;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
@@ -100,8 +100,8 @@ struct AppState {
     cache_freshness_duration: Duration,
     /// PostgreSQL connection pool for direct database queries.
     postgres_pool: Option<SharedPostgresPool>,
-    /// Sui client for fetching metadata blob ID from on-chain.
-    sui_client: SuiClient,
+    /// Sui grpc client for fetching metadata blob ID from on-chain.
+    sui_client: SuiGrpcClient,
     /// Metadata pointer object ID.
     metadata_pointer_object_id: ObjectID,
     /// Metrics for tracking server operations.
@@ -130,8 +130,9 @@ impl AppState {
         };
 
         // Fetch metadata blob ID from on-chain.
-        let metadata_blob_id = walrus_common::fetch_metadata_blob_id_from_sui_client(
-            &self.sui_client,
+        let mut sui_client = self.sui_client.clone();
+        let metadata_blob_id = walrus_common::fetch_metadata_blob_id_from_grpc(
+            &mut sui_client,
             self.metadata_pointer_object_id,
         )
         .await
@@ -452,9 +453,7 @@ pub async fn start_server(config: Config, version: &'static str) -> Result<()> {
         None
     };
 
-    let sui_client = SuiClientBuilder::default()
-        .build(config.sui_rpc_url)
-        .await?;
+    let sui_client = SuiGrpcClient::new(config.sui_rpc_url)?;
 
     let app_state = AppState {
         backend_url: config.backend_url.clone(),

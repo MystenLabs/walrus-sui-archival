@@ -10,6 +10,7 @@ use sui_sdk::wallet_context::WalletContext;
 use sui_types::{
     Identifier,
     base_types::ObjectID,
+    effects::TransactionEffectsAPI,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     transaction::{ObjectArg, SharedObjectMutability, TransactionData, TransactionKind},
 };
@@ -36,7 +37,6 @@ pub async fn delete_all_shared_archival_blobs(
             .path()
             .ok_or_else(|| anyhow::anyhow!("wallet config path is required"))?,
     )?;
-    let sui_client = crate::util::build_sui_client_from_wallet(&wallet).await?;
     let active_address = wallet.active_address()?;
 
     tracing::info!("deleting all shared archival blobs");
@@ -126,47 +126,14 @@ pub async fn delete_all_shared_archival_blobs(
         );
 
         // Fetch admin cap object to get version and digest.
-        let admin_cap_obj = sui_client
-            .read_api()
-            .get_object_with_options(
-                admin_cap_id,
-                sui_sdk::rpc_types::SuiObjectDataOptions::default(),
-            )
-            .await?;
-        let admin_cap_ref = admin_cap_obj
-            .object_ref_if_exists()
-            .ok_or_else(|| anyhow::anyhow!("admin cap object not found"))?;
+        let admin_cap_ref = crate::util::get_object_ref(&wallet, admin_cap_id).await?;
 
         // Fetch all shared blob objects in this batch.
         let mut blob_data = Vec::new();
         for shared_blob_id in batch {
-            let shared_blob_obj_result = sui_client
-                .read_api()
-                .get_object_with_options(
-                    *shared_blob_id,
-                    sui_sdk::rpc_types::SuiObjectDataOptions::new().with_owner(),
-                )
-                .await;
-
-            match shared_blob_obj_result {
-                Ok(shared_blob_obj) => {
-                    if let Some(data) = shared_blob_obj.data {
-                        match data.owner {
-                            Some(sui_types::object::Owner::Shared {
-                                initial_shared_version,
-                            }) => {
-                                blob_data.push((*shared_blob_id, initial_shared_version));
-                            }
-                            _ => {
-                                tracing::warn!(
-                                    "blob {} is not a shared object, skipping",
-                                    shared_blob_id
-                                );
-                            }
-                        }
-                    } else {
-                        tracing::warn!("blob {} has no data, skipping", shared_blob_id);
-                    }
+            match crate::util::get_initial_shared_version(&wallet, *shared_blob_id).await {
+                Ok(initial_shared_version) => {
+                    blob_data.push((*shared_blob_id, initial_shared_version));
                 }
                 Err(e) => {
                     tracing::warn!("failed to get blob {}: {}, skipping", shared_blob_id, e);
@@ -210,29 +177,16 @@ pub async fn delete_all_shared_archival_blobs(
             blob_data.len()
         );
 
-        // Get gas payment object.
-        let coins = sui_client
-            .coin_read_api()
-            .get_coins(active_address, None, None, None)
-            .await?;
-
-        if coins.data.is_empty() {
-            return Err(anyhow::anyhow!(
-                "no gas coins available for address {}",
-                active_address
-            ));
-        }
-
-        let gas_coin = &coins.data[0];
-
         // Create transaction data with larger gas budget for batch.
         let gas_budget = 500_000_000; // 0.5 SUI for batch operations.
-        let gas_price = sui_client.read_api().get_reference_gas_price().await?;
+        let gas_coin_ref =
+            crate::util::get_gas_coin_ref(&wallet, active_address, gas_budget).await?;
+        let gas_price = wallet.get_reference_gas_price().await?;
 
         let tx_data = TransactionData::new(
             TransactionKind::ProgrammableTransaction(pt),
             active_address,
-            gas_coin.object_ref(),
+            gas_coin_ref,
             gas_budget,
             gas_price,
         );
@@ -245,7 +199,7 @@ pub async fn delete_all_shared_archival_blobs(
             "successfully deleted batch {} ({} blobs), tx digest: {:?}",
             batch_index + 1,
             blob_data.len(),
-            response.digest
+            response.effects.transaction_digest()
         );
     }
 

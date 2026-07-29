@@ -3,12 +3,13 @@
 
 use std::path::Path;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use sui_sdk::wallet_context::WalletContext;
 use sui_types::{
     Identifier,
+    TypeTag,
     base_types::ObjectID,
-    object::Owner,
+    effects::TransactionEffectsAPI,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     transaction::{ObjectArg, SharedObjectMutability, TransactionData, TransactionKind},
 };
@@ -32,7 +33,6 @@ pub async fn extend_shared_blob(
             .path()
             .ok_or_else(|| anyhow::anyhow!("wallet config path is required"))?,
     )?;
-    let sui_client = crate::util::build_sui_client_from_wallet(&wallet).await?;
     let active_address = wallet.active_address()?;
 
     tracing::info!(
@@ -46,77 +46,19 @@ pub async fn extend_shared_blob(
     let wal_token_package_id = config.archival_state_snapshot.wal_token_package_id;
 
     // Fetch System object to get initial shared version.
-    let system_obj = sui_client
-        .read_api()
-        .get_object_with_options(
-            system_object_id,
-            sui_sdk::rpc_types::SuiObjectDataOptions::new()
-                .with_owner()
-                .with_previous_transaction(),
-        )
-        .await?;
-
-    let system_data = system_obj
-        .data
-        .ok_or_else(|| anyhow!("system object data not found"))?;
-
-    let system_initial_shared_version = match system_data.owner {
-        Some(Owner::Shared {
-            initial_shared_version,
-        }) => initial_shared_version,
-        _ => return Err(anyhow!("system object is not a shared object")),
-    };
+    let system_initial_shared_version =
+        crate::util::get_initial_shared_version(&wallet, system_object_id).await?;
 
     // Fetch shared blob object to get initial shared version.
-    let shared_blob_obj = sui_client
-        .read_api()
-        .get_object_with_options(
-            shared_blob_id,
-            sui_sdk::rpc_types::SuiObjectDataOptions::new()
-                .with_owner()
-                .with_previous_transaction(),
-        )
-        .await?;
-
-    let shared_blob_data = shared_blob_obj
-        .data
-        .ok_or_else(|| anyhow!("shared blob object data not found"))?;
-
-    let shared_blob_initial_shared_version = match shared_blob_data.owner {
-        Some(Owner::Shared {
-            initial_shared_version,
-        }) => initial_shared_version,
-        _ => return Err(anyhow!("shared blob object is not a shared object")),
-    };
+    let shared_blob_initial_shared_version =
+        crate::util::get_initial_shared_version(&wallet, shared_blob_id).await?;
 
     // Construct WAL coin type from package ID.
-    let wal_coin_type = format!("{}::wal::WAL", wal_token_package_id);
+    let wal_coin_type: TypeTag = format!("{}::wal::WAL", wal_token_package_id).parse()?;
 
-    // Get WAL coins for payment.
-    let wal_coins = sui_client
-        .coin_read_api()
-        .get_coins(active_address, Some(wal_coin_type), None, None)
-        .await?;
-
-    if wal_coins.data.is_empty() {
-        return Err(anyhow!(
-            "no WAL coins available for address {}",
-            active_address
-        ));
-    }
-
-    // Get SUI coins for gas.
-    let sui_coins = sui_client
-        .coin_read_api()
-        .get_coins(active_address, None, None, None)
-        .await?;
-
-    if sui_coins.data.is_empty() {
-        return Err(anyhow!(
-            "no SUI coins available for address {}",
-            active_address
-        ));
-    }
+    // Get a WAL coin for payment.
+    let payment_coin_ref =
+        crate::util::get_one_coin_ref_of_type(&wallet, active_address, wal_coin_type).await?;
 
     // Build programmable transaction.
     let mut ptb = ProgrammableTransactionBuilder::new();
@@ -135,8 +77,6 @@ pub async fn extend_shared_blob(
     let extend_epochs_arg = ptb.pure(extend_epochs)?;
 
     // Create a mutable payment coin argument using WAL tokens.
-    // We'll use the first WAL coin and make it mutable.
-    let payment_coin_ref = wal_coins.data[0].object_ref();
     let payment_arg = ptb.obj(ObjectArg::ImmOrOwnedObject(payment_coin_ref))?;
 
     // Call extend_shared_blob_using_token function.
@@ -159,15 +99,13 @@ pub async fn extend_shared_blob(
 
     // Create transaction data.
     let gas_budget = 500_000_000; // 0.5 SUI.
-    let gas_price = sui_client.read_api().get_reference_gas_price().await?;
-
-    // Use the first SUI coin for gas.
-    let gas_coin = &sui_coins.data[0];
+    let gas_coin_ref = crate::util::get_gas_coin_ref(&wallet, active_address, gas_budget).await?;
+    let gas_price = wallet.get_reference_gas_price().await?;
 
     let tx_data = TransactionData::new(
         TransactionKind::ProgrammableTransaction(pt),
         active_address,
-        gas_coin.object_ref(),
+        gas_coin_ref,
         gas_budget,
         gas_price,
     );
@@ -177,14 +115,17 @@ pub async fn extend_shared_blob(
     tracing::info!(
         "successfully extended shared blob {}, tx digest: {:?}",
         shared_blob_id,
-        response.digest
+        response.effects.transaction_digest()
     );
 
     println!(
         "successfully extended shared blob {} by {} epochs",
         shared_blob_id, extend_epochs
     );
-    println!("transaction digest: {:?}", response.digest);
+    println!(
+        "transaction digest: {:?}",
+        response.effects.transaction_digest()
+    );
 
     Ok(())
 }

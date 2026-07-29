@@ -19,6 +19,7 @@ use rocksdb::IteratorMode;
 use sui_types::{
     Identifier,
     base_types::SuiAddress,
+    effects::TransactionEffectsAPI,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     transaction::{ObjectArg, SharedObjectMutability, TransactionData, TransactionKind},
 };
@@ -125,22 +126,10 @@ impl ArchivalStateSnapshotCreator {
             .sui_interactive_client
             .with_wallet_mut_async(|wallet| {
                 Box::pin(async move {
-                    let sui_client = crate::util::build_sui_client_from_wallet(wallet).await?;
-
                     tracing::info!("updating on-chain metadata pointer");
 
                     // fetch admin cap object to get version and digest.
-                    let admin_cap_obj = sui_client
-                        .read_api()
-                        .get_object_with_options(
-                            admin_cap_id,
-                            sui_sdk::rpc_types::SuiObjectDataOptions::default(),
-                        )
-                        .await?;
-
-                    let admin_cap_ref = admin_cap_obj
-                        .object_ref_if_exists()
-                        .expect("admin cap object must exist");
+                    let admin_cap_ref = crate::util::get_object_ref(wallet, admin_cap_id).await?;
 
                     // convert blob_id to 32-byte vector.
                     let blob_id_bytes = blob_id.0.to_vec();
@@ -174,29 +163,16 @@ impl ArchivalStateSnapshotCreator {
                         blob_id
                     );
 
-                    // get gas payment object.
-                    let coins = sui_client
-                        .coin_read_api()
-                        .get_coins(active_address, None, None, None)
-                        .await?;
-
-                    if coins.data.is_empty() {
-                        return Err(anyhow::anyhow!(
-                            "no gas coins available for address {}",
-                            active_address
-                        ));
-                    }
-
-                    let gas_coin = &coins.data[0];
-
                     // create transaction data.
                     let gas_budget = 100_000_000; // 0.1 SUI.
-                    let gas_price = sui_client.read_api().get_reference_gas_price().await?;
+                    let gas_coin_ref =
+                        crate::util::get_gas_coin_ref(wallet, active_address, gas_budget).await?;
+                    let gas_price = wallet.get_reference_gas_price().await?;
 
                     let tx_data = TransactionData::new(
                         TransactionKind::ProgrammableTransaction(pt),
                         active_address,
-                        gas_coin.object_ref(),
+                        gas_coin_ref,
                         gas_budget,
                         gas_price,
                     );
@@ -206,7 +182,7 @@ impl ArchivalStateSnapshotCreator {
                     tracing::info!(
                         "successfully updated metadata pointer for blob_id: {}, tx digest: {:?}",
                         blob_id,
-                        response.digest
+                        response.effects.transaction_digest()
                     );
 
                     Ok(())

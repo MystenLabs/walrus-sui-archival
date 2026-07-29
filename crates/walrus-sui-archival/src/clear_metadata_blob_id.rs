@@ -7,6 +7,7 @@ use anyhow::Result;
 use sui_sdk::wallet_context::WalletContext;
 use sui_types::{
     Identifier,
+    effects::TransactionEffectsAPI,
     programmable_transaction_builder::ProgrammableTransactionBuilder,
     transaction::{ObjectArg, SharedObjectMutability, TransactionData, TransactionKind},
 };
@@ -25,7 +26,6 @@ pub async fn clear_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()>
             .path()
             .ok_or_else(|| anyhow::anyhow!("wallet config path is required"))?,
     )?;
-    let sui_client = crate::util::build_sui_client_from_wallet(&wallet).await?;
     let active_address = wallet.active_address()?;
 
     tracing::info!("clearing metadata blob id for pointer object");
@@ -35,17 +35,7 @@ pub async fn clear_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()>
     let admin_cap_id = config.archival_state_snapshot.admin_cap_object_id;
 
     // fetch admin cap object to get version and digest.
-    let admin_cap_obj = sui_client
-        .read_api()
-        .get_object_with_options(
-            admin_cap_id,
-            sui_sdk::rpc_types::SuiObjectDataOptions::default(),
-        )
-        .await?;
-
-    let admin_cap_ref = admin_cap_obj
-        .object_ref_if_exists()
-        .ok_or_else(|| anyhow::anyhow!("admin cap object not found"))?;
+    let admin_cap_ref = crate::util::get_object_ref(&wallet, admin_cap_id).await?;
 
     // build programmable transaction.
     let mut ptb = ProgrammableTransactionBuilder::new();
@@ -78,29 +68,15 @@ pub async fn clear_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()>
         admin_cap_id
     );
 
-    // get gas payment object.
-    let coins = sui_client
-        .coin_read_api()
-        .get_coins(active_address, None, None, None)
-        .await?;
-
-    if coins.data.is_empty() {
-        return Err(anyhow::anyhow!(
-            "no gas coins available for address {}",
-            active_address
-        ));
-    }
-
-    let gas_coin = &coins.data[0];
-
     // create transaction data.
     let gas_budget = 100_000_000; // 0.1 SUI.
-    let gas_price = sui_client.read_api().get_reference_gas_price().await?;
+    let gas_coin_ref = crate::util::get_gas_coin_ref(&wallet, active_address, gas_budget).await?;
+    let gas_price = wallet.get_reference_gas_price().await?;
 
     let tx_data = TransactionData::new(
         TransactionKind::ProgrammableTransaction(pt),
         active_address,
-        gas_coin.object_ref(),
+        gas_coin_ref,
         gas_budget,
         gas_price,
     );
@@ -109,10 +85,13 @@ pub async fn clear_metadata_blob_id(config_path: impl AsRef<Path>) -> Result<()>
 
     tracing::info!(
         "successfully cleared metadata pointer, tx digest: {:?}",
-        response.digest
+        response.effects.transaction_digest()
     );
 
-    println!("transaction digest: {:?}", response.digest);
+    println!(
+        "transaction digest: {:?}",
+        response.effects.transaction_digest()
+    );
     println!("successfully cleared blob ID from metadata pointer");
 
     Ok(())

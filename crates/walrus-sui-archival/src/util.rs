@@ -4,21 +4,16 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::Result;
-use sui_sdk::{
-    SuiClient,
-    SuiClientBuilder,
-    rpc_types::{
-        SuiTransactionBlockEffectsAPI,
-        SuiTransactionBlockResponse,
-        SuiTransactionBlockResponseOptions,
-    },
-    types::{
-        base_types::ObjectID as SuiObjectID,
-        transaction_driver_types::ExecuteTransactionRequestType,
-    },
-    wallet_context::WalletContext,
+use sui_rpc_api::client::ExecutedTransaction;
+use sui_sdk::{types::base_types::ObjectID as SuiObjectID, wallet_context::WalletContext};
+use sui_types::{
+    TypeTag,
+    base_types::{ObjectRef, SequenceNumber, SuiAddress},
+    coin::Coin,
+    effects::TransactionEffectsAPI,
+    object::Owner,
+    transaction::TransactionData,
 };
-use sui_types::{base_types::SuiAddress, transaction::TransactionData};
 use walrus_core::{BlobId, Epoch};
 use walrus_sdk::{
     ObjectID,
@@ -212,9 +207,9 @@ pub async fn fetch_metadata_blob_id(
             .ok_or_else(|| anyhow::anyhow!("wallet config path is required"))?,
     )?;
 
-    let sui_client = crate::util::build_sui_client_from_wallet(&wallet).await?;
+    let mut grpc_client = wallet.grpc_client()?;
 
-    walrus_common::fetch_metadata_blob_id_from_sui_client(&sui_client, metadata_pointer_object_id)
+    walrus_common::fetch_metadata_blob_id_from_grpc(&mut grpc_client, metadata_pointer_object_id)
         .await
 }
 
@@ -380,48 +375,72 @@ pub async fn initialize_walrus_read_client(
     Ok(walrus_read_client)
 }
 
-/// Build a json-rpc sui client from the wallet's active environment.
-///
-/// The wallet context no longer exposes a json-rpc client directly, so build one
-/// from the active environment's rpc url.
-pub async fn build_sui_client_from_wallet(wallet: &WalletContext) -> Result<SuiClient> {
-    let rpc_url = wallet.get_active_env()?.rpc.clone();
-    Ok(SuiClientBuilder::default().build(&rpc_url).await?)
+/// Get the object reference of an object via the wallet's grpc client.
+pub async fn get_object_ref(wallet: &WalletContext, object_id: SuiObjectID) -> Result<ObjectRef> {
+    wallet.get_object_ref(object_id).await
 }
 
-/// Execute a transaction and check if it succeeded.
+/// Get the initial shared version of a shared object via the wallet's grpc client.
+pub async fn get_initial_shared_version(
+    wallet: &WalletContext,
+    object_id: SuiObjectID,
+) -> Result<SequenceNumber> {
+    let object = wallet.grpc_client()?.get_object(object_id).await?;
+    match object.owner() {
+        Owner::Shared {
+            initial_shared_version,
+        } => Ok(*initial_shared_version),
+        _ => Err(anyhow::anyhow!(
+            "object {} is not a shared object",
+            object_id
+        )),
+    }
+}
+
+/// Get a gas coin reference owned by the address with balance covering the gas budget.
+pub async fn get_gas_coin_ref(
+    wallet: &WalletContext,
+    address: SuiAddress,
+    gas_budget: u64,
+) -> Result<ObjectRef> {
+    let (_, gas_object) = wallet
+        .gas_for_owner_budget(address, gas_budget, std::collections::BTreeSet::new())
+        .await?;
+    Ok(gas_object.compute_object_reference())
+}
+
+/// Get one coin of the given type owned by the address via the wallet's grpc client.
+pub async fn get_one_coin_ref_of_type(
+    wallet: &WalletContext,
+    address: SuiAddress,
+    coin_type: TypeTag,
+) -> Result<ObjectRef> {
+    let page = wallet
+        .grpc_client()?
+        .get_owned_objects(address, Some(Coin::type_(coin_type.clone())), Some(1), None)
+        .await?;
+    let object = page
+        .items
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("no coins of type {} for address {}", coin_type, address))?;
+    Ok(object.compute_object_reference())
+}
+
+/// Execute a transaction via the wallet's grpc client and check if it succeeded.
 ///
-/// Returns the transaction response if it succeeded.
+/// Returns the executed transaction if it succeeded.
 pub async fn execute_transaction_and_check_status(
     wallet: &WalletContext,
     tx_data: TransactionData,
-) -> Result<SuiTransactionBlockResponse> {
-    let sui_client = build_sui_client_from_wallet(wallet).await?;
+) -> Result<ExecutedTransaction> {
     let signed_tx = wallet.sign_transaction(&tx_data).await;
-    let response = sui_client
-        .quorum_driver_api()
-        .execute_transaction_block(
-            signed_tx,
-            SuiTransactionBlockResponseOptions::new()
-                .with_effects()
-                .with_events()
-                .with_object_changes(),
-            Some(ExecuteTransactionRequestType::WaitForLocalExecution),
-        )
-        .await?;
+    let response = wallet.execute_transaction_may_fail(signed_tx).await?;
 
-    if response.effects.is_none() {
-        return Err(anyhow::anyhow!(
-            "transaction execution failed: effects not found, tx digest: {:?}",
-            response.digest
-        ));
-    }
-
-    if response.effects.as_ref().unwrap().status().is_err() {
+    if response.effects.status().is_err() {
         return Err(anyhow::anyhow!(
             "transaction execution failed: status error: {:?}, tx digest: {:?}",
-            response.effects.unwrap().status(),
-            response.digest
+            response.effects.status(),
+            response.effects.transaction_digest()
         ));
     }
 
