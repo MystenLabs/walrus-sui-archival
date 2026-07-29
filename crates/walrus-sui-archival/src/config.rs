@@ -144,6 +144,11 @@ pub struct IngestionServiceCheckpointDownloaderConfig {
     /// Configuration for the ingestion service.
     #[serde(default)]
     pub ingestion_config: IngestionConfig,
+
+    /// Capacity of the bounded subscriber channel to the ingestion service. The channel acts
+    /// as the backpressure signal: when the consumer falls behind, ingestion throttles fetching.
+    #[serde(default = "default_subscriber_channel_size")]
+    pub subscriber_channel_size: usize,
 }
 
 impl IngestionServiceCheckpointDownloaderConfig {
@@ -191,6 +196,10 @@ fn default_thread_pool_size() -> usize {
 
 fn default_num_workers() -> usize {
     20
+}
+
+fn default_subscriber_channel_size() -> usize {
+    64
 }
 
 fn default_downloaded_checkpoint_dir() -> PathBuf {
