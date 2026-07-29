@@ -23,10 +23,6 @@ use crate::{
     metrics::Metrics,
 };
 
-/// Capacity of the bounded subscriber channel to the ingestion service. The channel acts as
-/// the backpressure signal: when the consumer falls behind, ingestion throttles fetching.
-const SUBSCRIBER_CHANNEL_SIZE: usize = 64;
-
 /// Guard that decrements active worker count when dropped.
 struct WorkerGuard {
     metrics: Arc<Metrics>,
@@ -242,7 +238,8 @@ impl IngestionServiceCheckpointDownloader {
 
         // Subscribe to the ingestion service. The bounded channel acts as the backpressure
         // signal: when the consumer falls behind, ingestion throttles fetch concurrency.
-        let checkpoint_rx = ingestion_service.subscribe_bounded(SUBSCRIBER_CHANNEL_SIZE);
+        let checkpoint_rx =
+            ingestion_service.subscribe_bounded(self.config.subscriber_channel_size);
 
         // Create channels for worker communication.
         // TODO: apply this to the CheckpointDownloader if needed.
@@ -352,6 +349,7 @@ mod tests {
             downloaded_checkpoint_dir: temp_dir.path().to_path_buf(),
             remote_store_url: Url::parse("https://example.com/bucket/").unwrap(),
             ingestion_config: IngestionConfig::default(),
+            subscriber_channel_size: 64,
         };
         let downloader =
             IngestionServiceCheckpointDownloader::new(config.clone(), create_test_metrics(), None);
