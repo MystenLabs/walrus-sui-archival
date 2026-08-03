@@ -1,0 +1,162 @@
+name: Update Walrus and Sui
+
+# Weekly check for a new Walrus testnet release. When one is found, update the
+# Walrus tags AND the Sui tags to the Sui version that Walrus release pins (the
+# two must stay paired, otherwise duplicate incompatible sui-types crates end up
+# in the build), align the sui-rust-sdk rev and the chrono exact pin, and open a
+# pull request with the changes.
+
+on:
+  schedule:
+    # Every Monday at 09:00 UTC.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Use a PAT if configured so that CI workflows run on the created PR;
+          # PRs created with the default GITHUB_TOKEN do not trigger CI.
+          token: ${{ secrets.UPDATE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Check for a new walrus release
+        id: check
+        run: |
+          LATEST=$(git ls-remote --tags https://github.com/MystenLabs/walrus.git "refs/tags/testnet-v*" \
+            | awk -F/ '{print $3}' | grep -v '\^{}' | sort -V | tail -1)
+          CURRENT=$(grep -m1 'MystenLabs/walrus' Cargo.toml | grep -oE 'testnet-v[0-9]+\.[0-9]+\.[0-9]+')
+          echo "latest walrus release: $LATEST, current pin: $CURRENT"
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+
+          if [ "$LATEST" = "$CURRENT" ]; then
+            echo "already on the latest walrus release, nothing to do"
+            echo "update_needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Skip if an update branch for this release already exists.
+          if git ls-remote --exit-code origin "refs/heads/auto/update-walrus-$LATEST" > /dev/null 2>&1; then
+            echo "branch auto/update-walrus-$LATEST already exists, skipping"
+            echo "update_needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "update_needed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Update dependency pins
+        id: update
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          LATEST="${{ steps.check.outputs.latest }}"
+
+          # The Sui version and sui-rust-sdk rev must match what this walrus
+          # release pins in its own Cargo.toml.
+          curl -sfL "https://raw.githubusercontent.com/MystenLabs/walrus/$LATEST/Cargo.toml" -o /tmp/walrus-manifest.toml
+          SUI_TAG=$(grep -m1 -E 'mysten-metrics.*MystenLabs/sui' /tmp/walrus-manifest.toml | grep -oE 'testnet-v[0-9]+\.[0-9]+\.[0-9]+')
+          SUI_SDK_REV=$(grep -m1 -E '^sui-rpc\b.*sui-rust-sdk' /tmp/walrus-manifest.toml | grep -oE '[0-9a-f]{40}')
+          CHRONO_VER=$(grep -m1 -E '^chrono = "=' /tmp/walrus-manifest.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+          if [ -z "$SUI_TAG" ] || [ -z "$SUI_SDK_REV" ]; then
+            echo "failed to extract sui tag or sui-rust-sdk rev from walrus manifest" >&2
+            exit 1
+          fi
+          echo "walrus: $LATEST, sui: $SUI_TAG, sui-rust-sdk rev: $SUI_SDK_REV, chrono: ${CHRONO_VER:-unchanged}"
+          echo "sui_tag=$SUI_TAG" >> "$GITHUB_OUTPUT"
+
+          sed -i -E "s|(MystenLabs/walrus\.git\", tag = \")testnet-v[0-9.]+|\1$LATEST|g" Cargo.toml
+          sed -i -E "s|(MystenLabs/sui\", tag = \")testnet-v[0-9.]+|\1$SUI_TAG|g" Cargo.toml
+          sed -i -E "s|(sui-rust-sdk\.git\", rev = \")[0-9a-f]+|\1$SUI_SDK_REV|g" Cargo.toml
+
+          # Walrus pins chrono exactly; our exact pins must match it.
+          if [ -n "$CHRONO_VER" ]; then
+            sed -i -E "s|^chrono = \"=[0-9.]+\"|chrono = \"=$CHRONO_VER\"|" crates/*/Cargo.toml
+          fi
+
+          git diff --stat
+
+      - name: Install rust toolchain
+        if: steps.check.outputs.update_needed == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        if: steps.check.outputs.update_needed == 'true'
+        uses: Swatinem/rust-cache@v2
+
+      - name: Update lockfile
+        id: lockfile
+        if: steps.check.outputs.update_needed == 'true'
+        continue-on-error: true
+        run: cargo update
+
+      - name: Check build
+        id: build
+        if: steps.check.outputs.update_needed == 'true' && steps.lockfile.outcome == 'success'
+        continue-on-error: true
+        run: cargo check --all-targets --all-features
+
+      - name: Add changelog entry
+        if: steps.check.outputs.update_needed == 'true'
+        run: |
+          LATEST="${{ steps.check.outputs.latest }}"
+          SUI_TAG="${{ steps.update.outputs.sui_tag }}"
+          awk -v entry="- Updated Walrus to $LATEST and Sui to $SUI_TAG (automated weekly update)." '
+            {print}
+            /^## \[Unreleased\]/ {print ""; print "### Changed"; print ""; print entry}
+          ' CHANGELOG.md > /tmp/changelog.md && mv /tmp/changelog.md CHANGELOG.md
+
+      - name: Create pull request
+        if: steps.check.outputs.update_needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.UPDATE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST="${{ steps.check.outputs.latest }}"
+          SUI_TAG="${{ steps.update.outputs.sui_tag }}"
+          BRANCH="auto/update-walrus-$LATEST"
+
+          if [ "${{ steps.lockfile.outcome }}" != "success" ]; then
+            BUILD_STATUS="❌ \`cargo update\` failed — the lockfile could not be resolved and was not updated. Manual dependency migration is needed."
+          elif [ "${{ steps.build.outcome }}" = "success" ]; then
+            BUILD_STATUS="✅ \`cargo update\` and \`cargo check --all-targets --all-features\` both passed."
+          else
+            BUILD_STATUS="❌ \`cargo update\` passed but \`cargo check\` failed — upstream API changes likely need a manual migration."
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "chore: update walrus to $LATEST and sui to $SUI_TAG"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "chore: update walrus to $LATEST and sui to $SUI_TAG" \
+            --head "$BRANCH" \
+            --body "## Summary
+
+          Automated weekly dependency update.
+
+          - **walrus**: → \`$LATEST\`
+          - **sui**: → \`$SUI_TAG\` (the version walrus $LATEST pins; the pair must stay in sync)
+          - **sui-rust-sdk** rev and the exact \`chrono\` pin aligned to walrus.
+
+          ## Build status
+
+          $BUILD_STATUS
+
+          ## If the build is broken
+
+          Known follow-ups from past updates that may be needed:
+          - \`arrow\`/\`parquet\` and \`prometheus\` versions must match Sui's own Cargo.lock at the new tag.
+          - \`allocative\` may need \`cargo update -p allocative --precise <version-from-sui-lock>\` if \`starlark_map\` fails to build.
+          - diesel's \`num-bigint\` lock edge can mislink when two num-bigint majors are present.
+          - Upstream API changes may require code migration.
+
+          Note: if this PR was created with the default \`GITHUB_TOKEN\`, CI does not run automatically — close and reopen the PR to trigger it, or configure an \`UPDATE_BOT_TOKEN\` secret."

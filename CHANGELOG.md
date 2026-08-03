@@ -12,6 +12,12 @@ release process.
 
 ## [Unreleased]
 
+### Added
+
+- Weekly automated workflow that checks for a new Walrus testnet release and
+  opens a PR updating Walrus and Sui (paired to the Sui version that Walrus
+  release pins) (#24).
+
 ## [0.1.0] - 2026-07-29
 
 Initial release.
