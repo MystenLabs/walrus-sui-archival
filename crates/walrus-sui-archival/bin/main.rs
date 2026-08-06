@@ -326,10 +326,10 @@ fn main() -> Result<()> {
             runtime.block_on(async {
                 let pool = PostgresPool::new(&database_url)?;
 
-                // Run migrations first to ensure the blob_size column exists
+                // Run migrations first to ensure the blob_size column exists.
                 pool.run_migrations().await?;
 
-                // Get count of blobs to backfill
+                // Get count of blobs to backfill.
                 let blobs_without_size = pool.get_blobs_without_size().await?;
                 let total = blobs_without_size.len();
 
@@ -339,7 +339,7 @@ fn main() -> Result<()> {
                     );
                 }
 
-                // Run the backfill
+                // Run the backfill.
                 let updated = pool.backfill_blob_sizes().await?;
                 tracing::info!("blob_size backfill complete: {} records updated", updated);
 

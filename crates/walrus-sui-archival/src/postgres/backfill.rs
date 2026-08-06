@@ -29,7 +29,7 @@ fn convert_to_pg_models(
         hex::encode(object_id_bytes)
     };
 
-    // Calculate blob_size as sum of all length_bytes from index entries
+    // Calculate blob_size as sum of all length_bytes from index entries.
     let blob_size: u64 = blob_info.index_entries.iter().map(|e| e.length).sum();
 
     let pg_blob_info = NewCheckpointBlobInfo::from_proto(

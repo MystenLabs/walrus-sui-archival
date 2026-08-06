@@ -128,7 +128,7 @@ impl ArchivalState {
             let blob_id_str = blob_id.to_string();
             let object_id_str = object_id.to_string();
 
-            // Calculate blob_size as sum of all length_bytes from index entries
+            // Calculate blob_size as sum of all length_bytes from index entries.
             let blob_size: u64 = index_entries.iter().map(|e| e.length).sum();
 
             let pg_blob_info = NewCheckpointBlobInfo::from_proto(

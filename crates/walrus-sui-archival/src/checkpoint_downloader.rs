@@ -431,16 +431,16 @@ mod tests {
             "Failed to read test checkpoint data. Make sure test_data/checkpoint_1.chk exists",
         );
 
-        // Deserialize, modify checkpoint number, and re-serialize
+        // Deserialize, modify checkpoint number, and re-serialize.
         let mut checkpoint_data = Blob::from_bytes::<CheckpointData>(&checkpoint_bytes)
             .expect("Failed to deserialize test checkpoint data");
 
-        // Modify the checkpoint number in the summary
-        // We need to access the inner data of the envelope
+        // Modify the checkpoint number in the summary.
+        // We need to access the inner data of the envelope.
         let summary = checkpoint_data.checkpoint_summary.data_mut_for_testing();
         summary.sequence_number = checkpoint_number;
 
-        // Serialize back to bytes
+        // Serialize back to bytes.
         Blob::encode(&checkpoint_data, BlobEncoding::Bcs)
             .expect("Failed to serialize modified checkpoint data")
             .to_bytes()
@@ -501,8 +501,8 @@ mod tests {
         // Verify result.
         let checkpoint_info = result_rx.recv().await.unwrap();
         assert_eq!(checkpoint_info.checkpoint_number, checkpoint_number);
-        // The actual epoch and timestamp will come from the real checkpoint data
-        // Just verify the timestamp is reasonable
+        // The actual epoch and timestamp will come from the real checkpoint data.
+        // Just verify the timestamp is reasonable.
         assert!(checkpoint_info.timestamp_ms > 0);
         assert_eq!(checkpoint_info.checkpoint_byte_size, checkpoint_bytes.len());
 
