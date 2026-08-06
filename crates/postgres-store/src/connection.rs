@@ -71,7 +71,7 @@ impl PostgresPool {
         .await
         .map_err(|e| anyhow::anyhow!("Interact error: {}", e))??;
 
-        tracing::info!("Database migrations completed successfully");
+        tracing::info!("database migrations completed successfully");
         Ok(())
     }
 
