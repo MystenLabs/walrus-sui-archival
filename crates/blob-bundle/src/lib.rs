@@ -56,23 +56,23 @@ use bytes::Bytes;
 use crc32fast::Hasher;
 use thiserror::Error;
 
-/// Current version of the format
+/// Current version of the format.
 const FORMAT_VERSION: u32 = 1;
 
-/// Byte sizes for serialized types
+/// Byte sizes for serialized types.
 const MAGIC_SIZE: usize = std::mem::size_of::<[u8; 4]>();
 const VERSION_SIZE: usize = std::mem::size_of::<u32>();
 const U32_SIZE: usize = std::mem::size_of::<u32>();
 const U64_SIZE: usize = std::mem::size_of::<u64>();
 const CRC32_SIZE: usize = std::mem::size_of::<u32>();
 
-/// Magic number for the blob bundle header
+/// Magic number for the blob bundle header.
 const HEADER_MAGIC: [u8; MAGIC_SIZE] = [0x57, 0x4C, 0x42, 0x44]; // "WLBD"
 
-/// Magic number for the blob bundle footer
+/// Magic number for the blob bundle footer.
 const FOOTER_MAGIC: [u8; MAGIC_SIZE] = [0x44, 0x42, 0x4C, 0x57]; // "DBLW" (reversed)
 
-/// Error types for blob bundle operations
+/// Error types for blob bundle operations.
 #[derive(Debug, Error)]
 pub enum BlobBundleError {
     #[error("Invalid magic number in header")]
@@ -107,10 +107,10 @@ pub enum BlobBundleError {
     Io(#[from] io::Error),
 }
 
-/// Result type for blob bundle operations
+/// Result type for blob bundle operations.
 pub type Result<T> = std::result::Result<T, BlobBundleError>;
 
-/// Header structure for the blob bundle format
+/// Header structure for the blob bundle format.
 #[derive(Debug, Clone)]
 struct Header {
     magic: [u8; MAGIC_SIZE],
@@ -155,7 +155,7 @@ impl Header {
     }
 }
 
-/// Index entry for each data segment
+/// Index entry for each data segment.
 #[derive(Debug, Clone)]
 pub struct IndexEntry {
     pub id: String,
@@ -213,7 +213,7 @@ impl IndexEntry {
     }
 }
 
-/// Footer structure for the blob bundle format
+/// Footer structure for the blob bundle format.
 #[derive(Debug, Clone)]
 struct Footer {
     magic: [u8; MAGIC_SIZE],
@@ -242,7 +242,7 @@ impl Footer {
         }
     }
 
-    /// Validates that the footer's CRC32 checksum matches the calculated value
+    /// Validates that the footer's CRC32 checksum matches the calculated value.
     pub fn validate_crc32(&self) -> Result<()> {
         let mut hasher = Hasher::new();
         hasher.update(&self.magic);
@@ -326,14 +326,14 @@ pub trait BlobBundleBuilderTrait {
     fn get_data(self) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send;
 }
 
-/// Result of building a blob bundle to a file
+/// Result of building a blob bundle to a file.
 #[derive(Debug)]
 pub struct BlobBundleBuildResult {
-    /// Path to the created blob bundle file
+    /// Path to the created blob bundle file.
     pub file_path: PathBuf,
-    /// Map of id to (offset, length) in insertion order
+    /// Map of id to (offset, length) in insertion order.
     pub index_map: Vec<(String, (u64, u64))>,
-    /// Total size of the blob bundle file
+    /// Total size of the blob bundle file.
     pub total_size: u64,
 }
 
@@ -376,14 +376,14 @@ impl BlobBundleBuilderTrait for BlobBundleInMemoryBuildResult {
     }
 }
 
-/// Builder for creating blob bundle with the specified format
+/// Builder for creating blob bundle with the specified format.
 #[derive(Debug)]
 pub struct BlobBundleBuilder {
     n_shards: NonZeroU16,
 }
 
 impl BlobBundleBuilder {
-    /// Create a new builder with the specified number of shards
+    /// Create a new builder with the specified number of shards.
     pub fn new(n_shards: NonZeroU16) -> Self {
         Self { n_shards }
     }
@@ -841,7 +841,7 @@ impl Default for BlobBundleBuilder {
     }
 }
 
-/// Reader for blob bundle format with lazy index parsing
+/// Reader for blob bundle format with lazy index parsing.
 #[derive(Debug)]
 pub struct BlobBundleReader {
     data: Bytes,
@@ -852,7 +852,7 @@ pub struct BlobBundleReader {
 }
 
 impl BlobBundleReader {
-    /// Create a new reader from blob bundle bytes
+    /// Create a new reader from blob bundle bytes.
     ///
     /// This method validates:
     /// - Header magic number matches expected value
@@ -902,7 +902,7 @@ impl BlobBundleReader {
         })
     }
 
-    /// Parse the index if it hasn't been parsed yet
+    /// Parse the index if it hasn't been parsed yet.
     fn ensure_index_parsed(&self) -> Result<()> {
         if self.index.borrow().is_some() {
             return Ok(());
@@ -940,7 +940,7 @@ impl BlobBundleReader {
         Ok(())
     }
 
-    /// Get data by ID
+    /// Get data by ID.
     pub fn get(&self, id: &str) -> Result<Bytes> {
         self.ensure_index_parsed()?;
 
@@ -993,7 +993,7 @@ impl BlobBundleReader {
         Ok(ids.clone())
     }
 
-    /// Get index entry by ID
+    /// Get index entry by ID.
     pub fn get_entry(&self, id: &str) -> Result<Option<IndexEntry>> {
         self.ensure_index_parsed()?;
 
@@ -1056,7 +1056,7 @@ impl BlobBundleReader {
         Ok(self.data.slice(start..end))
     }
 
-    /// Get the total size of the blob bundle
+    /// Get the total size of the blob bundle.
     pub fn total_size(&self) -> usize {
         self.data.len()
     }
