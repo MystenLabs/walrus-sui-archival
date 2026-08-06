@@ -85,7 +85,7 @@ impl PostgresPool {
 
         conn.interact(move |conn| {
             conn.transaction::<_, diesel::result::Error, _>(|conn| {
-                // Insert the blob info
+                // Insert the blob info.
                 diesel::insert_into(checkpoint_blob_info::table)
                     .values(&blob_info)
                     .on_conflict(checkpoint_blob_info::start_checkpoint)
@@ -103,13 +103,13 @@ impl PostgresPool {
                     ))
                     .execute(conn)?;
 
-                // Delete existing index entries for this blob (in case of update)
+                // Delete existing index entries for this blob (in case of update).
                 diesel::delete(checkpoint_index_entry::table.filter(
                     checkpoint_index_entry::start_checkpoint.eq(blob_info.start_checkpoint),
                 ))
                 .execute(conn)?;
 
-                // Insert index entries in batches
+                // Insert index entries in batches.
                 if !index_entries.is_empty() {
                     for chunk in index_entries.chunks(1000) {
                         diesel::insert_into(checkpoint_index_entry::table)
@@ -226,7 +226,7 @@ impl PostgresPool {
         let conn = self.pool.get().await.context("Failed to get connection")?;
 
         conn.interact(move |conn| {
-            // Index entries are deleted via CASCADE
+            // Index entries are deleted via CASCADE.
             diesel::delete(
                 checkpoint_blob_info::table
                     .filter(checkpoint_blob_info::start_checkpoint.ge(from_checkpoint)),
@@ -300,8 +300,8 @@ impl PostgresPool {
         let conn = self.pool.get().await.context("Failed to get connection")?;
 
         conn.interact(|conn| {
-            // Use raw SQL for aggregate query
-            // Cast SUM result to BIGINT to avoid NUMERIC type issues
+            // Use raw SQL for aggregate query.
+            // Cast SUM result to BIGINT to avoid NUMERIC type issues.
             diesel::sql_query(
                 "SELECT
                     COUNT(*)::BIGINT as blob_count,
@@ -381,11 +381,11 @@ impl PostgresPool {
 
         conn.interact(move |conn| {
             conn.transaction::<_, diesel::result::Error, _>(|conn| {
-                // Collect all blob infos for batch insert
+                // Collect all blob infos for batch insert.
                 let blob_infos: Vec<&NewCheckpointBlobInfo> =
                     records.iter().map(|(info, _)| info).collect();
 
-                // Batch insert blob infos with upsert
+                // Batch insert blob infos with upsert.
                 for chunk in blob_infos.chunks(100) {
                     for blob_info in chunk {
                         diesel::insert_into(checkpoint_blob_info::table)
@@ -407,13 +407,13 @@ impl PostgresPool {
                     }
                 }
 
-                // Collect all start_checkpoints for deleting old index entries
+                // Collect all start_checkpoints for deleting old index entries.
                 let start_checkpoints: Vec<i64> = records
                     .iter()
                     .map(|(info, _)| info.start_checkpoint)
                     .collect();
 
-                // Delete existing index entries for all blobs in batch
+                // Delete existing index entries for all blobs in batch.
                 diesel::delete(
                     checkpoint_index_entry::table.filter(
                         checkpoint_index_entry::start_checkpoint.eq_any(&start_checkpoints),
@@ -421,7 +421,7 @@ impl PostgresPool {
                 )
                 .execute(conn)?;
 
-                // Collect all index entries and batch insert
+                // Collect all index entries and batch insert.
                 let all_index_entries: Vec<&NewCheckpointIndexEntry> = records
                     .iter()
                     .flat_map(|(_, entries)| entries.iter())
@@ -459,7 +459,7 @@ impl PostgresPool {
         let conn = self.pool.get().await.context("Failed to get connection")?;
 
         conn.interact(|conn| {
-            // Use a single UPDATE query with a subquery to compute all blob_sizes at once
+            // Use a single UPDATE query with a subquery to compute all blob_sizes at once.
             diesel::sql_query(
                 "UPDATE checkpoint_blob_info SET blob_size = subquery.total_size
                  FROM (
