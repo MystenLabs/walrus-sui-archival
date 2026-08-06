@@ -1072,6 +1072,7 @@ mod tests {
 
     #[test]
     fn test_blob_bundle_roundtrip() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Create temporary directory for test files
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -1131,6 +1132,7 @@ mod tests {
 
     #[test]
     fn test_invalid_crc() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Create temporary directory for test files
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -1164,6 +1166,7 @@ mod tests {
 
     #[test]
     fn test_empty_builder() {
+        let _ = tracing_subscriber::fmt::try_init();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("empty.blob");
 
@@ -1182,6 +1185,7 @@ mod tests {
 
     #[test]
     fn test_entry_not_found() {
+        let _ = tracing_subscriber::fmt::try_init();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test file
@@ -1208,6 +1212,7 @@ mod tests {
 
     #[test]
     fn test_footer_validate_crc32_valid() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Calculate the correct CRC32
         let mut hasher = Hasher::new();
         hasher.update(&FOOTER_MAGIC);
@@ -1231,6 +1236,7 @@ mod tests {
 
     #[test]
     fn test_footer_validate_crc32_invalid() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Create a footer with incorrect CRC32
         let footer = Footer {
             magic: FOOTER_MAGIC,
@@ -1258,6 +1264,7 @@ mod tests {
 
     #[test]
     fn test_footer_crc32_roundtrip() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Test that write_to and read_from produce matching CRC32
         let footer = Footer::new(2048, 10);
 
@@ -1281,6 +1288,7 @@ mod tests {
 
     #[test]
     fn test_build_result_index_map() {
+        let _ = tracing_subscriber::fmt::try_init();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test files with known sizes
@@ -1323,6 +1331,7 @@ mod tests {
 
     #[test]
     fn test_blob_size_limit() {
+        let _ = tracing_subscriber::fmt::try_init();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Test with small number of shards (10) which has a smaller max blob size
@@ -1374,6 +1383,7 @@ mod tests {
 
     #[test]
     fn test_read_range() {
+        let _ = tracing_subscriber::fmt::try_init();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test files
@@ -1455,6 +1465,7 @@ mod tests {
 
     #[test]
     fn test_read_range_with_index_map() {
+        let _ = tracing_subscriber::fmt::try_init();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test files with known content
@@ -1512,6 +1523,7 @@ mod tests {
 
     #[test]
     fn test_reader_validation() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Test 1: Too small data (less than header + footer)
         let small_data = Bytes::from(vec![0u8; 10]);
         let result = BlobBundleReader::new(small_data);
@@ -1583,6 +1595,7 @@ mod tests {
 
     #[test]
     fn test_footer_corrupted_data() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Create a valid footer and serialize it
         let footer = Footer::new(4096, 20);
         let mut buffer = Vec::new();
@@ -1607,6 +1620,7 @@ mod tests {
 
     #[test]
     fn test_lazy_index_parsing_and_read_range_without_index() {
+        let _ = tracing_subscriber::fmt::try_init();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test files
@@ -1718,6 +1732,7 @@ mod tests {
 
     #[test]
     fn test_list_ids_order_matches_index() {
+        let _ = tracing_subscriber::fmt::try_init();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test files with specific names to test ordering.
@@ -1799,6 +1814,7 @@ mod tests {
 
     #[test]
     fn test_build_in_memory() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Create temporary directory for test files.
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -1857,6 +1873,7 @@ mod tests {
 
     #[test]
     fn test_build_in_memory_vs_build_to_file() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Test that build_in_memory produces the same output as build.
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -1912,6 +1929,7 @@ mod tests {
 
     #[test]
     fn test_build_in_memory_no_padding() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Create temporary directory for test files.
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file1_path = temp_dir.path().join("test1.txt");
@@ -1953,6 +1971,7 @@ mod tests {
 
     #[test]
     fn test_build_in_memory_exceeds_estimated_capacity() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Create temporary directory for test files.
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -2043,6 +2062,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_in_memory_from_holder() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Create in-memory checkpoint holder.
         let holder = in_memory_checkpoint_holder::InMemoryCheckpointHolder::new();
 
@@ -2097,6 +2117,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_in_memory_from_holder_missing_checkpoint() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Create in-memory checkpoint holder.
         let holder = in_memory_checkpoint_holder::InMemoryCheckpointHolder::new();
 
@@ -2123,6 +2144,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_in_memory_from_holder_no_padding() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Create in-memory checkpoint holder.
         let holder = in_memory_checkpoint_holder::InMemoryCheckpointHolder::new();
 
@@ -2162,6 +2184,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_in_memory_from_holder_vs_build_to_file() {
+        let _ = tracing_subscriber::fmt::try_init();
         // Test that build_in_memory_from_holder produces the same output as building to file.
 
         // Create temporary directory for test files.
