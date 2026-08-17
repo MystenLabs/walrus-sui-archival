@@ -14,6 +14,10 @@ release process.
 
 ### Changed
 
+- Updated Walrus to testnet-v1.54.0 and Sui to testnet-v1.77.1 (automated weekly update).
+
+### Changed
+
 - Updated Walrus to testnet-v1.53.0 and Sui to testnet-v1.76.0 (automated weekly update).
 
 ### Added
