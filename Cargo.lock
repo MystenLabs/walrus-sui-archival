@@ -1620,7 +1620,7 @@ dependencies = [
 
 [[package]]
 name = "caching-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
@@ -4356,7 +4356,7 @@ dependencies = [
 
 [[package]]
 name = "in-memory-checkpoint-holder"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "sui-types",
  "tokio",
@@ -7410,7 +7410,7 @@ dependencies = [
 
 [[package]]
 name = "postgres-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -12252,7 +12252,7 @@ dependencies = [
 
 [[package]]
 name = "walrus-common"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bcs",
@@ -12432,7 +12432,7 @@ dependencies = [
 
 [[package]]
 name = "walrus-sui-archival"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arrow",

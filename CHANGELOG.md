@@ -12,6 +12,8 @@ release process.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-22
+
 ### Changed
 
 - Updated Walrus to testnet-v1.54.0 and Sui to testnet-v1.77.1, pinning
