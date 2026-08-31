@@ -12,6 +12,10 @@ release process.
 
 ## [Unreleased]
 
+### Changed
+
+- Updated Walrus to testnet-v1.55.1 and Sui to testnet-v1.78.0 (automated weekly update).
+
 ## [0.2.0] - 2026-08-22
 
 ### Changed

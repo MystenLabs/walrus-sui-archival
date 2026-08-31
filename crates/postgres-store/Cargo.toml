@@ -8,7 +8,7 @@ description = "PostgreSQL storage backend for checkpoint blob metadata"
 
 [dependencies]
 anyhow.workspace = true
-chrono = "=0.4.44"
+chrono = "=0.4.45"
 deadpool-diesel.workspace = true
 diesel.workspace = true
 diesel_migrations.workspace = true
