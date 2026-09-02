@@ -14,6 +14,16 @@ release process.
 
 ### Changed
 
+- Dropped diesel's unused `numeric` feature. Nothing in the workspace uses
+  `NUMERIC`/`BigDecimal` columns, and the feature pulled in `bigdecimal` with a
+  `num-bigint` requirement spanning several majors that could mislink on a full
+  lockfile re-resolve.
+- The weekly dependency-update workflow now updates only the walrus, sui and
+  sui-rust-sdk git sources instead of running a blanket `cargo update`, then
+  pins crates shared with Sui to Sui's locked versions via the new
+  `scripts/align-lock-to-sui.sh`.
+- CI now builds, tests and lints with `--locked` so lockfile drift fails the
+  PR that introduced it instead of being silently re-resolved on the runner.
 - Updated Walrus to testnet-v1.55.1 and Sui to testnet-v1.78.0, pinning
   `allocative` to 0.3.4 (Sui's locked version) and relinking diesel's
   `num-bigint` lock edge to 0.4.8 to keep the build green.

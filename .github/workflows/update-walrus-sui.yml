@@ -94,13 +94,24 @@ jobs:
         id: lockfile
         if: steps.check.outputs.update_needed == 'true'
         continue-on-error: true
-        run: cargo update
+        # Update only the git sources whose pins changed. A blanket
+        # `cargo update` re-resolves the whole graph, which bumps crates shared
+        # with Sui past what Sui locks and can flip dependency edges that span
+        # several semver-incompatible majors. Updating one crate from a git
+        # source moves the whole source.
+        run: cargo update -p walrus-core -p sui-types -p sui-rpc
+
+      - name: Align shared crates to sui's lockfile
+        id: align
+        if: steps.check.outputs.update_needed == 'true' && steps.lockfile.outcome == 'success'
+        continue-on-error: true
+        run: scripts/align-lock-to-sui.sh
 
       - name: Check build
         id: build
-        if: steps.check.outputs.update_needed == 'true' && steps.lockfile.outcome == 'success'
+        if: steps.check.outputs.update_needed == 'true' && steps.align.outcome == 'success'
         continue-on-error: true
-        run: cargo check --all-targets --all-features
+        run: cargo check --locked --all-targets --all-features
 
       - name: Add changelog entry
         if: steps.check.outputs.update_needed == 'true'
@@ -122,11 +133,13 @@ jobs:
           BRANCH="auto/update-walrus-$LATEST"
 
           if [ "${{ steps.lockfile.outcome }}" != "success" ]; then
-            BUILD_STATUS="❌ \`cargo update\` failed — the lockfile could not be resolved and was not updated. Manual dependency migration is needed."
+            BUILD_STATUS="❌ \`cargo update\` of the walrus/sui git sources failed — the lockfile could not be resolved and was not updated. Manual dependency migration is needed."
+          elif [ "${{ steps.align.outcome }}" != "success" ]; then
+            BUILD_STATUS="❌ \`scripts/align-lock-to-sui.sh\` failed — the crates shared with Sui could not be pinned to Sui's locked versions. Check the workflow log."
           elif [ "${{ steps.build.outcome }}" = "success" ]; then
-            BUILD_STATUS="✅ \`cargo update\` and \`cargo check --all-targets --all-features\` both passed."
+            BUILD_STATUS="✅ Lockfile updated, shared crates aligned to Sui's lock, and \`cargo check --locked --all-targets --all-features\` passed."
           else
-            BUILD_STATUS="❌ \`cargo update\` passed but \`cargo check\` failed — upstream API changes likely need a manual migration."
+            BUILD_STATUS="❌ Lockfile updated but \`cargo check\` failed — see the workflow log for the errors. Upstream API changes may need a manual migration."
           fi
 
           git config user.name "github-actions[bot]"
@@ -155,9 +168,7 @@ jobs:
           ## If the build is broken
 
           Known follow-ups from past updates that may be needed:
-          - \`arrow\`/\`parquet\` and \`prometheus\` versions must match Sui's own Cargo.lock at the new tag.
-          - \`allocative\` may need \`cargo update -p allocative --precise <version-from-sui-lock>\` if \`starlark_map\` fails to build.
-          - diesel's \`num-bigint\` lock edge can mislink when two num-bigint majors are present.
+          - Crates shared with Sui (\`allocative\`, and possibly \`arrow\`/\`parquet\`/\`prometheus\`) must build at the versions Sui locks at the new tag. \`scripts/align-lock-to-sui.sh <crate...>\` pins them to Sui's Cargo.lock.
           - Upstream API changes may require code migration.
 
           Note: if this PR was created with the default \`GITHUB_TOKEN\`, CI does not run automatically — close and reopen the PR to trigger it, or configure an \`UPDATE_BOT_TOKEN\` secret."

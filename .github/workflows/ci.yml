@@ -44,13 +44,13 @@ jobs:
           tool: cargo-nextest
 
       - name: Build project
-        run: cargo build --all-features --verbose
+        run: cargo build --locked --all-features --verbose
 
       - name: Run tests with nextest
-        run: cargo nextest run --all-features --verbose
+        run: cargo nextest run --locked --all-features --verbose
 
       - name: Run doc tests
-        run: cargo test --doc --all-features --verbose
+        run: cargo test --locked --doc --all-features --verbose
 
   lint:
     name: Lint
@@ -85,4 +85,4 @@ jobs:
           --config group_imports=StdExternalCrate,imports_granularity=Crate,imports_layout=HorizontalVertical
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
