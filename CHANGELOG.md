@@ -12,6 +12,12 @@ release process.
 
 ## [Unreleased]
 
+### Changed
+
+- Updated Walrus to testnet-v1.55.1 and Sui to testnet-v1.78.0, pinning
+  `allocative` to 0.3.4 (Sui's locked version) and relinking diesel's
+  `num-bigint` lock edge to 0.4.8 to keep the build green.
+
 ## [0.2.0] - 2026-08-22
 
 ### Changed
