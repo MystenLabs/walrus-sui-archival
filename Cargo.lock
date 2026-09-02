@@ -1192,19 +1192,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bigdecimal"
-version = "0.4.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d6867f1565b3aad85681f1015055b087fcfd840d6aeee6eee7f2da317603695"
-dependencies = [
- "autocfg",
- "libm",
- "num-bigint 0.4.8",
- "num-integer",
- "num-traits",
-]
-
-[[package]]
 name = "bimap"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2480,7 +2467,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2698,16 +2685,12 @@ version = "2.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "715377c6e464cb44bb89bd8487584240516c8d5052bc645d6babc50bb8be46c3"
 dependencies = [
- "bigdecimal",
  "bitflags 2.13.1",
  "byteorder",
  "chrono",
  "diesel_derives",
  "downcast-rs 2.0.2",
  "itoa",
- "num-bigint 0.4.8",
- "num-integer",
- "num-traits",
  "pq-sys",
  "r2d2",
 ]
