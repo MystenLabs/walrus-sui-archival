@@ -48,8 +48,8 @@ tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zstd = "0.13"
-walrus-core = { git = "https://github.com/MystenLabs/walrus.git", tag = "testnet-v1.55.1" }
-walrus-sdk = { git = "https://github.com/MystenLabs/walrus.git", tag = "testnet-v1.55.1" }
+walrus-core = { git = "https://github.com/MystenLabs/walrus.git", tag = "testnet-v1.55.2" }
+walrus-sdk = { git = "https://github.com/MystenLabs/walrus.git", tag = "testnet-v1.55.2" }
 diesel = { version = "2.2", features = ["postgres", "r2d2", "chrono"] }
 diesel-async = { version = "0.5", features = ["postgres", "deadpool"] }
 deadpool-diesel = { version = "0.6", features = ["postgres"] }

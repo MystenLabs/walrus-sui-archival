@@ -14,6 +14,10 @@ release process.
 
 ### Changed
 
+- Updated Walrus to testnet-v1.55.2 and Sui to testnet-v1.78.0 (automated weekly update).
+
+### Changed
+
 - Dropped diesel's unused `numeric` feature. Nothing in the workspace uses
   `NUMERIC`/`BigDecimal` columns, and the feature pulled in `bigdecimal` with a
   `num-bigint` requirement spanning several majors that could mislink on a full

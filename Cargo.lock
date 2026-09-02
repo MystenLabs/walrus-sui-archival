@@ -12271,8 +12271,8 @@ dependencies = [
 
 [[package]]
 name = "walrus-core"
-version = "1.55.1"
-source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.55.1#ae5aa8856ee6f80ea132fdb8b2484fc69ca97656"
+version = "1.55.2"
+source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.55.2#631776c9e0437ca5c7e9118a8dfc0e6bff798d9b"
 dependencies = [
  "base64 0.22.1",
  "bcs",
@@ -12292,8 +12292,8 @@ dependencies = [
 
 [[package]]
 name = "walrus-sdk"
-version = "1.55.1"
-source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.55.1#ae5aa8856ee6f80ea132fdb8b2484fc69ca97656"
+version = "1.55.2"
+source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.55.2#631776c9e0437ca5c7e9118a8dfc0e6bff798d9b"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -12336,8 +12336,8 @@ dependencies = [
 
 [[package]]
 name = "walrus-storage-node-client"
-version = "1.55.1"
-source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.55.1#ae5aa8856ee6f80ea132fdb8b2484fc69ca97656"
+version = "1.55.2"
+source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.55.2#631776c9e0437ca5c7e9118a8dfc0e6bff798d9b"
 dependencies = [
  "bcs",
  "bytes",
@@ -12371,8 +12371,8 @@ dependencies = [
 
 [[package]]
 name = "walrus-sui"
-version = "1.55.1"
-source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.55.1#ae5aa8856ee6f80ea132fdb8b2484fc69ca97656"
+version = "1.55.2"
+source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.55.2#631776c9e0437ca5c7e9118a8dfc0e6bff798d9b"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -12483,8 +12483,8 @@ dependencies = [
 
 [[package]]
 name = "walrus-test-utils"
-version = "1.55.1"
-source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.55.1#ae5aa8856ee6f80ea132fdb8b2484fc69ca97656"
+version = "1.55.2"
+source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.55.2#631776c9e0437ca5c7e9118a8dfc0e6bff798d9b"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -12497,8 +12497,8 @@ dependencies = [
 
 [[package]]
 name = "walrus-utils"
-version = "1.55.1"
-source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.55.1#ae5aa8856ee6f80ea132fdb8b2484fc69ca97656"
+version = "1.55.2"
+source = "git+https://github.com/MystenLabs/walrus.git?tag=testnet-v1.55.2#631776c9e0437ca5c7e9118a8dfc0e6bff798d9b"
 dependencies = [
  "anyhow",
  "bytes",
