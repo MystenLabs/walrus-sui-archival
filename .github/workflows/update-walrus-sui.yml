@@ -152,7 +152,7 @@ jobs:
           gh pr create \
             --title "chore: update walrus to $LATEST and sui to $SUI_TAG" \
             --head "$BRANCH" \
-            --reviewer halfprice \
+            --reviewer sadhansood \
             --body "## Summary
 
           Automated weekly dependency update.
