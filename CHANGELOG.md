@@ -14,6 +14,10 @@ release process.
 
 ### Changed
 
+- Updated Walrus to testnet-v1.61.0 and Sui to testnet-v1.84.0 (automated weekly update).
+
+### Changed
+
 - Updated Walrus to testnet-v1.58.1 and Sui to testnet-v1.81.0 (automated weekly
   update) (#34).
 - CI now uses the repository's pinned Rust 1.91 toolchain instead of floating
